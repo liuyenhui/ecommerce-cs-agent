@@ -1,0 +1,40 @@
+imagePullSecrets:
+  - name: aliyun-registry-auth
+  - name: ghcr-auth
+
+proxy:
+  enabled: true
+  httpProxy: http://192.168.1.198:1087
+  httpsProxy: http://192.168.1.198:1087
+  noProxy: localhost,127.0.0.1,.svc,.cluster.local,postgres.ecommerce-cs-agent-dev.svc.cluster.local,minio.ecommerce-cs-agent-dev.svc.cluster.local
+
+api:
+  replicas: 1
+  envFromSecret: ecommerce-cs-agent-runtime
+  image:
+    repository: registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-api
+    tag: dev
+    pullPolicy: IfNotPresent
+  service:
+    port: 8000
+  ingress:
+    enabled: true
+    host: api.ecommerce-cs-agent-dev.fcihome.com
+    tlsSecretName: cs-agent-dev-tls
+
+admin:
+  replicas: 1
+  image:
+    repository: registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-admin
+    tag: dev
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  ingress:
+    enabled: true
+    host: admin.ecommerce-cs-agent-dev.fcihome.com
+    tlsSecretName: cs-agent-dev-tls
+
+migration:
+  enabled: true
+  backoffLimit: 2
