@@ -57,3 +57,12 @@ node docs/scripts/validate-business-flow-x6-labels.mjs
 - 当前私有仓库未启用 GitHub Code Security 时，CodeQL workflow 使用 `upload: never` 并解析 SARIF 让 alert 阻断 job；不要误判为 GitHub Security tab 已有 code scanning alerts。
 - 邮件拦截通知发送到 `46164072@qq.com`；SMTP 连接信息必须放在 GitHub Secrets：`SMTP_HOST`、`SMTP_PORT`、`SMTP_USERNAME`、`SMTP_PASSWORD`、`MAIL_FROM`、`SECURITY_NOTIFY_TO`。不要把 SMTP 密钥写入 Git、文档或聊天记录。
 - SonarQube、Snyk/Dependabot、镜像扫描、Helm/K8s 配置扫描是后续 CI/CD 优化项，暂不作为当前第一阶段 required check。
+
+## Public Repository Safety
+
+- This repository may be public. Treat every tracked file as world-readable before committing or pushing.
+- Never commit `.env`, kubeconfig files, cloud credentials, SMTP passwords, API keys, database URLs with passwords, GHCR tokens, LLM keys, MinIO keys, JWT/session secrets, private certificates, or production customer data.
+- Keep real secrets only in GitHub Secrets, Kubernetes Secrets, or an approved external secret manager. Documentation may name secret keys, namespaces, and retrieval paths, but must not contain secret values.
+- Before any commit or push that touches deployment, CI/CD, config, or docs, run a targeted secret check with `git diff --cached` and `rg -n "sk-|ghp_|gho_|BEGIN .*PRIVATE KEY|SMTP_PASSWORD|DATABASE_URL=.*:|LLM_API_KEY=|SECRET_ACCESS_KEY|JWT_SECRET|SESSION_SECRET"`.
+- Do not publish real customer files, exported JSONL, evaluation datasets containing private data, screenshots with tokens, or logs containing request headers/cookies.
+- Public examples must use placeholders such as `<from-secret>`, `<redacted>`, or fake local-only values.
