@@ -49,3 +49,10 @@ node docs/scripts/validate-business-flow-x6-labels.mjs
 ## 开发规则
 - 开发的应用,后台,服务,要可支持 k8s 无状态 部署
 - 需要持续存储的内容,遵循 k8s 设计规范
+
+## CI/CD 安全门禁
+
+- 当前 PR 阶段先使用 GitHub CodeQL / GitHub Advanced Security 做 SAST 门禁，workflow 在 `.github/workflows/codeql.yml`。
+- 排查 PR 被拦截时，先看 `CodeQL SAST` job，再看 `Notify security gate blocked` 邮件通知 job，最后确认 GitHub Branch Protection 是否把 CodeQL check 设为 required。
+- 邮件拦截通知发送到 `46164072@qq.com`；SMTP 连接信息必须放在 GitHub Secrets：`SMTP_HOST`、`SMTP_PORT`、`SMTP_USERNAME`、`SMTP_PASSWORD`、`MAIL_FROM`、`SECURITY_NOTIFY_TO`。不要把 SMTP 密钥写入 Git、文档或聊天记录。
+- SonarQube、Snyk/Dependabot、镜像扫描、Helm/K8s 配置扫描是后续 CI/CD 优化项，暂不作为当前第一阶段 required check。
