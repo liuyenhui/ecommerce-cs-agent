@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ecommerce-cs-agent.name" . }}-admin
+  labels:
+    {{- include "ecommerce-cs-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin
+spec:
+  replicas: {{ .Values.admin.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "ecommerce-cs-agent.name" . }}
+      app.kubernetes.io/component: admin
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "ecommerce-cs-agent.name" . }}
+        app.kubernetes.io/component: admin
+    spec:
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      containers:
+        - name: admin
+          image: "{{ .Values.admin.image.repository }}:{{ .Values.admin.image.tag }}"
+          imagePullPolicy: {{ .Values.admin.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.admin.service.port }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http

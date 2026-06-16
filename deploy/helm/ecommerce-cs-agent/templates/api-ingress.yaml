@@ -1,0 +1,28 @@
+{{- if .Values.api.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "ecommerce-cs-agent.name" . }}-api
+  labels:
+    {{- include "ecommerce-cs-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-http01
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - {{ .Values.api.ingress.host }}
+      secretName: {{ .Values.api.ingress.tlsSecretName }}
+  rules:
+    - host: {{ .Values.api.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "ecommerce-cs-agent.name" . }}-api
+                port:
+                  name: http
+{{- end }}

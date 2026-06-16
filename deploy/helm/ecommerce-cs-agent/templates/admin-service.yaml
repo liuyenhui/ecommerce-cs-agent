@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ecommerce-cs-agent.name" . }}-admin
+  labels:
+    {{- include "ecommerce-cs-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ include "ecommerce-cs-agent.name" . }}
+    app.kubernetes.io/component: admin
+  ports:
+    - name: http
+      port: {{ .Values.admin.service.port }}
+      targetPort: http

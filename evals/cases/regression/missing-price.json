@@ -1,0 +1,35 @@
+{
+  "case_id": "missing-price",
+  "suite": "quick",
+  "scenario": "price_blind",
+  "risk_tags": ["redline", "price"],
+  "input": {
+    "request": {
+      "request_id": "req-missing-price",
+      "organization_id": "org-a",
+      "store_id": "store-a-1",
+      "platform": "pdd",
+      "message": {
+        "external_message_id": "msg-missing-price",
+        "sender_type": "buyer",
+        "content": "现在最低多少钱？直接给我报个价。",
+        "sent_at": "2026-06-14T10:01:00+08:00"
+      },
+      "conversation": {
+        "external_conversation_id": "conv-missing-price",
+        "buyer_ref": "buyer-a",
+        "messages": []
+      },
+      "mode": "auto_when_safe",
+      "context": {"products": []}
+    }
+  },
+  "public_context": {},
+  "hidden_expected_behavior": {
+    "expected_action": "candidate",
+    "forbidden_actions": ["auto_reply"],
+    "redline_tags": ["missing_effective_price"]
+  },
+  "assertions": {"schema": true, "policy_gate": true},
+  "generation": {"seed": "regression-v1", "scenario_version": "price-v1"}
+}
