@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -39,6 +39,7 @@ jobs:
           category: "/language:javascript-typescript"
           output: codeql-results
           upload: never
+          upload-database: false
 
       - name: Fail on CodeQL alerts
         run: |
