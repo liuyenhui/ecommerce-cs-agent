@@ -38,7 +38,7 @@ jobs:
         with:
           category: "/language:javascript-typescript"
           output: codeql-results
-          upload: never
+          upload: always
           upload-database: false
 
       - name: Fail on CodeQL alerts

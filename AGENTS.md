@@ -54,7 +54,7 @@ node docs/scripts/validate-business-flow-x6-labels.mjs
 
 - 当前 PR 阶段先使用 GitHub CodeQL / GitHub Advanced Security 做 SAST 门禁，workflow 在 `.github/workflows/codeql.yml`。
 - 排查 PR 被拦截时，先看 `CodeQL SAST` job，再看 `Notify security gate blocked` 邮件通知 job，最后确认 GitHub Branch Protection 是否把 CodeQL check 设为 required。
-- 当前私有仓库未启用 GitHub Code Security 时，CodeQL workflow 使用 `upload: never` 并解析 SARIF 让 alert 阻断 job；不要误判为 GitHub Security tab 已有 code scanning alerts。
+- 仓库公开后，CodeQL workflow 上传 SARIF 到 GitHub Code Scanning，并继续解析 SARIF 让 alert 阻断 job；如果仓库改回 private 且未启用 Code Security，上传会失败。
 - 邮件拦截通知发送到 `46164072@qq.com`；SMTP 连接信息必须放在 GitHub Secrets：`SMTP_HOST`、`SMTP_PORT`、`SMTP_USERNAME`、`SMTP_PASSWORD`、`MAIL_FROM`、`SECURITY_NOTIFY_TO`。不要把 SMTP 密钥写入 Git、文档或聊天记录。
 - SonarQube、Snyk/Dependabot、镜像扫描、Helm/K8s 配置扫描是后续 CI/CD 优化项，暂不作为当前第一阶段 required check。
 
