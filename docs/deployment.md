@@ -78,7 +78,7 @@ CodeQL workflow：
 - 文件：`.github/workflows/codeql.yml`
 - 当前扫描：GitHub Actions / JavaScript 脚本；远端仓库提交 Python 源码后再扩展 `python`
 - 触发：`pull_request` 到 `main`、`push` 到 `main`、每周定时扫描
-- 当前私有仓库未启用 GitHub Code Security，workflow 使用 `upload: never`，本地解析 SARIF；发现 CodeQL alert 时让 `CodeQL SAST` job 失败
+- 仓库公开后，workflow 上传 SARIF 到 GitHub Code Scanning，同时本地解析 SARIF；发现 CodeQL alert 时让 `CodeQL SAST` job 失败
 - 分支保护：GitHub 账号/仓库计划支持后，在 Branch Protection 中把 `CodeQL SAST` 设为 required check
 - 查询规则：`security-extended`、`security-and-quality`
 
