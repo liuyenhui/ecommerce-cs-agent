@@ -98,10 +98,13 @@ node docs/scripts/validate-business-flow-x6-labels.mjs
 ## 镜像发布规则
 
 - 不要从 Codex 本机执行 `docker push` 发布业务镜像。API/Admin 镜像发布走 GitHub Actions workflow：`.github/workflows/publish-images.yml`。
-- 正式镜像名固定为 `ghcr.io/liuyenhui/ecommerce-cs-agent-api:<tag>` 和 `ghcr.io/liuyenhui/ecommerce-cs-agent-admin:<tag>`。
+- GHCR 镜像名为 `ghcr.io/liuyenhui/ecommerce-cs-agent-api:<tag>` 和 `ghcr.io/liuyenhui/ecommerce-cs-agent-admin:<tag>`，作为备份和 GitHub 原生发布记录。
+- 国内 dev/K8s 默认拉取阿里云镜像：`registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-api:<tag>` 和 `registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-admin:<tag>`。
+- `Publish Images` 在有 GitHub Secrets `ALIYUN_REGISTRY_USERNAME`、`ALIYUN_REGISTRY_PASSWORD` 时同时推送阿里云 `:<tag>`、`:sha-<commit>`、`:deploy`；没有这两个 Secrets 时只推 GHCR。
 - 需要发布指定 dev tag 时，推送分支 `codex/publish-<tag>`，workflow 会把分支后缀作为镜像 tag；也可以在 GitHub Actions 手动运行 `Publish Images` 并输入 `tag`。
-- `Publish Images` 必须先通过 Python tests、Helm lint、Helm template，再登录 GHCR 构建并推送 API/Admin 镜像。
-- 发布后用 `ghcr-auth` 在 `ecommerce-cs-agent-dev` namespace 创建临时 pull-check Pod，设置 `imagePullPolicy: Always` 验证 GHCR 远端 tag 可拉取；验证完成后删除临时 Pod。
+- `Publish Images` 必须先通过 Python tests、Helm lint、Helm template，再构建并推送 API/Admin 镜像。
+- K8s dev 使用 Helm values 中的 `aliyun-registry-auth` 拉阿里云镜像，保留 `ghcr-auth` 作为备份。发布后创建临时 pull-check Pod，设置 `imagePullPolicy: Always` 验证远端 tag 可拉取；验证完成后删除临时 Pod。
+- Watchtower 方案仅适用于服务器 docker compose 自动更新；本项目 dev 环境是 Kubernetes/Helm，不使用 Watchtower，部署由 Helm/GitOps 更新 image tag 完成。
 
 ## Public Repository Safety
 

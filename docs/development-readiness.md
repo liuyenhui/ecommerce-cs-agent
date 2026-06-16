@@ -13,7 +13,7 @@
 | MinIO | `minio.ecommerce-cs-agent-dev.svc.cluster.local:9000` Ready |
 | Object bucket | `ecommerce-cs-agent-dev` 已创建并验证上传 |
 | Runtime Secret | `ecommerce-cs-agent-runtime` 已创建 |
-| Registry pull | `ghcr-auth` 已创建 |
+| Registry pull | `ghcr-auth` 已创建；阿里云优化需要补 `aliyun-registry-auth` |
 | Domains | API/Admin 域名已解析并通过 HTTPS 验证 |
 | TLS | `cs-agent-dev-tls` Ready |
 | API Deployment | `ecommerce-cs-agent-api` 已部署，`1/1 Running` |
@@ -32,7 +32,7 @@
 | LLM provider | `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL` 已写入 runtime Secret |
 | 初始管理员 | `ADMIN_INITIAL_EMAIL`、`ADMIN_INITIAL_PASSWORD_HASH` 已写入 runtime Secret |
 | API 鉴权策略 | 第一版固定使用 `Authorization: Bearer AGENT_API_TOKEN` |
-| 镜像发布规则 | 当前 tag 为 `dev-20260616-1459`；正式链路使用 GitHub Actions `Publish Images` 推 GHCR |
+| 镜像发布规则 | 当前 tag 为 `dev-20260616-1459`；正式链路使用 GitHub Actions `Publish Images` 推 GHCR + 阿里云，K8s dev 优先拉阿里云 |
 | Ingress 创建归属 | 应用 Helm chart 创建 API/Admin Ingress |
 | 数据库 migration | `python -m ecommerce_cs_agent.db.cli migrate` 已通过 Helm hook 执行 |
 | 出网代理 | API Pod 已注入 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` |
@@ -111,6 +111,8 @@ export AGENT_API_TOKEN=<from-secret>
 - Admin 占位入口镜像文件：`admin-web/Dockerfile`
 - Helm chart：`deploy/helm/ecommerce-cs-agent`
 - 镜像发布 workflow：`.github/workflows/publish-images.yml`
+- Dev 优先镜像仓库：`registry.cn-beijing.aliyuncs.com/threepeople`
+- 备份镜像仓库：`ghcr.io/liuyenhui`
 - Dev Helm release：`ecommerce-cs-agent`
 - Dev image tag：`dev-20260616-1459`
 - Dev 公网 API：`https://api.ecommerce-cs-agent-dev.fcihome.com`

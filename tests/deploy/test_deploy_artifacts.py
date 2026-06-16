@@ -19,16 +19,17 @@ def test_helm_values_define_dev_runtime_contract() -> None:
         )
     )
 
-    assert values["imagePullSecrets"][0]["name"] == "ghcr-auth"
+    assert values["imagePullSecrets"][0]["name"] == "aliyun-registry-auth"
+    assert values["imagePullSecrets"][1]["name"] == "ghcr-auth"
     assert values["api"]["image"]["repository"] == (
-        "ghcr.io/liuyenhui/ecommerce-cs-agent-api"
+        "registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-api"
     )
     assert values["api"]["envFromSecret"] == "ecommerce-cs-agent-runtime"
     assert values["api"]["ingress"]["host"] == (
         "api.ecommerce-cs-agent-dev.fcihome.com"
     )
     assert values["admin"]["image"]["repository"] == (
-        "ghcr.io/liuyenhui/ecommerce-cs-agent-admin"
+        "registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-admin"
     )
     assert values["admin"]["ingress"]["host"] == (
         "admin.ecommerce-cs-agent-dev.fcihome.com"
