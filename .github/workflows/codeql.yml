@@ -26,15 +26,31 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
-          languages: python
+          languages: javascript-typescript
           queries: security-extended,security-and-quality
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v3
+        id: analyze
+        uses: github/codeql-action/analyze@v4
         with:
-          category: "/language:python"
+          category: "/language:javascript-typescript"
+          output: codeql-results
+          upload: never
+
+      - name: Fail on CodeQL alerts
+        run: |
+          alert_count="$(
+            find codeql-results -name '*.sarif' -print0 \
+              | xargs -0 jq '[.runs[].results[]?] | length' \
+              | awk '{total += $1} END {print total + 0}'
+          )"
+          echo "CodeQL alert count: ${alert_count}"
+          if [ "$alert_count" -gt 0 ]; then
+            exit 1
+          fi
 
   notify-blocked:
     name: Notify security gate blocked

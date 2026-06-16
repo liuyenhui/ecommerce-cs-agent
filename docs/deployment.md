@@ -76,9 +76,10 @@ PR -> CodeQL SAST -> failure email notification -> tests/build -> image publish 
 CodeQL workflow：
 
 - 文件：`.github/workflows/codeql.yml`
-- 扫描语言：`python`
+- 当前扫描：GitHub Actions / JavaScript 脚本；远端仓库提交 Python 源码后再扩展 `python`
 - 触发：`pull_request` 到 `main`、`push` 到 `main`、每周定时扫描
-- 分支保护：在 GitHub Branch Protection 中把 `CodeQL SAST` 设为 required check
+- 当前私有仓库未启用 GitHub Code Security，workflow 使用 `upload: never`，本地解析 SARIF；发现 CodeQL alert 时让 `CodeQL SAST` job 失败
+- 分支保护：GitHub 账号/仓库计划支持后，在 Branch Protection 中把 `CodeQL SAST` 设为 required check
 - 查询规则：`security-extended`、`security-and-quality`
 
 安全门禁失败时发送拦截通知：
