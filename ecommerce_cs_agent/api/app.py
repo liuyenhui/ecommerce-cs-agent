@@ -15,6 +15,7 @@ from ecommerce_cs_agent.api.auth import (
 )
 from ecommerce_cs_agent.api.errors import api_error
 from ecommerce_cs_agent.core.config import Settings, load_settings
+from ecommerce_cs_agent.services.admin import admin_repository_for
 from ecommerce_cs_agent.services.decision import DecisionService
 
 
@@ -22,6 +23,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
     app = FastAPI(title="ecommerce-cs-agent", version="0.1.0")
     decisions = DecisionService(settings)
+    admin_data = admin_repository_for(settings)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -226,18 +228,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/v1/admin/audit-logs")
     def list_admin_audit_logs(_principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
-        return {"items": [_audit_log("admin_audit", "admin-001")], "page": _page(1)}
+        items = admin_data.list_audit_logs("admin") or [_audit_log("admin_audit", "admin-001")]
+        return {"items": items, "page": _page(len(items))}
 
     @app.post("/v1/product-content/products")
     async def upsert_product_content_product(request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
         payload = await request.json()
-        return {
-            "product_id": f"product-{payload.get('external_product_id', 'local')}",
-            "store_id": payload.get("store_id", "store-001"),
-            "external_product_id": payload.get("external_product_id", "local"),
-            "status": payload.get("status", "active"),
-            "sku_ids": [],
-        }
+        return admin_data.upsert_product(payload, _principal.user_id or "admin-001")
 
     @app.post("/v1/product-content/assets")
     async def create_product_asset(_request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
@@ -249,7 +246,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/v1/product-content/knowledge-candidates/{candidate_id}/reviews")
     async def review_product_knowledge_candidate(candidate_id: str, _request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
-        return {"candidate_id": candidate_id, "accepted": True, "knowledge_entry_id": "knowledge-001"}
+        payload = await _request.json()
+        candidate = admin_data.review_knowledge_candidate(candidate_id, payload, _principal.user_id or "admin-001")
+        return {
+            "candidate_id": candidate["candidate_id"],
+            "accepted": candidate["review_status"] == "accepted",
+            "knowledge_entry_id": f"knowledge-{candidate_id}" if candidate["review_status"] == "accepted" else None,
+        }
 
     @app.post("/v1/product-content/price-snapshots")
     async def create_product_price_snapshot(_request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
@@ -257,7 +260,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/v1/product-content/products/{product_id}/health")
     def get_product_content_health(product_id: str, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
-        return {"product_id": product_id, "status": "warning", "checks": []}
+        return admin_data.product_health(product_id)
 
     @app.post("/v1/system-admin/auth/login")
     async def system_admin_login(request: Request) -> JSONResponse:
@@ -285,30 +288,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/v1/system-admin/health")
     def get_system_health(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        return {
-            "status": "degraded",
-            "checked_at": _now(),
-            "dependencies": [
-                {"name": "api", "status": "healthy", "detail": "local app responds"},
-                {"name": "postgresql", "status": "degraded", "detail": "not checked in local stateless mode"},
-            ],
-        }
+        return admin_data.system_health()
 
     @app.get("/v1/system-admin/readiness/stores")
     def list_system_store_readiness(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        return {
-            "items": [
-                {
-                    "organization_id": "org-001",
-                    "store_id": "store-001",
-                    "status": "blocked",
-                    "checks": [
-                        {"name": "product_content", "status": "warning", "reason": "本地样例资料未完整配置"}
-                    ],
-                }
-            ],
-            "page": _page(1),
-        }
+        items = admin_data.store_readiness()
+        return {"items": items, "page": _page(len(items))}
 
     @app.get("/v1/system-admin/users")
     def list_system_admin_users(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:
@@ -355,7 +340,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/v1/system-admin/audit-logs")
     def list_system_audit_logs(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        return {"items": [_audit_log("system_audit", "sysadmin-001")], "page": _page(1)}
+        items = admin_data.list_audit_logs("system") or [_audit_log("system_audit", "sysadmin-001")]
+        return {"items": items, "page": _page(len(items))}
 
     for method, path in [
         ("POST", "/v1/events/messages"),

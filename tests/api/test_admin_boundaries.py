@@ -50,6 +50,65 @@ def test_customer_admin_me_and_core_lists():
     assert organizations.json()["page"] == {"page": 1, "page_size": 50, "total": 1}
 
 
+def test_product_content_upsert_writes_audit_and_health():
+    client = TestClient(create_app())
+    headers = {"Cookie": "agent_admin_session=test-admin-session"}
+
+    product = client.post(
+        "/v1/product-content/products",
+        headers=headers,
+        json={
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "external_product_id": "sku-001",
+            "title": "测试商品",
+            "attributes": {"color": "red"},
+        },
+    )
+    health = client.get(
+        f"/v1/product-content/products/{product.json()['product_id']}/health",
+        headers=headers,
+    )
+    audit = client.get("/v1/admin/audit-logs", headers=headers)
+
+    assert product.status_code == 200
+    assert product.json()["product_id"].startswith("product-")
+    assert health.status_code == 200
+    assert health.json()["status"] == "healthy"
+    assert audit.status_code == 200
+    assert audit.json()["items"][0]["action"] == "product.upsert"
+
+
+def test_product_content_ids_are_tenant_scoped():
+    client = TestClient(create_app())
+    headers = {"Cookie": "agent_admin_session=test-admin-session"}
+
+    first = client.post(
+        "/v1/product-content/products",
+        headers=headers,
+        json={
+            "organization_id": "org-a",
+            "store_id": "store-001",
+            "external_product_id": "sku-001",
+            "title": "商品 A",
+        },
+    )
+    second = client.post(
+        "/v1/product-content/products",
+        headers=headers,
+        json={
+            "organization_id": "org-b",
+            "store_id": "store-001",
+            "external_product_id": "sku-001",
+            "title": "商品 B",
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["product_id"] != second.json()["product_id"]
+
+
 def test_system_admin_core_health_and_readiness():
     client = TestClient(create_app())
     headers = {"Cookie": "agent_system_admin_session=test-system-session"}

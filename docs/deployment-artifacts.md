@@ -12,12 +12,12 @@
 
 | 仓库 / 系统 | 职责 | 不负责 |
 | --- | --- | --- |
-| 应用仓库 `ecommerce-cs-agent` | 应用源码、OpenAPI 契约、评测工具、测试、镜像构建定义、应用版本号、开发和部署文档。 | 直接保存真实 Secret、直接修改集群线上对象、长期维护集群入口和证书。 |
-| GitOps / Flux / Helm 仓库 | Helm chart、values、namespace、Ingress、Service、Deployment、Secret 引用、imagePullSecrets、cert-manager、Flux Kustomization / HelmRelease。 | 业务逻辑、OpenAPI 契约、评测规则、应用代码测试。 |
+| 应用仓库 `ecommerce-cs-agent` | 应用源码、OpenAPI 契约、评测工具、测试、镜像构建定义、Helm chart、应用版本号、开发和部署文档。 | 直接保存真实 Secret、直接修改集群线上对象、长期维护集群入口和证书。 |
+| GitOps / Flux 仓库 | dev values、namespace、基础设施、Secret 引用、imagePullSecrets、cert-manager、Flux Kustomization / HelmRelease。 | 业务逻辑、OpenAPI 契约、评测规则、应用代码测试、镜像构建。 |
 | Kubernetes 集群 | 运行 API / Admin Pod、PostgreSQL、MinIO、Ingress、TLS、运行时 Secret 和镜像拉取。 | 作为源码或文档事实来源。 |
 | GitHub Actions | PR 检查、CodeQL、测试、镜像构建、GHCR / 阿里云 Registry 推送、触发 GitOps tag 更新。 | 保存明文密钥、绕过 GitOps 直接改生产配置。 |
 
-当前 [Deployment](deployment.md) 中保留了 Helm lint/template 和 upgrade 命令作为环境契约；如果当前应用仓库没有 `deploy/helm/ecommerce-cs-agent` 目录，这些命令应在 GitOps / Deploy 仓库执行，或等后续将 Helm 工件迁回应用仓库后再在本仓库执行。
+当前 Helm chart 位于应用仓库 `deploy/helm/ecommerce-cs-agent`。GitOps 仓库的 dev `HelmRelease` 通过 `GitRepository` 指向应用仓库 chart，并用 GitOps repo 中的 values 固定 dev 镜像 tag、Ingress、Secret 引用和代理配置。
 
 ## 2. 镜像和版本流转
 
@@ -67,9 +67,9 @@ Secret 只以引用形式跨文档和配置流转。
 - 数据库迁移版本。
 - 健康检查和 live eval 结果。
 
-GitOps / Helm 仓库应维护：
+GitOps / Flux 仓库应维护：
 
-- `Deployment`、`Service`、`Ingress`、`Certificate`、`Secret` 引用和 `imagePullSecrets`。
+- HelmRelease、基础设施、Ingress/TLS 环境约定、Secret 引用和 `imagePullSecrets`。
 - API / Admin 镜像 repository、tag 和 pull policy。
 - 资源请求、探针、环境变量注入、代理和 `NO_PROXY`。
 - PostgreSQL、MinIO、pgvector、TLS、域名和 Flux 状态。

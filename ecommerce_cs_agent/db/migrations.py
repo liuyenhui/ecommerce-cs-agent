@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Protocol
@@ -54,7 +55,7 @@ class InMemoryMigrationConnection:
     """Small test connection that exercises planning and idempotency logic."""
 
     def __init__(self) -> None:
-        self._records: dict[str, str] = {}
+        self._records: dict[str, str | None] = {}
         self._record_writes: dict[str, int] = {}
         self.executed_sql: list[str] = []
 
@@ -68,7 +69,7 @@ class InMemoryMigrationConnection:
     def ensure_schema_migration(self) -> None:
         return None
 
-    def get_applied_migrations(self) -> Mapping[str, str]:
+    def get_applied_migrations(self) -> Mapping[str, str | None]:
         return dict(self._records)
 
     def execute_migration(self, migration: MigrationFile) -> None:
@@ -106,8 +107,9 @@ class PsycopgMigrationConnection:
         with self._connect(self._database_url) as conn:
             with conn.cursor() as cur:
                 cur.execute(SCHEMA_MIGRATION_SQL)
+                cur.execute("ALTER TABLE schema_migration ADD COLUMN IF NOT EXISTS checksum text")
 
-    def get_applied_migrations(self) -> Mapping[str, str]:
+    def get_applied_migrations(self) -> Mapping[str, str | None]:
         with self._connect(self._database_url) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT version, checksum FROM schema_migration")
@@ -125,7 +127,8 @@ class PsycopgMigrationConnection:
                     """
                     INSERT INTO schema_migration (version, checksum)
                     VALUES (%s, %s)
-                    ON CONFLICT (version) DO NOTHING
+                    ON CONFLICT (version) DO UPDATE
+                    SET checksum = COALESCE(schema_migration.checksum, EXCLUDED.checksum)
                     """,
                     (migration.version, migration.checksum),
                 )
@@ -134,7 +137,7 @@ class PsycopgMigrationConnection:
 SCHEMA_MIGRATION_SQL = """
 CREATE TABLE IF NOT EXISTS schema_migration (
     version text PRIMARY KEY,
-    checksum text NOT NULL,
+    checksum text,
     applied_at timestamptz NOT NULL DEFAULT now()
 );
 """
@@ -148,7 +151,7 @@ def load_migrations(migrations_dir: str | Path = DEFAULT_MIGRATIONS_DIR) -> list
     migrations: list[MigrationFile] = []
     for path in sorted(directory.glob("[0-9][0-9][0-9]_*.sql")):
         sql = path.read_text(encoding="utf-8")
-        version = path.name.split("_", 1)[0]
+        version = path.name
         migrations.append(
             MigrationFile(
                 version=version,
@@ -167,14 +170,16 @@ def checksum_sql(sql: str) -> str:
 
 def plan_migrations(
     migrations_dir: str | Path = DEFAULT_MIGRATIONS_DIR,
-    applied: Mapping[str, str] | None = None,
+    applied: Mapping[str, str | None] | None = None,
 ) -> list[MigrationPlanItem]:
     applied = applied or {}
     plan: list[MigrationPlanItem] = []
     for migration in load_migrations(migrations_dir):
         recorded_checksum = applied.get(migration.version)
-        if recorded_checksum is None:
+        if migration.version not in applied:
             status = "pending"
+        elif not recorded_checksum:
+            status = "skipped"
         elif recorded_checksum == migration.checksum:
             status = "skipped"
         else:
@@ -230,10 +235,17 @@ def _print_plan(items: list[MigrationPlanItem]) -> None:
         print(f"{item.version} {item.status} {item.name} {item.checksum}")
 
 
+def connection_from_environment(database_url: str | None = None) -> PsycopgMigrationConnection:
+    database_url = database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is required for applying migrations.")
+    return PsycopgMigrationConnection(database_url)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run ecommerce_cs_agent database migrations.")
     parser.add_argument("command", nargs="?", choices=["up"], default="up")
-    parser.add_argument("--database-url", required=True)
+    parser.add_argument("--database-url")
     parser.add_argument("--migrations-dir", default=str(DEFAULT_MIGRATIONS_DIR))
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
@@ -242,7 +254,12 @@ def main(argv: list[str] | None = None) -> int:
         _print_plan(plan_migrations(args.migrations_dir, {}))
         return 0
 
-    _print_plan(apply_migrations(args.migrations_dir, PsycopgMigrationConnection(args.database_url)))
+    _print_plan(
+        apply_migrations(
+            args.migrations_dir,
+            connection_from_environment(args.database_url),
+        )
+    )
     return 0
 
 
