@@ -7,6 +7,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_organization_external_organization_id
 CREATE INDEX IF NOT EXISTS idx_store_external_lookup
     ON store (organization_id, platform, external_store_id);
 
+ALTER TABLE conversation ADD COLUMN IF NOT EXISTS organization_id uuid;
+ALTER TABLE conversation ADD COLUMN IF NOT EXISTS buyer_ref text;
+ALTER TABLE conversation ADD COLUMN IF NOT EXISTS summary jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_tenant_external
+    ON conversation (organization_id, store_id, platform, external_conversation_id);
+
+ALTER TABLE message ADD COLUMN IF NOT EXISTS organization_id uuid;
+ALTER TABLE message ADD COLUMN IF NOT EXISTS store_id uuid;
+ALTER TABLE message ADD COLUMN IF NOT EXISTS platform text;
+ALTER TABLE message ADD COLUMN IF NOT EXISTS direction text;
+ALTER TABLE message ADD COLUMN IF NOT EXISTS message_type text NOT NULL DEFAULT 'text';
+ALTER TABLE message ADD COLUMN IF NOT EXISTS content_redacted text;
+ALTER TABLE message ADD COLUMN IF NOT EXISTS raw_payload jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE message ADD COLUMN IF NOT EXISTS received_at timestamptz NOT NULL DEFAULT now();
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_message_tenant_external
+    ON message (organization_id, store_id, platform, external_message_id);
+
 ALTER TABLE decision_record ADD COLUMN IF NOT EXISTS status text;
 UPDATE decision_record
 SET status = COALESCE(
@@ -48,6 +67,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_context_snapshot_decision_context_request
 
 CREATE INDEX IF NOT EXISTS idx_context_snapshot_decision_type
     ON context_snapshot (decision_id, context_type);
+
+ALTER TABLE decision_graph_checkpoint ADD COLUMN IF NOT EXISTS organization_id uuid;
+ALTER TABLE decision_graph_checkpoint ADD COLUMN IF NOT EXISTS store_id uuid;
+ALTER TABLE decision_graph_checkpoint ADD COLUMN IF NOT EXISTS checkpoint_key text;
+UPDATE decision_graph_checkpoint
+SET checkpoint_key = COALESCE(
+    checkpoint_key,
+    to_jsonb(decision_graph_checkpoint)->>'node_name',
+    'latest-' || id::text
+)
+WHERE checkpoint_key IS NULL;
+ALTER TABLE decision_graph_checkpoint ADD COLUMN IF NOT EXISTS state jsonb;
+UPDATE decision_graph_checkpoint
+SET state = COALESCE(
+    state,
+    to_jsonb(decision_graph_checkpoint)->'state_json',
+    '{}'::jsonb
+)
+WHERE state IS NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_decision_graph_checkpoint_decision_key
     ON decision_graph_checkpoint (decision_id, checkpoint_key);
