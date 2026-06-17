@@ -180,6 +180,10 @@ def test_canonical_runtime_alignment_migration_contains_external_mapping_and_ind
         "alter table product_asset add column if not exists public_asset_id",
         "alter table product_price_snapshot add column if not exists public_price_snapshot_id",
         "create table if not exists knowledge_entry",
+        "alter table knowledge_entry add column if not exists organization_id",
+        "alter table knowledge_entry add column if not exists content",
+        "alter table knowledge_entry add column if not exists source_type",
+        "alter table knowledge_entry add column if not exists status",
         "create table if not exists knowledge_embedding",
         "idx_knowledge_entry_store_status_created",
     ]:
