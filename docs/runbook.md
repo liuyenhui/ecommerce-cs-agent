@@ -1,0 +1,157 @@
+# 运行排障手册
+
+本文面向 dev 环境的日常排障。它不替代架构设计或部署契约，只给出从症状到下一步检查的操作顺序。
+
+相关文档：
+
+- [Deployment](deployment.md)：dev 环境、域名、Secret、Registry 和部署验收。
+- [Testing](testing.md)：本地测试、live eval 和发布门禁。
+- [Security Local Files](security-local-files.md)：本地敏感文件、生成物和提交前检查。
+- [Development Readiness](development-readiness.md)：第一版实现范围和验收命令。
+
+## 1. 基础原则
+
+- 不在日志、文档、聊天或 issue 中粘贴 `Authorization`、Cookie、token、完整 `DATABASE_URL`、LLM key、registry token、kubeconfig 或客户 payload。
+- 先确认入口健康，再查应用，再查依赖，最后查 GitOps / 集群。
+- `reports/evals/` 是本地生成物，默认不提交。
+- 如果排查需要真实 Secret，只从 GitHub Secrets、Kubernetes Secrets 或批准的 Secret Manager 获取，并在本地 shell 临时注入。
+
+## 2. `/health` 失败
+
+先确认公网入口：
+
+```bash
+curl -i https://api.ecommerce-cs-agent-dev.fcihome.com/health
+curl -i https://admin.ecommerce-cs-agent-dev.fcihome.com/health
+```
+
+常见分支：
+
+| 现象 | 下一步 |
+| --- | --- |
+| DNS 无法解析 | 检查域名解析是否指向当前 Ingress 公网入口。 |
+| TLS 证书错误 | 检查 cert-manager Certificate、ClusterIssuer 和 Ingress host。 |
+| 404 | 检查 Ingress rule、Service name、应用 path 是否一致。 |
+| 502 / 503 | 检查 Pod readiness、Service selector、容器端口。 |
+| 500 | 查应用日志和运行时环境变量。 |
+| 连接超时 | 检查公网入口、FRP/Traefik、NetworkPolicy 或集群节点状态。 |
+
+集群侧检查命令：
+
+```bash
+KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev get pods,svc,ingress
+KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev describe ingress
+KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev logs deploy/ecommerce-cs-agent-api --tail=100
+```
+
+输出日志前先确认没有 token、Cookie、完整数据库 URL 或客户数据。
+
+## 3. live eval 失败
+
+标准命令：
+
+```bash
+TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com \
+  AGENT_API_TOKEN=<from-secret> \
+  python -m evals.cli run-suite --suite quick --target live --target-url "$TARGET_BASE_URL"
+```
+
+排查顺序：
+
+| 现象 | 含义 | 下一步 |
+| --- | --- | --- |
+| `FAIL health` | API 入口不可用或返回非 2xx。 | 先按 `/health` 失败排查。 |
+| `status=401` | 未传 token、token 错误或服务端鉴权配置不一致。 | 确认 `AGENT_API_TOKEN` 从运行时 Secret 临时注入；不要打印 token。 |
+| `status=403` | token 有效但没有组织 / 店铺 / 接口权限。 | 检查 token 授权范围与请求里的 `organization_id`、`store_id`。 |
+| `status=404` | `/v1/reply-decisions` 路由未部署或 Ingress 转发错误。 | 检查当前镜像版本和 API 路由实现。 |
+| `status=422` | 请求 schema 与 OpenAPI / 服务端校验不一致。 | 对照 `docs/openapi.yaml` 和 eval 请求体。 |
+| `status=500` | 服务端运行时错误。 | 查应用日志、DB、LLM、配置。 |
+| `network failure` | 网络超时、DNS、TLS 或代理问题。 | 检查本地网络、代理和 `TARGET_BASE_URL`。 |
+
+`evals.cli` 只输出 HTTP 状态、`decision_id`、`action`、`decision_status` 摘要，不应输出 token 或完整 Authorization header。
+
+## 4. HTTP 状态码定位
+
+| 状态码 | 常见原因 | 下一步 |
+| --- | --- | --- |
+| 400 | 请求格式非法或 JSON 无法解析。 | 检查请求体和 `Content-Type`。 |
+| 401 | 缺少认证或认证无效。 | 检查 token/session 注入，不打印明文。 |
+| 403 | 认证有效但权限不足。 | 检查组织、店铺、角色和系统/客户 Admin 鉴权域。 |
+| 404 | 路由不存在或资源不存在。 | 检查部署版本、OpenAPI path、Ingress path。 |
+| 409 | 幂等冲突、版本冲突或重复动作。 | 检查 `request_id`、`idempotency_key`、资源版本。 |
+| 422 | 字段校验失败或缺少审计原因。 | 对照 OpenAPI schema 和业务错误 code。 |
+| 429 | 限流。 | 检查 token、租户、IP 或全局限流策略。 |
+| 500 | 未预期服务错误。 | 查 trace_id、应用日志和依赖状态。 |
+
+## 5. 数据库连接失败
+
+检查方向：
+
+- `DATABASE_URL` 是否从 `ecommerce-cs-agent-runtime` 注入。
+- PostgreSQL Service 是否为 `postgres.ecommerce-cs-agent-dev.svc.cluster.local:5432`。
+- 数据库、用户和 SSL mode 是否与 [Deployment](deployment.md) 一致。
+- `pgcrypto` 和 `vector` 扩展是否存在。
+- `schema_migration` 是否有当前版本记录。
+
+示例检查：
+
+```bash
+KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev get secret ecommerce-cs-agent-runtime
+KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev get svc postgres
+```
+
+不要把 Secret 内容解码后贴到聊天或文档。
+
+## 6. LLM 或代理失败
+
+常见原因：
+
+- `LLM_BASE_URL`、`LLM_MODEL` 或 `LLM_API_KEY` 未注入。
+- API Pod 代理配置错误。
+- `NO_PROXY` 未包含 `.svc`、`.cluster.local`、PostgreSQL 或 MinIO 内网域名。
+- LLM provider 超时或返回非 2xx。
+
+检查：
+
+```bash
+KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev describe deploy ecommerce-cs-agent-api
+KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev logs deploy/ecommerce-cs-agent-api --tail=100
+```
+
+日志中如包含 provider 请求头、key、prompt 原文或客户 payload，先脱敏再分享。
+
+## 7. K8s rollout 失败
+
+检查顺序：
+
+```bash
+KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev rollout status deploy/ecommerce-cs-agent-api
+KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev get pods
+KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev describe pod <pod-name>
+KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev logs <pod-name> --tail=100
+```
+
+| 现象 | 下一步 |
+| --- | --- |
+| `ImagePullBackOff` | 检查 image tag、Registry、`imagePullSecrets`、阿里云/GHCR 凭据。 |
+| `CrashLoopBackOff` | 查容器日志、启动命令、环境变量、数据库连接。 |
+| readiness 不通过 | 检查 `/health` 路径、端口、启动耗时和依赖。 |
+| 旧版本仍在服务 | 检查 GitOps image tag、Flux reconcile、Helm release revision。 |
+
+## 8. 何时转到 GitOps / Deploy 仓库
+
+以下问题通常不应只在应用仓库修：
+
+- Ingress host、TLS、Certificate、ClusterIssuer。
+- Helm values、Deployment、Service、Secret 引用。
+- Flux reconcile、HelmRelease、Kustomization。
+- imagePullSecrets、registry 凭据、namespace。
+- PostgreSQL / MinIO StatefulSet、PVC、Service。
+
+应用仓库需要提供的交接信息：
+
+- 应用 commit 和 image tag。
+- 需要的 env key 和 Secret key 名称。
+- 健康检查路径。
+- live eval 命令和失败摘要。
+- 不含敏感值的日志片段或 trace_id。

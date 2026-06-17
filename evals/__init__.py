@@ -1,1 +1,1 @@
-"""Automated blind evaluation tooling for the ecommerce CS Agent."""
+"""Evaluation tooling for ecommerce-cs-agent."""

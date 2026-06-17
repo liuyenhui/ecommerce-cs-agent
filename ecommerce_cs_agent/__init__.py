@@ -1,1 +1,3 @@
-"""Ecommerce customer service Agent application package."""
+"""Ecommerce customer service agent application package."""
+
+__version__ = "0.1.0"

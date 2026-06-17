@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
-from uuid import uuid4
 
 import httpx
 
@@ -22,6 +24,15 @@ from evals.models import (
 DEFAULT_REPORTS_DIR = Path("reports/evals")
 
 
+@dataclass(frozen=True)
+class CheckResult:
+    name: str
+    passed: bool
+    status: int | None
+    message: str
+    summary: dict[str, Any]
+
+
 def load_cases(path: Path, *, suite: str | None = None) -> list[TestCase]:
     paths = sorted(path.glob("*.json")) if path.is_dir() else [path]
     cases: list[TestCase] = []
@@ -33,20 +44,104 @@ def load_cases(path: Path, *, suite: str | None = None) -> list[TestCase]:
     return cases
 
 
+class LiveAgentClient:
+    def __init__(
+        self,
+        base_url: str,
+        token: str | None = None,
+        timeout: float = 10.0,
+        *,
+        auth_token: str | None = None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/") + "/"
+        self.token = auth_token or token
+        self.timeout = timeout
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "ecommerce-cs-agent-evals/0.1",
+        }
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        self._client = httpx.Client(
+            base_url=self.base_url.rstrip("/"),
+            headers=headers,
+            timeout=timeout,
+        )
+
+    def get_json(self, path: str) -> tuple[int, Any]:
+        try:
+            response = self._client.get(path)
+            return response.status_code, _parse_response(response)
+        except httpx.TimeoutException as exc:
+            raise RuntimeError("network failure: request timed out") from exc
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"network failure: {exc}") from exc
+
+    def post_json(self, path: str, payload: dict[str, Any]) -> tuple[int, Any]:
+        try:
+            response = self._client.post(path, json=payload)
+            return response.status_code, _parse_response(response)
+        except httpx.TimeoutException as exc:
+            raise RuntimeError("network failure: request timed out") from exc
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"network failure: {exc}") from exc
+
+    def create_decision(self, case: TestCase) -> AgentResponse:
+        response = self._client.post("/v1/reply-decisions", json=case.request_payload)
+        response.raise_for_status()
+        return AgentResponse.from_payload(response.json())
+
+    def refill_context(
+        self,
+        case: TestCase,
+        response: AgentResponse,
+        context_request: ContextRequest,
+    ) -> AgentResponse:
+        endpoint = context_request.endpoint or (
+            f"/v1/reply-decisions/{response.decision_id}/contexts/{context_request.type}"
+        )
+        payload = {
+            "context_request_id": context_request.context_request_id,
+            "idempotency_key": f"eval-{case.case_id}-{context_request.type}",
+            "organization_id": case.request_payload.get("organization_id", "org-eval"),
+            "store_id": case.request_payload.get("store_id", "store-eval"),
+            "source": "eval",
+            "items": _public_context_for(case, context_request.type),
+        }
+        refill_response = self._client.post(endpoint, json=payload)
+        refill_response.raise_for_status()
+        return AgentResponse.from_payload(refill_response.json())
+
+
 class MockAgentClient:
+    def get_json(self, path: str) -> tuple[int, Any]:
+        if path == "/health":
+            return 200, {"status": "ok", "service": "mock-agent"}
+        return 404, {"error": "not_found"}
+
+    def post_json(self, path: str, payload: dict[str, Any]) -> tuple[int, Any]:
+        if path != "/v1/reply-decisions":
+            return 404, {"error": "not_found"}
+        decision_id = f"mock-{payload.get('request_id', 'decision')}"
+        return 200, {
+            "decision_id": decision_id,
+            "action": "candidate",
+            "decision_status": "candidate",
+        }
+
     def create_decision(self, case: TestCase) -> AgentResponse:
         expected = case.hidden_expected_behavior
         action = expected.expected_action or (
             "context_request" if expected.required_context_request_types else "candidate"
         )
-        decision_status = _status_for_action(action)
         payload: dict[str, Any] = {
             "decision_id": f"mock-{case.case_id}",
-            "decision_status": decision_status,
+            "decision_status": _status_for_action(action),
             "action": action,
             "candidates": [],
             "auto_reply": None,
             "context_requests": [],
+            "action_requests": [],
             "action_request": None,
             "trace": {
                 "mock": True,
@@ -74,6 +169,7 @@ class MockAgentClient:
                     expected.required_action_requires_human_confirm
                 ),
             }
+            payload["action_requests"] = [payload["action_request"]]
         return AgentResponse.from_payload(payload)
 
     def refill_context(
@@ -98,38 +194,58 @@ class MockAgentClient:
         )
 
 
-class LiveAgentClient:
-    def __init__(self, target_url: str, *, auth_token: str | None = None) -> None:
-        headers = {}
-        if auth_token:
-            headers["Authorization"] = f"Bearer {auth_token}"
-        self._client = httpx.Client(
-            base_url=target_url.rstrip("/"),
-            headers=headers,
-            timeout=30.0,
+class QuickLiveSuite:
+    def __init__(self, client: LiveAgentClient | MockAgentClient):
+        self.client = client
+
+    def run(self) -> list[CheckResult]:
+        results = [self.check_health()]
+        if results[-1].passed:
+            results.append(self.check_reply_decision())
+        else:
+            results.append(
+                CheckResult(
+                    name="reply-decisions",
+                    passed=False,
+                    status=None,
+                    message="skipped because health check failed",
+                    summary={},
+                )
+            )
+        return results
+
+    def check_health(self) -> CheckResult:
+        try:
+            status, body = self.client.get_json("/health")
+        except RuntimeError as exc:
+            return CheckResult("health", False, None, str(exc), {})
+        passed = 200 <= status < 300
+        return CheckResult(
+            name="health",
+            passed=passed,
+            status=status,
+            message="ok" if passed else "contract/runtime failure: non-2xx response",
+            summary=_body_summary(body),
         )
 
-    def create_decision(self, case: TestCase) -> AgentResponse:
-        response = self._client.post("/v1/reply-decisions", json=case.request_payload)
-        response.raise_for_status()
-        return AgentResponse.from_payload(response.json())
+    def check_reply_decision(self) -> CheckResult:
+        try:
+            status, body = self.client.post_json(
+                "/v1/reply-decisions",
+                build_minimal_reply_decision_request(),
+            )
+        except RuntimeError as exc:
+            return CheckResult("reply-decisions", False, None, str(exc), {})
 
-    def refill_context(
-        self,
-        case: TestCase,
-        response: AgentResponse,
-        context_request: ContextRequest,
-    ) -> AgentResponse:
-        endpoint = context_request.endpoint or (
-            f"/v1/reply-decisions/{response.decision_id}/contexts/{context_request.type}"
-        )
-        payload = {
-            "context_request_id": context_request.context_request_id,
-            context_request.type: _public_context_for(case, context_request.type),
-        }
-        refill_response = self._client.post(endpoint, json=payload)
-        refill_response.raise_for_status()
-        return AgentResponse.from_payload(refill_response.json())
+        summary = _decision_summary(body)
+        passed = 200 <= status < 300 and bool(summary.get("decision_id"))
+        if passed:
+            message = "ok"
+        elif 200 <= status < 300:
+            message = "contract/runtime failure: response missing decision_id"
+        else:
+            message = "contract/runtime failure: non-2xx response"
+        return CheckResult("reply-decisions", passed, status, message, summary)
 
 
 def run_cases(
@@ -142,7 +258,7 @@ def run_cases(
     target_url: str | None = None,
     auth_token: str | None = None,
 ) -> TestRunResult:
-    run_id = run_id or f"{suite}-{uuid4().hex[:12]}"
+    run_id = run_id or f"{suite}-{uuid.uuid4().hex[:12]}"
     client = _make_client(target=target, target_url=target_url, auth_token=auth_token)
     run = TestRunResult.start(run_id=run_id, suite=suite, target=target)
 
@@ -157,6 +273,44 @@ def run_cases(
             report_file.write(json.dumps(result.model_dump(mode="json"), ensure_ascii=False))
             report_file.write("\n")
     return run
+
+
+def build_minimal_reply_decision_request() -> dict[str, Any]:
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    request_id = f"eval-quick-{uuid.uuid4().hex}"
+    return {
+        "request_id": request_id,
+        "organization_id": "org-eval",
+        "platform": "pdd",
+        "store_id": "store-eval",
+        "message": {
+            "external_message_id": f"msg-{request_id}",
+            "sender_type": "buyer",
+            "content": "When will this order ship?",
+            "sent_at": now,
+        },
+        "conversation": {
+            "external_conversation_id": f"conv-{request_id}",
+            "buyer_ref": "buyer-eval",
+            "messages": [],
+        },
+        "mode": "assist_first",
+        "context": {
+            "products": [],
+            "orders": [],
+            "logistics": [],
+            "rules": [],
+        },
+    }
+
+
+def format_result(result: CheckResult) -> str:
+    status = f" status={result.status}" if result.status is not None else " status=unavailable"
+    prefix = "PASS" if result.passed else "FAIL"
+    details = _format_summary(result.summary)
+    if details:
+        return f"{prefix} {result.name}{status} {details}"
+    return f"{prefix} {result.name}{status} {result.message}"
 
 
 def _run_case(case: TestCase, client: MockAgentClient | LiveAgentClient) -> TestCaseResult:
@@ -236,3 +390,37 @@ def _failure_types(
     if judge_failure_type and judge_failure_type not in ordered:
         ordered.append(judge_failure_type)
     return ordered
+
+
+def _format_summary(summary: dict[str, Any]) -> str:
+    fields = []
+    for key in ("decision_id", "action", "decision_status"):
+        value = summary.get(key)
+        if value is not None:
+            fields.append(f"{key}={value}")
+    return " ".join(fields)
+
+
+def _decision_summary(body: Any) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        return {}
+    return {
+        "decision_id": body.get("decision_id"),
+        "action": body.get("action"),
+        "decision_status": body.get("decision_status"),
+    }
+
+
+def _body_summary(body: Any) -> dict[str, Any]:
+    if isinstance(body, dict):
+        return {key: body.get(key) for key in ("status", "service", "environment") if key in body}
+    return {}
+
+
+def _parse_response(response: httpx.Response) -> Any:
+    if not response.content:
+        return None
+    try:
+        return response.json()
+    except json.JSONDecodeError:
+        return response.text[:200]

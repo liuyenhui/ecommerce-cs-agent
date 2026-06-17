@@ -60,9 +60,9 @@ expect(initSource.includes("edgeLabels.forEach"), 'edge label nodes must be crea
 expect(initSource.includes("addFlowSegment"), 'flow edges must be split into labeled segments');
 expect(initSource.includes("`${edge.id}-source-label`"), 'source-to-label edge segment must be created');
 expect(initSource.includes("`${edge.id}-label-target`"), 'label-to-target edge segment must be created');
-expect(!initSource.includes("router: { name: 'manhattan'"), 'flow label segments must not use manhattan routing');
+expect(initSource.includes("name: 'manhattan'"), 'flow label segments must use manhattan routing for right-angle connectors');
 expect(!initSource.includes("connector: { name: 'rounded'"), 'flow label segments must not use rounded multi-bend connector');
-expect(initSource.includes("connector: { name: 'normal'"), 'flow label segments must use straight normal connector');
+expect(initSource.includes("connector: { name: 'normal'"), 'flow label segments must use normal connector with orthogonal routing');
 expect(initSource.includes("anchor: { name: 'center' }"), 'flow label segments must connect through center anchors');
 expect(!initSource.includes('oppositeAnchor(edge.'), 'flow label segments must not choose edge-side anchors for label nodes');
 expect(!initSource.includes("id: 'realtime'"), 'realtime notification must not be a flow diagram node');
@@ -70,6 +70,10 @@ expect(!initSource.includes("edge-agent-realtime"), 'realtime notification must 
 expect(!initSource.includes("label-agent-realtime"), 'realtime notification must not be a flow diagram edge label');
 expect(html.includes('实时通知（非本期目标）'), 'documentation must keep realtime notification marked as not in current scope');
 expect(html.includes('WebSocket(实时连接) 是后续异步通知能力'), 'documentation must explain WebSocket realtime notification as future async capability');
+expect(initSource.includes('context_requests[]'), 'business flow must show context_requests[] from the new API design');
+expect(initSource.includes('/contexts/* 回填'), 'business flow must show typed context refill APIs');
+expect(initSource.includes('/actions/results'), 'business flow must show action result callback API');
+expect(initSource.includes('5 秒预算'), 'business flow must show the 5 second context aggregation budget');
 
 const flowEdges = extractArray('flowEdges');
 const edgeLabelIds = [...initSource.matchAll(/labelId: '([^']+)'/g)].map(match => match[1]);
@@ -77,7 +81,8 @@ expect(edgeLabelIds.length === flowEdges.length, `expected ${flowEdges.length} e
 expect(new Set(edgeLabelIds).size === edgeLabelIds.length, 'edge label ids must be unique');
 
 const flowEdgeById = Object.fromEntries(flowEdges.map(edge => [edge.id, edge]));
-expect(flowEdges.length === 8, `expected 8 business flow edges after removing realtime node, found ${flowEdges.length}`);
+expect(flowEdges.length === 9, `expected 9 business flow edges including context refill loop, found ${flowEdges.length}`);
+expect(Boolean(flowEdgeById['edge-business-agent']), 'business flow must link context/action results back to Agent aggregation');
 expect((flowEdgeById['edge-workbench-business']?.offsetX || 0) <= -48, 'workbench/business API label must be shifted left to spread branch labels');
 expect((flowEdgeById['edge-workbench-feedback']?.offsetY || 0) >= 48, 'workbench/feedback API label must be shifted down to spread branch labels');
 expect((flowEdgeById['edge-workbench-trace']?.offsetX || 0) >= 48, 'workbench/trace API label must be shifted right to spread branch labels');

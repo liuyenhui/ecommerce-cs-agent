@@ -1,53 +1,250 @@
 from __future__ import annotations
 
-import os
+import argparse
+import hashlib
+from dataclasses import dataclass
 from pathlib import Path
-
-import psycopg
-
-
-DEFAULT_MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "db" / "migrations"
+from typing import Mapping, Protocol
 
 
-def load_migration_sql(name: str, migrations_dir: Path = DEFAULT_MIGRATIONS_DIR) -> str:
-    path = migrations_dir / name
-    return path.read_text(encoding="utf-8")
+DEFAULT_MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
+
+
+class MigrationError(RuntimeError):
+    """Base class for migration failures."""
+
+
+class ChecksumMismatchError(MigrationError):
+    """Raised when an already-applied migration file has changed."""
+
+
+@dataclass(frozen=True)
+class MigrationFile:
+    version: str
+    name: str
+    path: Path
+    sql: str
+    checksum: str
+
+
+@dataclass(frozen=True)
+class MigrationPlanItem:
+    version: str
+    name: str
+    checksum: str
+    status: str
+    path: Path
+
+
+class MigrationConnection(Protocol):
+    def ensure_schema_migration(self) -> None:
+        ...
+
+    def get_applied_migrations(self) -> Mapping[str, str]:
+        ...
+
+    def execute_migration(self, migration: MigrationFile) -> None:
+        ...
+
+    def record_migration(self, migration: MigrationFile) -> None:
+        ...
+
+
+class InMemoryMigrationConnection:
+    """Small test connection that exercises planning and idempotency logic."""
+
+    def __init__(self) -> None:
+        self._records: dict[str, str] = {}
+        self._record_writes: dict[str, int] = {}
+        self.executed_sql: list[str] = []
+
+    @property
+    def executed_sql_count(self) -> int:
+        return len(self.executed_sql)
+
+    def record_count(self, version: str) -> int:
+        return self._record_writes.get(version, 0)
+
+    def ensure_schema_migration(self) -> None:
+        return None
+
+    def get_applied_migrations(self) -> Mapping[str, str]:
+        return dict(self._records)
+
+    def execute_migration(self, migration: MigrationFile) -> None:
+        self.executed_sql.append(migration.sql)
+
+    def record_migration(self, migration: MigrationFile) -> None:
+        if migration.version in self._records:
+            return
+        self._records[migration.version] = migration.checksum
+        self._record_writes[migration.version] = self._record_writes.get(migration.version, 0) + 1
+
+
+class PsycopgMigrationConnection:
+    def __init__(self, database_url: str) -> None:
+        self._database_url = database_url
+        self._driver = None
+        self._connect = None
+        try:
+            import psycopg
+
+            self._driver = "psycopg"
+            self._connect = psycopg.connect
+        except ImportError:
+            try:
+                import psycopg2
+
+                self._driver = "psycopg2"
+                self._connect = psycopg2.connect
+            except ImportError as exc:
+                raise RuntimeError(
+                    "PostgreSQL migration requires psycopg or psycopg2 to be installed."
+                ) from exc
+
+    def ensure_schema_migration(self) -> None:
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(SCHEMA_MIGRATION_SQL)
+
+    def get_applied_migrations(self) -> Mapping[str, str]:
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT version, checksum FROM schema_migration")
+                return {row[0]: row[1] for row in cur.fetchall()}
+
+    def execute_migration(self, migration: MigrationFile) -> None:
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(migration.sql)
+
+    def record_migration(self, migration: MigrationFile) -> None:
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO schema_migration (version, checksum)
+                    VALUES (%s, %s)
+                    ON CONFLICT (version) DO NOTHING
+                    """,
+                    (migration.version, migration.checksum),
+                )
+
+
+SCHEMA_MIGRATION_SQL = """
+CREATE TABLE IF NOT EXISTS schema_migration (
+    version text PRIMARY KEY,
+    checksum text NOT NULL,
+    applied_at timestamptz NOT NULL DEFAULT now()
+);
+"""
+
+
+def load_migrations(migrations_dir: str | Path = DEFAULT_MIGRATIONS_DIR) -> list[MigrationFile]:
+    directory = Path(migrations_dir)
+    if not directory.exists():
+        raise FileNotFoundError(f"Migration directory does not exist: {directory}")
+
+    migrations: list[MigrationFile] = []
+    for path in sorted(directory.glob("[0-9][0-9][0-9]_*.sql")):
+        sql = path.read_text(encoding="utf-8")
+        version = path.name.split("_", 1)[0]
+        migrations.append(
+            MigrationFile(
+                version=version,
+                name=path.name,
+                path=path,
+                sql=sql,
+                checksum=checksum_sql(sql),
+            )
+        )
+    return migrations
+
+
+def checksum_sql(sql: str) -> str:
+    return hashlib.sha256(sql.encode("utf-8")).hexdigest()
+
+
+def plan_migrations(
+    migrations_dir: str | Path = DEFAULT_MIGRATIONS_DIR,
+    applied: Mapping[str, str] | None = None,
+) -> list[MigrationPlanItem]:
+    applied = applied or {}
+    plan: list[MigrationPlanItem] = []
+    for migration in load_migrations(migrations_dir):
+        recorded_checksum = applied.get(migration.version)
+        if recorded_checksum is None:
+            status = "pending"
+        elif recorded_checksum == migration.checksum:
+            status = "skipped"
+        else:
+            raise ChecksumMismatchError(
+                f"Migration {migration.version} checksum mismatch; stop and inspect the file."
+            )
+        plan.append(
+            MigrationPlanItem(
+                version=migration.version,
+                name=migration.name,
+                checksum=migration.checksum,
+                status=status,
+                path=migration.path,
+            )
+        )
+    return plan
 
 
 def apply_migrations(
-    *,
-    database_url: str | None = None,
-    migrations_dir: Path = DEFAULT_MIGRATIONS_DIR,
-) -> list[str]:
-    dsn = database_url or os.environ.get("DATABASE_URL")
-    if not dsn:
-        raise RuntimeError("DATABASE_URL is required to run migrations")
+    migrations_dir: str | Path = DEFAULT_MIGRATIONS_DIR,
+    connection: MigrationConnection | None = None,
+) -> list[MigrationPlanItem]:
+    if connection is None:
+        raise RuntimeError("A migration connection is required for applying migrations.")
 
-    applied: list[str] = []
-    migration_paths = sorted(migrations_dir.glob("*.sql"))
-    with psycopg.connect(dsn) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS schema_migration (
-                  version text PRIMARY KEY,
-                  applied_at timestamptz NOT NULL DEFAULT now()
-                )
-                """
+    connection.ensure_schema_migration()
+    applied = connection.get_applied_migrations()
+    migrations_by_version = {migration.version: migration for migration in load_migrations(migrations_dir)}
+    planned = plan_migrations(migrations_dir, applied)
+    results: list[MigrationPlanItem] = []
+
+    for item in planned:
+        if item.status == "skipped":
+            results.append(item)
+            continue
+        migration = migrations_by_version[item.version]
+        connection.execute_migration(migration)
+        connection.record_migration(migration)
+        results.append(
+            MigrationPlanItem(
+                version=item.version,
+                name=item.name,
+                checksum=item.checksum,
+                status="applied",
+                path=item.path,
             )
-            for migration_path in migration_paths:
-                version = migration_path.name
-                cursor.execute(
-                    "SELECT 1 FROM schema_migration WHERE version = %s",
-                    (version,),
-                )
-                if cursor.fetchone():
-                    continue
-                cursor.execute(migration_path.read_text(encoding="utf-8"))
-                cursor.execute(
-                    "INSERT INTO schema_migration (version) VALUES (%s)",
-                    (version,),
-                )
-                applied.append(version)
-        connection.commit()
-    return applied
+        )
+    return results
+
+
+def _print_plan(items: list[MigrationPlanItem]) -> None:
+    for item in items:
+        print(f"{item.version} {item.status} {item.name} {item.checksum}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run ecommerce_cs_agent database migrations.")
+    parser.add_argument("command", nargs="?", choices=["up"], default="up")
+    parser.add_argument("--database-url", required=True)
+    parser.add_argument("--migrations-dir", default=str(DEFAULT_MIGRATIONS_DIR))
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+
+    if args.dry_run:
+        _print_plan(plan_migrations(args.migrations_dir, {}))
+        return 0
+
+    _print_plan(apply_migrations(args.migrations_dir, PsycopgMigrationConnection(args.database_url)))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
