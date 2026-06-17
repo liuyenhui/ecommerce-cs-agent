@@ -2,22 +2,43 @@
 
 本文件定义客服 Agent 作为独立系统时，对外提供的标准 HTTP API 设计方向。
 
-系统组件、数据流、数据模型和决策机制详见 [System Architecture](system-architecture.md)。
+系统组件、数据流、数据模型和决策机制详见 [System Architecture](system-architecture.md)。客户可登录后台的详细设计见 [Customer Admin Design](customer-admin-design.md)。
 
 ## 系统边界
 
 客服 Agent 应作为独立服务部署，不直接嵌入现有客服系统。外部系统通过 HTTP API 接入，把客服消息、可选上下文和人工反馈传给 Agent；当缺商品、订单、物流、规则或动作执行结果时，Agent 返回结构化补上下文请求，由外部系统按类型回填。Agent 最终返回候选回复、自动回复决策、转人工原因、动作请求和可追踪的决策记录。
 
+外部系统是通用接入方，可以是客服系统、ERP、订单、仓储或平台自动化系统。ERP 只是其中一种实现示例，不是默认上游、统一身份源或必需组件。
+
 第一版目标不是替代现有客服系统，而是提供一个可控的客服决策服务：
 
 - 外部系统负责接收平台消息、展示客服界面、真正发送回复。
+- 公开宣传页属于客服 Agent 自身，只展示产品能力和登录入口，不承载外部系统接入或租户业务数据。
+- 客户 Admin 后台属于客服 Agent 自身，负责登录、组织/店铺切换、商品资料维护、知识审核、规则配置、动作能力配置和审计查询。
 - Agent 服务负责理解消息、检索知识、生成候选、判断风险、输出决策。
+- Agent 内部可用 LangGraph 编排决策状态、补上下文等待、动作结果等待和人工介入；对外仍只暴露稳定 HTTP API，不暴露 graph 节点或 LangGraph runtime。
 - 自动回复必须经过规则闸门，不能只依赖模型自评。
 - 所有决策都要生成 `decision_id`，便于后续追踪、反馈和评估。
 
 ## 接入形态
 
 采用“同步优先，异步预留”的设计。
+
+### 公开页面与 Admin 入口
+
+公开页面和 Admin 路由是客服 Agent 自有 Web 入口，不属于外部系统 API：
+
+```text
+GET /
+GET /login
+GET /admin
+```
+
+- `GET /` 展示宣传页、后台能力预览和登录按钮，不读取或展示租户业务数据。
+- `GET /login` 展示 Agent 自有登录页，登录成功后建立 Admin session 并跳转 `/admin`。
+- `GET /admin` 是受保护后台 shell；未登录访问必须重定向到 `/login`。
+- 已登录用户从 `/` 点击登录按钮时可以直接进入 `/admin`，但后台仍必须调用 `GET /v1/admin/auth/me` 校验用户、组织、店铺和角色。
+- Web 登录态使用 HttpOnly Cookie 或等价安全机制；服务端 session 状态必须保存在数据库、Redis 或等价外部存储，不能依赖单容器内存。
 
 ### 第一版：同步接口
 
@@ -39,7 +60,7 @@ POST /v1/reply-decisions
 
 ```text
 POST /v1/events/messages
-GET /v1/reply-decisions/{decision_id}
+GET /v1/tasks/{task_id}
 POST <external_callback_url>
 ```
 
@@ -64,9 +85,11 @@ POST <external_callback_url>
 
 商品、订单、物流和规则都是可选上下文。外部系统如果已经有低成本、可信的上下文，可以随主请求传入；如果没有，Agent 先做轻量意图和上下文需求判断，一次性返回当前可判断出的 `context_requests[]`。客户端按类型并行调用补充接口，服务端用同一个 `decision_id` 聚合上下文，直到返回明确可答复内容、动作请求或人工介入。
 
+内部编排推荐使用 LangGraph：`decision_id` 映射 graph `thread_id`，主请求、typed context refill 和 `actions/results` 都恢复同一条 thread。LangGraph checkpoint 必须落 PostgreSQL、Redis 或等价外部存储；API 容器不能依赖内存保存 graph state。
+
 实时性上下文采用“最近有效快照”规则：同一连续聊天里出现多个商品、订单、规则或会话摘要时，Context Builder 以当前消息显式引用为优先，其次按外部业务更新时间选择最近有效项。订单优先看订单状态更新时间、物流更新时间、支付时间；商品优先看商品更新时间、SKU 或活动更新时间；规则优先看 `effective_at` 或版本生效时间；缺失这些时间时使用 Agent 接收请求时的 `captured_at`。被替换的旧上下文不删除，只作为历史快照保留，用于回放和审计。
 
-商品说明书、照片、视频和长期 SKU 资料不建议塞进 `POST /v1/reply-decisions` 请求体。第一版由客户在 Admin 后台手工维护商品资料：原始资料先进入 `product_asset` 归档，再转换为 `product_asset_markdown` 审稿稿件，抽取 `product_knowledge_candidate` 知识片段，人工审核通过后才进入知识库和向量召回。价格类回答以外部平台或 ERP 当前有效 `product_price_snapshot` 为权威；价格缺失、过期或冲突时，Agent 返回候选、补上下文或转人工，不能自动报价。
+商品说明书、照片、视频和长期 SKU 资料不建议塞进 `POST /v1/reply-decisions` 请求体。第一版由客户在 Admin 后台手工维护商品资料：原始资料先进入 `product_asset` 归档，再转换为 `product_asset_markdown` 审稿稿件，抽取 `product_knowledge_candidate` 知识片段，人工审核通过后才进入知识库和向量召回。价格类回答以外部系统当前有效 `product_price_snapshot` 为权威；价格缺失、过期或冲突时，Agent 返回候选、补上下文或转人工，不能自动报价。
 
 性能规则：
 
@@ -159,6 +182,7 @@ POST /v1/reply-decisions
   "trace": {
     "matched_knowledge_ids": [],
     "rule_hits": [],
+    "graph_version": "reply-decision-graph-v1",
     "model_version": "reply-generator-v1",
     "steps": [
       {
@@ -340,7 +364,7 @@ POST /v1/reply-decisions/{decision_id}/actions/results
 }
 ```
 
-服务端用 `decision_id + context_request_id + idempotency_key` 做幂等和聚合。总等待预算最高 5 秒；超过预算仍缺关键上下文时，Agent 返回 `candidate` 或 `handoff`，不能继续阻塞客服界面。trace 必须记录每个补充请求、回填接口、耗时、成功/失败、是否超时和最终是否降级。
+服务端用 `decision_id + context_request_id + idempotency_key` 做幂等和聚合。若内部使用 LangGraph，回填接口应恢复同一个 graph `thread_id`，并写入 `decision_graph_checkpoint` 或等价 checkpointer。总等待预算最高 5 秒；超过预算仍缺关键上下文时，Agent 返回 `candidate` 或 `handoff`，不能继续阻塞客服界面。trace 必须记录每个补充请求、回填接口、LangGraph 节点、耗时、成功/失败、是否超时和最终是否降级。
 
 ### 动作请求和执行结果
 
@@ -476,11 +500,30 @@ POST /v1/rules/platform-rules
 POST /v1/capabilities/action-capabilities
 ```
 
-第一版可以先支持批量导入或简单 upsert。动作能力配置用于保存平台级 / 店铺级 `action_type`、自然语言触发表达、参数 schema、风险级别和回调地址；后续再补后台管理、版本管理、灰度发布和规则测试。
+这些接口服务第一版客户 Admin 后台，也可以支持批量导入或简单 upsert。动作能力配置用于保存平台级 / 店铺级 `action_type`、自然语言触发表达、参数 schema、风险级别和回调地址；后台负责维护版本、审计和基础规则测试，灰度发布可后续增强。
+
+### Admin 登录、权限和审计
+
+客户后台使用客服 Agent 自有 Admin API 分组承载登录、组织/店铺上下文、用户角色和审计查询，不扩大同步问答接口，也不依赖任何外部系统的登录态、session 或 token。公开路由 `/`、`/login`、`/admin` 只负责页面入口和后台 shell，真实登录状态由以下 API 校验：
+
+```text
+POST /v1/admin/auth/login
+POST /v1/admin/auth/logout
+GET /v1/admin/auth/me
+GET /v1/admin/organizations
+GET /v1/admin/stores
+PATCH /v1/admin/stores/{store_id}/settings
+GET /v1/admin/users
+POST /v1/admin/invitations
+PATCH /v1/admin/users/{user_id}/roles
+GET /v1/admin/audit-logs
+```
+
+Admin API 必须校验 Agent 自有用户身份、组织、店铺和角色权限。外部系统接入 token 只能调用外部接入 API，不能直接访问 Admin API。所有商品资料、知识审核、规则配置、动作能力配置和店铺设置的写操作都应记录操作者、组织、店铺、对象、动作和时间。未登录访问 `/admin` 必须回到 `/login`，登录成功后如果用户有多个组织或店铺，应先选择上下文再进入后台首页。
 
 ### 商品资料维护
 
-商品资料维护属于 Admin/API 能力，不扩大第一版同步决策接口。建议预留以下方向：
+商品资料维护属于第一版 Admin/API 能力，不扩大同步决策接口。接口方向如下：
 
 ```text
 POST /v1/product-content/products
@@ -504,10 +547,11 @@ GET /v1/product-content/products/{product_id}/health
 - 日志中不保存 Cookie、二维码、短信验证码、完整买家敏感身份信息等会话材料。
 - 平台原始字段放入 JSONB 风格的 `raw` 或 `metadata` 字段，标准字段保持稳定。
 - Markdown 审稿稿件和 LLM 生成的模拟问答不能直接作为自动回复知识源，必须经人工片段审核。
-- 价格类回复必须引用外部平台或 ERP 当前有效价格快照；价格缺失、过期或冲突时不能自动报价。
+- 价格类回复必须引用外部系统当前有效价格快照；价格缺失、过期或冲突时不能自动报价。
 - 外部动作请求必须带 `idempotency_key`，外部系统回调执行结果时也要回传 `action_id`，避免重复备注、重复改地址等副作用。
 - Webhook / callback 必须支持签名校验、超时、重试和失败降级；没有成功结果前，Agent 不能向买家确认动作已完成。
 - 补上下文回填必须带 `context_request_id` 和 `idempotency_key`；服务端以 `decision_id + context_request_id + idempotency_key` 聚合和去重。
+- LangGraph checkpoint、Admin session、补上下文聚合状态都必须使用外部持久化存储，不能依赖单 API 实例内存。
 - 单次问答等待预算最高 5 秒；超时仍缺关键上下文时返回 `candidate` 或 `handoff`，并在 trace 中记录降级原因。
 - `GET /v1/message-traces/{decision_id}` 面向内部客服运营、技术排障和系统审计，不直接暴露给买家。
 
@@ -518,22 +562,32 @@ GET /v1/product-content/products/{product_id}/health
 第一版由外部系统根据 `context_requests[]` 主动回填上下文，Agent 不直接拉客户内部系统。后续增加 `connector` 配置，让 Agent 在需要时主动查询外部系统：
 
 ```text
-GET /external/products/{product_id}
-GET /external/orders/{order_id}
-GET /external/rules?store_id={store_id}&platform={platform}
+GET /v1/admin/connectors
+POST /v1/admin/connectors
+PATCH /v1/admin/connectors/{connector_id}
 ```
 
-改进收益：
+Connector 属于客户 Admin 店铺配置能力，不属于外部决策 token 能直接写入的 API。客户 Admin session 只能维护自己组织 / 店铺下的 Connector；系统 Admin 可在系统后台查看健康、审计和跨租户故障摘要，但不默认代替客户配置真实鉴权。
+
+Connector 配置必须声明：
+
+- `organization_id`、`store_id`、`provider`、`connector_id`。
+- `auth_ref`：Secret Manager、Kubernetes Secret 或等价安全存储引用；不得传、返或记录真实 token。
+- `capabilities[]`：按 `products`、`orders`、`rules`、`logistics` 声明主动查询能力。
+- `operations[]`：`get`、`search`、`list_recent` 等稳定操作名。
+- `timeout_ms`：单次查询超时，最高不超过 5000ms。
+- `retry_policy`：最多 3 次，指数或固定退避；不得让单条客服消息无限等待。
+- `circuit_breaker`：失败阈值、半开恢复窗口和当前 `circuit_state`。
+- `failure_fallback`：失败后降级为 `context_request`、`candidate` 或 `handoff`。
+
+Connector 运行规则：
 
 - 同步请求体更小。
 - Agent 可以按需刷新订单、物流和规则。
 - 多个平台能复用同一套 Agent 决策流程。
-
-需要注意：
-
-- Connector 必须有超时、重试和熔断。
-- 外部查询失败时，决策应降级为 `candidate` 或 `handoff`。
+- Connector 查询失败、超时、熔断打开或鉴权失效时，trace 必须记录 `CONNECTOR_UNAVAILABLE` 或 `CONNECTOR_CIRCUIT_OPEN`，再按 `failure_fallback` 降级。
 - 不能因为查不到订单数据而让模型猜测订单状态。
+- 第一版仍以 `context_requests[]` 回填为主；Connector 是后续主动查询增强，不改变同步主链路的最小接入要求。
 
 ### 2. 异步事件处理
 
@@ -544,13 +598,33 @@ POST /v1/events/messages
 GET /v1/tasks/{task_id}
 ```
 
-改进收益：
+`POST /v1/events/messages` 使用外部系统 API token，提交内容与 `POST /v1/reply-decisions` 保持同一字段语义，并额外支持 `callback_preference` 和 `expected_timeout_ms`。请求必须带 `request_id`；服务端按 `organization_id + store_id + request_id` 幂等。幂等键重复且 payload 一致时返回原 `task_id`，payload 不一致时返回 409 / `IDEMPOTENCY_CONFLICT`。
 
-- 支持高并发消息。
-- 支持较慢的检索、总结、学习和评估流程。
-- 外部系统可以通过回调或轮询拿结果。
+入队响应必须返回：
 
-第一版不强依赖异步，避免过早增加队列、任务调度和回调签名复杂度。
+- `task_id`：异步任务 ID。
+- `request_id`：外部幂等键。
+- `decision_id`：若入队阶段已经创建决策则返回，否则任务运行后再关联。
+- `status`：`queued`、`running`、`waiting_context`、`completed`、`failed`、`retrying`、`canceled` 或 `dead_lettered`。
+- `poll_url`：`/v1/tasks/{task_id}`。
+- `retry_after_ms`：建议轮询间隔。
+
+`GET /v1/tasks/{task_id}` 轮询响应必须包含：
+
+- `task_id`、`request_id`、`task_type`、`status`。
+- `decision_id` 和 `trace_ref`，用于跳转 `GET /v1/message-traces/{decision_id}`。
+- `decision` 摘要；未完成或无权限时为 `null`。
+- `error`：失败时使用统一 `ErrorDetail`，不得包含 raw payload、请求头、Cookie 或 secret。
+- `retry_count`、`max_retries`、`next_retry_at`、`created_at`、`updated_at`、`completed_at`。
+
+失败和重试规则：
+
+- 可重试错误包括短暂网络失败、Connector 超时、队列 Worker 临时不可用和 Webhook 5xx。
+- 不可重试错误包括鉴权失败、schema 校验失败、租户权限不匹配和幂等冲突。
+- 超过最大重试次数后任务进入 `failed` 或 `dead_lettered`，系统后台可通过任务排障接口查看摘要并在安全条件下重试。
+- 异步任务不能绕过同步接口已有的规则闸门、trace、审计、脱敏和权限隔离。
+
+第一版不强依赖异步，避免过早增加队列、任务调度和回调签名复杂度；实现优先级仍低于同步 `reply-decisions`、typed context refill、Admin 和评测门禁。
 
 ### 3. 回调机制
 
@@ -558,6 +632,9 @@ GET /v1/tasks/{task_id}
 
 ```text
 POST /v1/webhook-subscriptions
+GET /v1/webhook-subscriptions
+PATCH /v1/webhook-subscriptions/{subscription_id}
+DELETE /v1/webhook-subscriptions/{subscription_id}
 ```
 
 可回调事件：
@@ -567,18 +644,68 @@ POST /v1/webhook-subscriptions
 - `knowledge_entry.created`
 - `feedback.processed`
 
-回调必须支持签名校验、重试次数、死信记录和事件幂等。
+Webhook 订阅使用外部系统 API token 管理，只能访问该 token 授权的组织 / 店铺。订阅字段包括 `subscription_id`、`organization_id`、`store_id`、`target_url`、`event_types[]`、`signing_algorithm`、`retry_policy`、`redaction_policy`、`status` 和 `secret_ref`。创建或轮换时可以一次性返回 `signing_secret`，后续查询只能返回 `secret_ref` 或摘要。
+
+投递事件 envelope：
+
+```json
+{
+  "event_id": "evt-001",
+  "event_type": "reply_decision.completed",
+  "occurred_at": "2026-06-12T10:15:06+08:00",
+  "organization_id": "org-001",
+  "store_id": "store-001",
+  "decision_id": "decision-001",
+  "request_id": "external-idempotency-key",
+  "payload": {
+    "action": "candidate",
+    "trace_ref": "/v1/message-traces/decision-001"
+  }
+}
+```
+
+签名算法固定为 `hmac-sha256`：使用订阅 secret 对 `{timestamp}.{event_id}.{raw_body_sha256}` 计算 HMAC-SHA256，并通过 `X-Agent-Timestamp`、`X-Agent-Event-Id`、`X-Agent-Signature` 发送。接收方必须校验时间窗口和签名；重复 `event_id` 应幂等忽略。
+
+重试和死信规则：
+
+- 2xx 视为成功；408、429、5xx 可重试；4xx 除 408 / 429 外默认不可重试。
+- 重试策略由 `max_attempts`、`initial_backoff_seconds`、`max_backoff_seconds` 和 `dead_letter_after_attempts` 控制。
+- 超过死信阈值后写入死信记录，事件状态为 `dead_lettered`，系统后台只展示摘要和错误 code。
+- Webhook payload 默认脱敏；不得包含完整买家身份、手机号、地址、Cookie、请求头、API token、Admin session 或 Connector secret。需要 raw payload 的排障必须走系统 Admin 审计权限，不通过 Webhook。
 
 ### 4. 规则版本和灰度
 
 第一版可以用代码规则或简单规则表。后续需要支持：
 
-- 规则版本号。
-- 店铺级规则覆盖。
-- 平台级强制规则。
-- 灰度发布。
-- 规则测试用例。
-- 决策回放。
+```text
+GET /v1/admin/rules/rule-sets
+POST /v1/admin/rules/rule-sets
+POST /v1/admin/rules/rule-sets/{rule_set_id}/dry-runs
+POST /v1/admin/rules/rule-sets/{rule_set_id}/releases
+```
+
+客户 Admin 权限边界：
+
+- 客户 Admin 维护自己组织 / 店铺的店铺级规则、灰度范围、回滚和 dry-run。
+- 组织所有者、组织管理员、店铺管理员和规则运营可按角色写规则；只读审计只能查看。
+- 高风险规则、自动回复比例提升、回滚和灰度扩大必须填写 `reason`，并记录 `audit_log_id`。
+- 客户 Admin 不能修改系统级平台强制规则，也不能跨租户读取其他客户规则。
+
+系统 Admin 权限边界：
+
+- 系统 Admin 管理平台级强制规则、全局模板、发布质量和跨租户排障。
+- 系统 Admin 不默认代替客户发布店铺规则；确需代操作时必须走系统审计、原因记录和敏感访问控制。
+
+规则版本字段：
+
+- `rule_set_id`、`rule_version`、`release_status`。
+- `traffic_scope`：`all_store_traffic`、`percentage`、`platform`、`product_category` 或 `manual_sample`。
+- `rollback_ref`：回滚目标历史 `rule_set_id` 或 `rule_version`。
+- `approval`：审批人、审批时间和审批引用。
+- `reason`：发布、灰度、暂停或回滚原因。
+- `rules[]`：稳定 `rule_id`、`rule_type`、`priority`、`condition`、`action` 和 `risk_level`。
+
+发布状态建议固定为 `draft`、`dry_run_passed`、`canary`、`active`、`paused`、`rolled_back`、`archived`。dry-run 可使用匿名化测试样本、评测 case 或历史决策回放引用，响应只返回命中规则、动作、风险和差异摘要，不返回真实买家敏感内容。
 
 这能避免规则变更后影响所有店铺，也便于解释“为什么这条消息自动回复/转人工”。
 

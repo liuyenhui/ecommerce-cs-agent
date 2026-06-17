@@ -28,7 +28,7 @@
 - 半结构化字段：PostgreSQL JSONB。
 - 语义检索：pgvector 起步。
 - 决策闸门：应用代码中的规则表起步，后续可演进到 OPA。
-- Agent/RAG：先用简单服务流水线，后续复杂后再考虑 LangGraph、LlamaIndex 或 Haystack。
+- Agent/RAG：LangGraph StateGraph 作为内部 Decision Orchestrator；LlamaIndex / Haystack 后续可作为检索和知识库增强选项。
 - 原始归档和训练导出：JSONL 或对象存储。
 - 指标分析：数据量上来后再引入 ClickHouse。
 
@@ -37,6 +37,19 @@
 - [Session Transcript](docs/session-transcript.md)
 - [Technical Options](docs/technical-options.md)
 - [HTTP API Design](docs/http-api-design.md)
+- [OpenAPI Contract](docs/openapi.yaml)
 - [System Architecture](docs/system-architecture.md)
 - [Application Technology Architecture](docs/application-technology-architecture.md)
+- [Deployment](docs/deployment.md)
+- [Development Readiness](docs/development-readiness.md)
+- [Development Setup](docs/development-setup.md)
+- [Implementation Plan](docs/implementation-plan.md)
+- [Database Migrations](docs/database-migrations.md)
+- [Testing](docs/testing.md)
+- [CI/CD](docs/ci-cd.md)
+- [Deployment Artifacts](docs/deployment-artifacts.md)
+- [Runbook](docs/runbook.md)
+- [Security Local Files](docs/security-local-files.md)
+- [Customer Admin Design](docs/customer-admin-design.md)
+- [System Admin Design](docs/system-admin-design.md)
 - [System Architecture HTML](docs/system-architecture.html)

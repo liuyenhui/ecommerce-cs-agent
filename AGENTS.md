@@ -31,6 +31,13 @@ Keep architecture content in one source file.
 - `docs/system-architecture.html` is the only interactive architecture document. It contains architecture views, nodes, links, labels, summaries, details, and the right-side database schema panel.
 - Do not add generated architecture duplicates for the same content. Update `docs/system-architecture.html` directly.
 
+### Admin design documents
+
+- `docs/customer-admin-design.md` defines the customer-facing Admin backend for tenant users who maintain product content, knowledge reviews, store rules, action capabilities, and customer-side audit queries.
+- `docs/system-admin-design.md` defines the internal system Admin backend for platform operators, technical support, system administrators, release managers, and security auditors.
+- `docs/system-admin-ui-prototype.html` is the static UI prototype for the system Admin backend. Use it to keep implementation layout, navigation grouping, visual density, component styling, and interaction patterns consistent with the approved design.
+- Keep customer Admin and system Admin responsibilities separate: customer Admin manages a tenant's own business configuration; system Admin manages tenant onboarding, cross-tenant readiness, operational troubleshooting, global templates, system health, release quality, and platform-level audit.
+
 ### Required workflow after architecture changes
 
 After changing `docs/system-architecture.html` in any way that affects views, processes, node labels, links, database schema, or details:

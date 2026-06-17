@@ -1,0 +1,1630 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>系统后台 UI 原型 - Ecommerce CS Agent</title>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      --blue: #0f62fe;
+      --blue-hover: #0050e6;
+      --blue-dark: #0043ce;
+      --ink: #161616;
+      --muted: #525252;
+      --subtle: #6f6f6f;
+      --canvas: #ffffff;
+      --layer-01: #f4f4f4;
+      --layer-02: #e8e8e8;
+      --layer-03: #ffffff;
+      --border: #e0e0e0;
+      --border-strong: #8d8d8d;
+      --success: #24a148;
+      --warning: #f1c21b;
+      --error: #da1e28;
+      --info-bg: #edf5ff;
+      --success-bg: #defbe6;
+      --warning-bg: #fcf4d6;
+      --error-bg: #fff1f1;
+      --header-h: 48px;
+      --nav-w: 260px;
+      --context-w: 320px;
+      --font: "IBM Plex Sans", Inter, "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif;
+      --mono: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--canvas);
+      font-family: var(--font);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    button, input, select, textarea { font: inherit; }
+
+    button {
+      border: 0;
+      cursor: pointer;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: var(--header-h) 1fr;
+      background: var(--canvas);
+    }
+
+    .topbar {
+      height: var(--header-h);
+      display: grid;
+      grid-template-columns: var(--nav-w) 1fr auto;
+      align-items: center;
+      background: #161616;
+      color: #fff;
+      border-bottom: 1px solid #393939;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+
+    .brand {
+      height: var(--header-h);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 16px;
+      border-right: 1px solid #393939;
+      font-weight: 600;
+    }
+
+    .brand-mark {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--blue);
+      font-weight: 600;
+    }
+
+    .topbar-main {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+      padding: 0 16px;
+    }
+
+    .scope-select,
+    .search {
+      height: 32px;
+      border: 1px solid #525252;
+      background: #262626;
+      color: #fff;
+      outline: none;
+    }
+
+    .scope-select {
+      width: 180px;
+      padding: 0 8px;
+    }
+
+    .search-wrap {
+      position: relative;
+      flex: 1;
+      max-width: 560px;
+      min-width: 180px;
+    }
+
+    .search-wrap i,
+    .search-wrap svg {
+      position: absolute;
+      left: 10px;
+      top: 8px;
+      color: #c6c6c6;
+      width: 16px;
+      height: 16px;
+    }
+
+    .search {
+      width: 100%;
+      padding: 0 12px 0 34px;
+    }
+
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      height: 100%;
+    }
+
+    .icon-btn {
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      background: transparent;
+      color: inherit;
+      border-left: 1px solid rgba(255,255,255,.12);
+    }
+
+    .icon-btn:hover { background: #353535; }
+
+    .avatar {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      margin: 0 12px;
+      background: #393939;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .shell {
+      min-height: calc(100vh - var(--header-h));
+      display: grid;
+      grid-template-columns: var(--nav-w) minmax(0, 1fr) var(--context-w);
+    }
+
+    .sidebar {
+      background: var(--layer-01);
+      border-right: 1px solid var(--border);
+      padding: 12px 0;
+      overflow-y: auto;
+    }
+
+    .nav-group {
+      margin: 0 0 14px;
+    }
+
+    .nav-label {
+      padding: 12px 16px 6px;
+      color: var(--subtle);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .nav-item {
+      width: 100%;
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 16px;
+      color: var(--ink);
+      background: transparent;
+      border-left: 4px solid transparent;
+      text-align: left;
+    }
+
+    .nav-item i,
+    .nav-item svg { width: 18px; height: 18px; color: var(--muted); flex: 0 0 auto; }
+    .nav-item:hover { background: #e8e8e8; }
+    .nav-item.active {
+      background: #fff;
+      border-left-color: var(--blue);
+      font-weight: 600;
+    }
+
+    .main {
+      min-width: 0;
+      background: #fff;
+      overflow: auto;
+    }
+
+    .page-head {
+      padding: 24px 32px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      align-items: flex-start;
+    }
+
+    .eyebrow {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+      font-family: var(--mono);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 32px;
+      line-height: 1.15;
+      font-weight: 300;
+    }
+
+    .page-desc {
+      max-width: 760px;
+      margin: 8px 0 0;
+      color: var(--muted);
+    }
+
+    .head-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 16px;
+      background: #393939;
+      color: #fff;
+      border: 1px solid #393939;
+      text-decoration: none;
+    }
+
+    .btn i,
+    .btn svg { width: 16px; height: 16px; flex: 0 0 auto; }
+    .btn:hover { background: #4c4c4c; }
+    .btn.primary { background: var(--blue); border-color: var(--blue); }
+    .btn.primary:hover { background: var(--blue-hover); border-color: var(--blue-hover); }
+    .btn.secondary { background: #fff; color: var(--ink); border-color: var(--border-strong); }
+    .btn.secondary:hover { background: var(--layer-01); }
+    .btn.danger { background: var(--error); border-color: var(--error); }
+
+    .content {
+      padding: 24px 32px 40px;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border: 1px solid var(--border);
+      border-bottom: 0;
+      border-right: 0;
+      margin-bottom: 24px;
+    }
+
+    .metric {
+      min-height: 128px;
+      padding: 16px;
+      border-right: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      background: var(--layer-03);
+    }
+
+    .metric-title {
+      color: var(--muted);
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .metric-title svg { width: 18px; height: 18px; flex: 0 0 auto; }
+
+    .metric-value {
+      margin-top: 16px;
+      font-size: 34px;
+      line-height: 1;
+      font-weight: 300;
+    }
+
+    .metric-note {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .trend-up { color: var(--success); }
+    .trend-down { color: var(--error); }
+
+    .panel-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr);
+      gap: 24px;
+      align-items: start;
+    }
+
+    .section {
+      border: 1px solid var(--border);
+      background: #fff;
+      margin-bottom: 24px;
+    }
+
+    .section-head {
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      background: #fff;
+    }
+
+    .section-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .field,
+    .select {
+      min-height: 36px;
+      padding: 0 10px;
+      border: 1px solid var(--border-strong);
+      background: #fff;
+      color: var(--ink);
+      outline: 2px solid transparent;
+    }
+
+    .field:focus,
+    .select:focus,
+    .search:focus,
+    .scope-select:focus {
+      outline-color: var(--blue);
+      outline-offset: -2px;
+    }
+
+    .segmented {
+      display: inline-flex;
+      border: 1px solid var(--border-strong);
+      background: #fff;
+    }
+
+    .segmented button {
+      min-height: 36px;
+      padding: 0 12px;
+      background: #fff;
+      color: var(--ink);
+      border-right: 1px solid var(--border);
+    }
+
+    .segmented button:last-child { border-right: 0; }
+    .segmented button.active { background: var(--blue); color: #fff; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    th, td {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--layer-01);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    tr.clickable { cursor: pointer; }
+    tr.clickable:hover td { background: var(--info-bg); }
+    .nowrap { white-space: nowrap; }
+    .mono { font-family: var(--mono); font-size: 12px; }
+    .muted { color: var(--muted); }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 24px;
+      padding: 2px 8px;
+      border: 1px solid transparent;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .badge.ok { background: var(--success-bg); color: #0e6027; border-color: #a7f0ba; }
+    .badge.warn { background: var(--warning-bg); color: #684e00; border-color: #f1c21b; }
+    .badge.err { background: var(--error-bg); color: #a2191f; border-color: #ffb3b8; }
+    .badge.info { background: var(--info-bg); color: var(--blue-dark); border-color: #a6c8ff; }
+    .badge.neutral { background: var(--layer-01); color: var(--muted); border-color: var(--border); }
+
+    .trace-summary-row {
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) 116px 112px 64px;
+      gap: 14px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      align-items: start;
+    }
+
+    .trace-summary-row:last-child { border-bottom: 0; }
+    .trace-summary-row:hover { background: var(--info-bg); cursor: pointer; }
+    .trace-summary-head {
+      background: var(--layer-01);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: default;
+    }
+    .trace-action {
+      font-family: var(--mono);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .list {
+      display: grid;
+    }
+
+    .list-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      align-items: start;
+    }
+
+    .list-row:last-child { border-bottom: 0; }
+    .list-title { font-weight: 600; }
+    .list-sub { margin-top: 4px; color: var(--muted); font-size: 13px; }
+
+    .progress {
+      height: 8px;
+      width: 100%;
+      background: var(--layer-02);
+      margin-top: 10px;
+      overflow: hidden;
+    }
+
+    .progress span {
+      display: block;
+      height: 100%;
+      background: var(--blue);
+    }
+
+    .timeline {
+      display: grid;
+      gap: 0;
+      padding: 4px 0;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 28px 1fr auto;
+      gap: 10px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      align-items: start;
+    }
+
+    .step:last-child { border-bottom: 0; }
+    .dot {
+      width: 12px;
+      height: 12px;
+      margin-top: 4px;
+      background: var(--border-strong);
+    }
+    .dot.ok { background: var(--success); }
+    .dot.warn { background: var(--warning); }
+    .dot.err { background: var(--error); }
+    .step-title { font-weight: 600; }
+    .step-detail { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+    .context {
+      border-left: 1px solid var(--border);
+      background: var(--layer-01);
+      overflow-y: auto;
+    }
+
+    .context-sticky {
+      position: sticky;
+      top: var(--header-h);
+      padding: 16px;
+    }
+
+    .context-card {
+      border: 1px solid var(--border);
+      background: #fff;
+      margin-bottom: 16px;
+    }
+
+    .context-card h3 {
+      margin: 0;
+      padding: 14px 14px 10px;
+      font-size: 15px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .context-body {
+      padding: 14px;
+    }
+
+    .kv {
+      display: grid;
+      gap: 10px;
+    }
+
+    .kv-row {
+      display: grid;
+      grid-template-columns: 96px 1fr;
+      gap: 12px;
+      font-size: 13px;
+    }
+
+    .kv-row span:first-child { color: var(--muted); }
+
+    .alert {
+      padding: 12px 14px;
+      border-left: 4px solid var(--blue);
+      background: var(--info-bg);
+      margin-bottom: 12px;
+    }
+
+    .alert.warn { border-left-color: var(--warning); background: var(--warning-bg); }
+    .alert.err { border-left-color: var(--error); background: var(--error-bg); }
+    .alert.ok { border-left-color: var(--success); background: var(--success-bg); }
+
+    .drawer-backdrop,
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      background: rgba(0,0,0,.2);
+      z-index: 40;
+    }
+
+    .drawer-backdrop.open,
+    .modal-backdrop.open { display: block; }
+
+    .drawer {
+      position: fixed;
+      top: var(--header-h);
+      right: 0;
+      width: min(680px, 100vw);
+      height: calc(100vh - var(--header-h));
+      background: #fff;
+      border-left: 1px solid var(--border-strong);
+      transform: translateX(100%);
+      transition: transform .18s ease;
+      z-index: 50;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .drawer.open { transform: translateX(0); }
+
+    .drawer-head,
+    .modal-head {
+      min-height: 64px;
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .drawer-title,
+    .modal-title {
+      font-size: 20px;
+      font-weight: 400;
+      margin: 0;
+    }
+
+    .drawer-body {
+      overflow: auto;
+      padding: 16px;
+    }
+
+    .modal {
+      position: fixed;
+      top: 12vh;
+      left: 50%;
+      width: min(560px, calc(100vw - 32px));
+      background: #fff;
+      border: 1px solid var(--border-strong);
+      transform: translateX(-50%);
+      display: none;
+      z-index: 60;
+    }
+
+    .modal.open { display: block; }
+    .modal-body { padding: 16px; }
+    .modal-foot {
+      padding: 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .form-field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .form-field.full { grid-column: 1 / -1; }
+    .form-field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    textarea.field {
+      min-height: 84px;
+      padding: 10px;
+      resize: vertical;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      transform: translateX(-50%) translateY(16px);
+      background: #161616;
+      color: #fff;
+      padding: 12px 16px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .16s ease, transform .16s ease;
+      z-index: 80;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    @media (max-width: 1180px) {
+      .shell {
+        grid-template-columns: 72px minmax(0, 1fr);
+      }
+      .topbar {
+        grid-template-columns: 72px 1fr auto;
+      }
+      .brand span,
+      .nav-label,
+      .nav-item span {
+        display: none;
+      }
+      .brand { justify-content: center; padding: 0; }
+      .sidebar { padding-top: 8px; }
+      .nav-item { justify-content: center; padding: 10px 0; border-left-width: 3px; }
+      .context { display: none; }
+      .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .panel-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 760px) {
+      .topbar {
+        grid-template-columns: 56px 1fr auto;
+      }
+      .shell { grid-template-columns: 56px minmax(0, 1fr); }
+      .scope-select { display: none; }
+      .topbar-main { padding: 0 8px; }
+      .page-head {
+        padding: 20px 16px 16px;
+        display: grid;
+      }
+      .content { padding: 16px; }
+      .metric-grid { grid-template-columns: 1fr; }
+      .section-head { align-items: flex-start; display: grid; }
+      th:nth-child(n+4),
+      td:nth-child(n+4) { display: none; }
+      .trace-summary-row {
+        grid-template-columns: 1fr 92px;
+      }
+      .trace-summary-row > :nth-child(3),
+      .trace-summary-row > :nth-child(4) {
+        display: none;
+      }
+      .form-grid { grid-template-columns: 1fr; }
+      .drawer { top: 0; height: 100vh; }
+      .icon-btn { width: 40px; }
+      .avatar { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">A</div>
+        <span>Agent System Admin</span>
+      </div>
+      <div class="topbar-main">
+        <select class="scope-select" id="scopeSelect">
+          <option>全部租户</option>
+          <option>高风险店铺</option>
+          <option>今日新增</option>
+          <option>灰度租户</option>
+        </select>
+        <div class="search-wrap">
+          <i data-lucide="search"></i>
+          <input class="search" id="globalSearch" placeholder="搜索 decision_id / 组织 / 店铺 / 外部消息 ID" />
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-btn" title="告警" data-action="open-alerts"><i data-lucide="bell"></i></button>
+        <button class="icon-btn" title="命令面板" data-action="open-command"><i data-lucide="command"></i></button>
+        <div class="avatar">LH</div>
+      </div>
+    </header>
+
+    <div class="shell">
+      <nav class="sidebar" id="nav"></nav>
+      <main class="main">
+        <section class="page-head">
+          <div>
+            <div class="eyebrow" id="eyebrow">SYSTEM OPERATIONS</div>
+            <h1 id="pageTitle">系统首页</h1>
+            <p class="page-desc" id="pageDesc">跨租户掌握平台运行状态、上线阻断项、关键错误和发布风险。</p>
+          </div>
+          <div class="head-actions" id="headActions"></div>
+        </section>
+        <section class="content" id="view"></section>
+      </main>
+      <aside class="context">
+        <div class="context-sticky" id="contextPanel"></div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+  <aside class="drawer" id="drawer" aria-label="详情抽屉">
+    <div class="drawer-head">
+      <div>
+        <div class="eyebrow" id="drawerKicker">DETAIL</div>
+        <h2 class="drawer-title" id="drawerTitle">详情</h2>
+      </div>
+      <button class="icon-btn" title="关闭" style="color:#161616;border-left:0" data-action="close-drawer"><i data-lucide="x"></i></button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+
+  <div class="modal-backdrop" id="modalBackdrop"></div>
+  <section class="modal" id="modal" aria-label="操作弹窗">
+    <div class="modal-head">
+      <h2 class="modal-title" id="modalTitle">创建组织</h2>
+      <button class="icon-btn" title="关闭" style="color:#161616;border-left:0" data-action="close-modal"><i data-lucide="x"></i></button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-foot" id="modalFoot"></div>
+  </section>
+
+  <div class="toast" id="toast">已保存</div>
+
+  <script>
+    const navGroups = [
+      {
+        label: "平台运营",
+        items: [
+          { id: "dashboard", icon: "layout-dashboard", label: "系统首页" },
+          { id: "tenants", icon: "building-2", label: "租户与店铺" },
+          { id: "readiness", icon: "list-checks", label: "配置完成度" },
+          { id: "content", icon: "database", label: "资料与知识" }
+        ]
+      },
+      {
+        label: "排障治理",
+        items: [
+          { id: "traces", icon: "git-branch", label: "决策追踪" },
+          { id: "tasks", icon: "workflow", label: "异步任务" },
+          { id: "rules", icon: "shield-check", label: "规则与动作" }
+        ]
+      },
+      {
+        label: "发布安全",
+        items: [
+          { id: "release", icon: "rocket", label: "评测与发布" },
+          { id: "security", icon: "lock-keyhole", label: "安全审计" },
+          { id: "health", icon: "activity", label: "系统健康" }
+        ]
+      }
+    ];
+
+    const tenants = [
+      { org: "三方智能旗舰店", store: "PDD-华东-01", plan: "Enterprise", status: "灰度中", readiness: 86, risk: "warning", admin: "已邀请", day: "18.2k", issue: "2 个动作回调超时" },
+      { org: "鲸选家居", store: "淘宝-主店", plan: "Pro", status: "待上线", readiness: 62, risk: "error", admin: "已激活", day: "4.8k", issue: "价格快照过期" },
+      { org: "洛川户外", store: "抖音-直播店", plan: "Pilot", status: "接入中", readiness: 44, risk: "warning", admin: "待接受", day: "980", issue: "知识审核积压" },
+      { org: "星河数码", store: "京东-官方店", plan: "Enterprise", status: "运行中", readiness: 96, risk: "ok", admin: "已激活", day: "21.6k", issue: "无阻断" },
+      { org: "南山母婴", store: "小红书-店铺", plan: "Pro", status: "冻结", readiness: 71, risk: "error", admin: "已停用", day: "0", issue: "API Key 已冻结" }
+    ];
+
+    const traces = [
+      { id: "dec_8fd2a912", org: "三方智能旗舰店", store: "PDD-华东-01", action: "context_request", status: "等待订单上下文", confidence: "0.71", latency: "1820ms", risk: "warn", time: "14:28:19" },
+      { id: "dec_73ac41bb", org: "星河数码", store: "京东-官方店", action: "auto_reply", status: "已通过规则闸门", confidence: "0.93", latency: "640ms", risk: "ok", time: "14:26:03" },
+      { id: "dec_b92871e0", org: "鲸选家居", store: "淘宝-主店", action: "handoff", status: "价格冲突转人工", confidence: "0.54", latency: "930ms", risk: "err", time: "14:22:44" },
+      { id: "dec_15a79a02", org: "洛川户外", store: "抖音-直播店", action: "action_request", status: "等待外部动作结果", confidence: "0.88", latency: "1210ms", risk: "warn", time: "14:18:10" }
+    ];
+
+    const tasks = [
+      { name: "说明书转 Markdown", org: "鲸选家居", type: "asset_markdown", status: "failed", retry: 3, updated: "2 分钟前", detail: "PDF 解析失败，页码 14 存在加密对象" },
+      { name: "知识片段抽取", org: "洛川户外", type: "knowledge_extract", status: "running", retry: 0, updated: "7 分钟前", detail: "正在处理 42 个候选片段" },
+      { name: "Embedding 生成", org: "星河数码", type: "embedding", status: "completed", retry: 0, updated: "12 分钟前", detail: "已写入 318 条 knowledge_entry" },
+      { name: "盲测批次 2026-06-17", org: "全局", type: "eval", status: "blocked", retry: 1, updated: "26 分钟前", detail: "红线用例 refund-price-conflict 失败" }
+    ];
+
+    const readinessChecks = [
+      { label: "商品资料", pass: 72, warn: 18, fail: 6 },
+      { label: "价格快照", pass: 58, warn: 20, fail: 18 },
+      { label: "知识审核", pass: 63, warn: 26, fail: 7 },
+      { label: "规则配置", pass: 81, warn: 9, fail: 6 },
+      { label: "动作能力", pass: 54, warn: 28, fail: 14 },
+      { label: "API 接入", pass: 69, warn: 12, fail: 15 }
+    ];
+
+    const pages = {
+      dashboard: {
+        title: "系统首页",
+        eyebrow: "SYSTEM OPERATIONS",
+        desc: "跨租户掌握平台运行状态、上线阻断项、关键错误和发布风险。",
+        actions: [
+          ["导出日报", "download", "secondary", "toast"],
+          ["创建组织", "plus", "primary", "create-org"]
+        ]
+      },
+      tenants: {
+        title: "租户与店铺",
+        eyebrow: "TENANT ONBOARDING",
+        desc: "开通组织、店铺和客户后台初始管理员，跟踪套餐、状态、外部引用和接入风险。",
+        actions: [
+          ["邀请管理员", "send", "secondary", "invite-admin"],
+          ["创建组织", "plus", "primary", "create-org"]
+        ]
+      },
+      readiness: {
+        title: "配置完成度",
+        eyebrow: "READINESS GATE",
+        desc: "按店铺检查资料、价格、知识、规则、动作能力和 API 接入是否达到上线条件。",
+        actions: [
+          ["刷新检查", "refresh-cw", "secondary", "toast"],
+          ["标记可灰度", "check", "primary", "toast"]
+        ]
+      },
+      content: {
+        title: "资料与知识",
+        eyebrow: "CONTENT OPERATIONS",
+        desc: "跨租户查看资料体检、知识候选积压、解析失败和审核质量，不直接替客户批准知识。",
+        actions: [
+          ["分派问题", "user-plus", "secondary", "toast"],
+          ["查看失败任务", "circle-alert", "primary", "tasks"]
+        ]
+      },
+      traces: {
+        title: "决策追踪",
+        eyebrow: "MESSAGE TRACE",
+        desc: "按 decision_id、请求 ID、外部消息 ID、租户和平台定位一条消息的完整处理链路。",
+        actions: [
+          ["隐藏 raw payload", "eye-off", "secondary", "toast"],
+          ["打开追踪查询", "search", "primary", "trace-search"]
+        ]
+      },
+      tasks: {
+        title: "异步任务",
+        eyebrow: "BACKGROUND JOBS",
+        desc: "查看资料解析、知识抽取、embedding、批量导入和评测任务的状态、失败原因与重试。",
+        actions: [
+          ["只看失败", "filter", "secondary", "toast"],
+          ["重试安全任务", "rotate-cw", "primary", "toast"]
+        ]
+      },
+      rules: {
+        title: "规则与动作",
+        eyebrow: "POLICY GOVERNANCE",
+        desc: "治理系统默认规则模板、动作能力模板、风险等级、回调地址和人工确认要求。",
+        actions: [
+          ["新建模板", "file-plus", "secondary", "toast"],
+          ["发布规则版本", "rocket", "primary", "release"]
+        ]
+      },
+      release: {
+        title: "评测与发布",
+        eyebrow: "QUALITY GATE",
+        desc: "管理 Prompt、Graph、规则模板和模型配置版本，用 deterministic 测试、盲测和红线用例阻断风险发布。",
+        actions: [
+          ["查看报告", "chart-no-axes-column", "secondary", "toast"],
+          ["创建发布", "rocket", "primary", "release-confirm"]
+        ]
+      },
+      security: {
+        title: "安全审计",
+        eyebrow: "SECURITY AUDIT",
+        desc: "审计系统后台登录、权限变更、跨租户访问、敏感数据查看和高风险操作。",
+        actions: [
+          ["下载审计", "download", "secondary", "toast"],
+          ["冻结凭据", "ban", "danger", "freeze-key"]
+        ]
+      },
+      health: {
+        title: "系统健康",
+        eyebrow: "PLATFORM HEALTH",
+        desc: "查看 API、Worker、PostgreSQL、Redis、对象存储、pgvector、队列、K8s deployment 和 ingress 健康。",
+        actions: [
+          ["刷新状态", "refresh-cw", "secondary", "toast"],
+          ["创建告警", "bell-plus", "primary", "toast"]
+        ]
+      }
+    };
+
+    let currentPage = "dashboard";
+
+    function statusBadge(kind, text) {
+      const cls = kind === "ok" ? "ok" : kind === "err" || kind === "error" ? "err" : kind === "warn" || kind === "warning" ? "warn" : "info";
+      return `<span class="badge ${cls}">${text}</span>`;
+    }
+
+    function renderNav() {
+      const html = navGroups.map(group => `
+        <div class="nav-group">
+          <div class="nav-label">${group.label}</div>
+          ${group.items.map(item => `
+            <button class="nav-item ${item.id === currentPage ? "active" : ""}" data-page="${item.id}" title="${item.label}">
+              <i data-lucide="${item.icon}"></i><span>${item.label}</span>
+            </button>
+          `).join("")}
+        </div>
+      `).join("");
+      document.getElementById("nav").innerHTML = html;
+    }
+
+    function renderHeader() {
+      const page = pages[currentPage];
+      document.getElementById("pageTitle").textContent = page.title;
+      document.getElementById("eyebrow").textContent = page.eyebrow;
+      document.getElementById("pageDesc").textContent = page.desc;
+      document.getElementById("headActions").innerHTML = page.actions.map(([label, icon, type, action]) => `
+        <button class="btn ${type}" data-action="${action}"><i data-lucide="${icon}"></i>${label}</button>
+      `).join("");
+    }
+
+    function renderContext() {
+      document.getElementById("contextPanel").innerHTML = `
+        <div class="context-card">
+          <h3>当前运行摘要</h3>
+          <div class="context-body kv">
+            <div class="kv-row"><span>环境</span><strong>dev / k8s</strong></div>
+            <div class="kv-row"><span>租户范围</span><strong>${document.getElementById("scopeSelect").value}</strong></div>
+            <div class="kv-row"><span>决策量</span><strong>46,280 / 今日</strong></div>
+            <div class="kv-row"><span>自动回复率</span><strong>58.4%</strong></div>
+            <div class="kv-row"><span>阻断项</span><strong class="trend-down">9 个</strong></div>
+          </div>
+        </div>
+        <div class="context-card">
+          <h3>高优先级</h3>
+          <div class="context-body">
+            <div class="alert err"><strong>红线评测失败</strong><br><span class="muted">refund-price-conflict 阻断最新发布。</span></div>
+            <div class="alert warn"><strong>价格快照过期</strong><br><span class="muted">18 个店铺存在价格过期或冲突。</span></div>
+            <div class="alert ok"><strong>核心服务正常</strong><br><span class="muted">API / PostgreSQL / Redis 最近 15 分钟稳定。</span></div>
+          </div>
+        </div>
+        <div class="context-card">
+          <h3>快捷定位</h3>
+          <div class="context-body">
+            <button class="btn secondary" style="width:100%;justify-content:center;margin-bottom:8px" data-action="trace-search"><i data-lucide="search"></i>追踪消息</button>
+            <button class="btn secondary" style="width:100%;justify-content:center" data-action="create-org"><i data-lucide="plus"></i>开通租户</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function dashboardView() {
+      return `
+        <div class="metric-grid">
+          ${metric("活跃组织", "96", "+8 本周", "trend-up")}
+          ${metric("今日决策量", "46.2k", "+12.4%", "trend-up")}
+          ${metric("转人工率", "18.7%", "-3.2%", "trend-up")}
+          ${metric("上线阻断", "9", "3 个严重", "trend-down")}
+        </div>
+        <div class="panel-grid">
+          <div>
+            ${section("上线阻断队列", `
+              <table>
+                <thead><tr><th>租户 / 店铺</th><th>阻断原因</th><th>严重度</th><th>负责人</th><th></th></tr></thead>
+                <tbody>
+                  ${tenants.filter(t => t.risk !== "ok").map(t => `
+                    <tr class="clickable" data-detail="tenant" data-org="${t.org}">
+                      <td><strong>${t.org}</strong><br><span class="muted">${t.store}</span></td>
+                      <td>${t.issue}</td>
+                      <td>${statusBadge(t.risk, t.risk === "error" ? "阻断" : "警告")}</td>
+                      <td>平台运营</td>
+                      <td class="nowrap"><button class="btn secondary" data-action="open-tenant" data-org="${t.org}">处理</button></td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            `)}
+            ${section("最近消息决策", traceSummaryList())}
+          </div>
+          <div>
+            ${section("配置完成度分布", readinessBars())}
+            ${section("运行中任务", taskList(tasks.slice(0,3)))}
+          </div>
+        </div>
+      `;
+    }
+
+    function tenantsView() {
+      return `
+        ${section("租户列表", `
+          <div class="section-head" style="border-top:0">
+            <div class="toolbar">
+              <input class="field" placeholder="搜索组织或店铺" />
+              <select class="select"><option>全部状态</option><option>运行中</option><option>待上线</option><option>冻结</option></select>
+              <select class="select"><option>全部套餐</option><option>Enterprise</option><option>Pro</option><option>Pilot</option></select>
+            </div>
+            <div class="segmented"><button class="active">列表</button><button>分组</button></div>
+          </div>
+          <table>
+            <thead><tr><th>组织</th><th>店铺</th><th>套餐</th><th>状态</th><th>完成度</th><th>客户管理员</th><th>今日决策</th><th></th></tr></thead>
+            <tbody>
+              ${tenants.map(t => `
+                <tr class="clickable" data-detail="tenant" data-org="${t.org}">
+                  <td><strong>${t.org}</strong><br><span class="mono">org_${t.org.charCodeAt(0).toString(16)}${t.store.length}</span></td>
+                  <td>${t.store}<br><span class="muted">${t.issue}</span></td>
+                  <td>${t.plan}</td>
+                  <td>${statusBadge(t.risk, t.status)}</td>
+                  <td><strong>${t.readiness}%</strong><div class="progress"><span style="width:${t.readiness}%"></span></div></td>
+                  <td>${t.admin}</td>
+                  <td>${t.day}</td>
+                  <td class="nowrap"><button class="btn secondary" data-action="open-tenant" data-org="${t.org}">查看</button></td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        `)}
+      `;
+    }
+
+    function readinessView() {
+      return `
+        <div class="metric-grid">
+          ${metric("可上线店铺", "48", "完成全部检查", "trend-up")}
+          ${metric("可灰度店铺", "21", "存在轻微警告", "trend-up")}
+          ${metric("阻断店铺", "9", "需处理后接入", "trend-down")}
+          ${metric("平均完成度", "78%", "+6% 本周", "trend-up")}
+        </div>
+        <div class="panel-grid">
+          ${section("检查项矩阵", `
+            <table>
+              <thead><tr><th>检查项</th><th>通过</th><th>警告</th><th>阻断</th><th>趋势</th></tr></thead>
+              <tbody>
+                ${readinessChecks.map(r => `
+                  <tr>
+                    <td><strong>${r.label}</strong></td>
+                    <td>${statusBadge("ok", r.pass + " 店")}</td>
+                    <td>${statusBadge("warn", r.warn + " 店")}</td>
+                    <td>${statusBadge("err", r.fail + " 店")}</td>
+                    <td><div class="progress"><span style="width:${r.pass}%"></span></div></td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          `)}
+          ${section("上线检查流程", `
+            <div class="timeline">
+              ${step("ok", "创建组织与店铺", "组织、平台、外部引用和客户管理员已建立", "100%")}
+              ${step("warn", "资料与知识准备", "18 个店铺价格过期，7 个店铺知识审核积压", "74%")}
+              ${step("warn", "规则与动作能力", "14 个店铺缺少动作能力 callback 签名状态", "68%")}
+              ${step("ok", "API 接入验证", "最近 24 小时主接口成功率 99.2%", "92%")}
+              ${step("err", "红线评测", "1 个全局红线用例失败，阻断发布", "阻断")}
+            </div>
+          `)}
+        </div>
+      `;
+    }
+
+    function contentView() {
+      return `
+        <div class="metric-grid">
+          ${metric("待审核片段", "1,284", "26 个高风险", "trend-down")}
+          ${metric("解析失败资产", "31", "PDF / 图片 OCR", "trend-down")}
+          ${metric("价格过期店铺", "18", "影响自动报价", "trend-down")}
+          ${metric("知识覆盖率", "72%", "+9% 本周", "trend-up")}
+        </div>
+        <div class="panel-grid">
+          ${section("资料体检问题", `
+            <table>
+              <thead><tr><th>租户</th><th>问题类型</th><th>影响</th><th>状态</th><th></th></tr></thead>
+              <tbody>
+                <tr class="clickable"><td>鲸选家居</td><td>价格快照过期</td><td>价格类问题转人工</td><td>${statusBadge("err","阻断")}</td><td><button class="btn secondary" data-action="toast">分派</button></td></tr>
+                <tr class="clickable"><td>洛川户外</td><td>知识审核积压</td><td>候选回复置信度下降</td><td>${statusBadge("warn","警告")}</td><td><button class="btn secondary" data-action="toast">分派</button></td></tr>
+                <tr class="clickable"><td>南山母婴</td><td>SKU 图缺失</td><td>售前对比问题不自动答</td><td>${statusBadge("warn","警告")}</td><td><button class="btn secondary" data-action="toast">分派</button></td></tr>
+              </tbody>
+            </table>
+          `)}
+          ${section("知识审核质量", `
+            <div class="list">
+              ${listRow("通过率", "本周 68%，较上周提升 7%。拒绝原因集中在临时口径和价格承诺。", statusBadge("ok","健康"))}
+              ${listRow("脱敏命中", "手机号、地址、订单号类敏感片段已拦截 142 次。", statusBadge("info","正常"))}
+              ${listRow("高风险片段", "26 个候选片段涉及退款、改地址和承诺到货时间。", statusBadge("warn","需复核"))}
+            </div>
+          `)}
+        </div>
+      `;
+    }
+
+    function tracesView() {
+      return `
+        ${section("追踪查询", `
+          <div class="section-head" style="border-top:0">
+            <div class="toolbar">
+              <input class="field" style="min-width:280px" value="dec_8fd2a912" />
+              <select class="select"><option>最近 1 小时</option><option>今天</option><option>7 天</option></select>
+              <select class="select"><option>全部 action</option><option>auto_reply</option><option>handoff</option><option>context_request</option></select>
+            </div>
+            <button class="btn primary" data-action="open-trace" data-id="dec_8fd2a912"><i data-lucide="search"></i>查询</button>
+          </div>
+          ${traceTable()}
+        `)}
+        <div class="panel-grid">
+          ${section("当前选中链路", traceTimeline())}
+          ${section("风险解释", `
+            <div class="context-body">
+              <div class="alert warn"><strong>缺订单上下文</strong><br>用户要求修改备注，但主请求没有订单快照。系统返回 context_request，而不是让模型猜测。</div>
+              <div class="alert ok"><strong>规则闸门有效</strong><br>动作要求外部系统执行成功后，Agent 才允许生成完成确认。</div>
+              <div class="alert"><strong>审计策略</strong><br>默认只展示摘要和引用 ID。查看 raw payload 会写入系统审计。</div>
+            </div>
+          `)}
+        </div>
+      `;
+    }
+
+    function tasksView() {
+      return `
+        <div class="metric-grid">
+          ${metric("运行中", "42", "队列正常", "trend-up")}
+          ${metric("失败", "12", "3 个可重试", "trend-down")}
+          ${metric("平均等待", "1.8m", "-22s", "trend-up")}
+          ${metric("死信", "4", "需要人工处理", "trend-down")}
+        </div>
+        ${section("任务列表", `
+          <table>
+            <thead><tr><th>任务</th><th>租户</th><th>类型</th><th>状态</th><th>重试</th><th>更新时间</th><th></th></tr></thead>
+            <tbody>
+              ${tasks.map(t => `
+                <tr class="clickable" data-task="${t.name}">
+                  <td><strong>${t.name}</strong><br><span class="muted">${t.detail}</span></td>
+                  <td>${t.org}</td>
+                  <td class="mono">${t.type}</td>
+                  <td>${taskBadge(t.status)}</td>
+                  <td>${t.retry}</td>
+                  <td>${t.updated}</td>
+                  <td><button class="btn secondary" data-action="open-task" data-task="${t.name}">详情</button></td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        `)}
+      `;
+    }
+
+    function rulesView() {
+      return `
+        <div class="panel-grid">
+          ${section("规则模板", `
+            <table>
+              <thead><tr><th>模板</th><th>适用平台</th><th>版本</th><th>风险</th><th>状态</th></tr></thead>
+              <tbody>
+                <tr><td><strong>售前低风险自动回复</strong><br><span class="muted">商品规格、使用方式、库存说明</span></td><td>全平台</td><td>v1.8.2</td><td>${statusBadge("ok","低")}</td><td>${statusBadge("ok","已发布")}</td></tr>
+                <tr><td><strong>价格类回答闸门</strong><br><span class="muted">只引用当前有效 price snapshot</span></td><td>全平台</td><td>v1.4.0</td><td>${statusBadge("warn","中")}</td><td>${statusBadge("ok","已发布")}</td></tr>
+                <tr><td><strong>退款与改地址策略</strong><br><span class="muted">高风险动作必须人工确认</span></td><td>淘宝 / PDD</td><td>v0.9.6</td><td>${statusBadge("err","高")}</td><td>${statusBadge("warn","草稿")}</td></tr>
+              </tbody>
+            </table>
+          `)}
+          ${section("动作能力模板", `
+            <div class="list">
+              ${listRow("update-note", "订单备注。需 order_id、note、idempotency_key。", statusBadge("warn","需确认"))}
+              ${listRow("update-address", "修改地址。高风险，必须外部系统确认执行结果。", statusBadge("err","高风险"))}
+              ${listRow("query-logistics", "查询物流。缺上下文时返回 context_request。", statusBadge("ok","低风险"))}
+              ${listRow("cancel-order", "取消订单。第一版默认禁用自动执行。", statusBadge("err","禁用"))}
+            </div>
+          `)}
+        </div>
+      `;
+    }
+
+    function releaseView() {
+      return `
+        <div class="metric-grid">
+          ${metric("待发布版本", "3", "Prompt / Rule / Graph", "trend-up")}
+          ${metric("盲测通过率", "91%", "-4%", "trend-down")}
+          ${metric("红线失败", "1", "阻断发布", "trend-down")}
+          ${metric("可回滚版本", "8", "最近 30 天", "trend-up")}
+        </div>
+        <div class="panel-grid">
+          ${section("发布候选", `
+            <table>
+              <thead><tr><th>版本</th><th>类型</th><th>评测</th><th>红线</th><th>状态</th><th></th></tr></thead>
+              <tbody>
+                <tr><td><strong>graph-2026.06.17</strong><br><span class="muted">补上下文恢复策略</span></td><td>LangGraph</td><td>142/146</td><td>${statusBadge("err","1 失败")}</td><td>${statusBadge("err","阻断")}</td><td><button class="btn secondary" data-action="toast">报告</button></td></tr>
+                <tr><td><strong>rule-template-v1.9</strong><br><span class="muted">价格冲突策略</span></td><td>Rule</td><td>98/98</td><td>${statusBadge("ok","通过")}</td><td>${statusBadge("ok","可发布")}</td><td><button class="btn primary" data-action="release-confirm">发布</button></td></tr>
+                <tr><td><strong>prompt-risk-v0.7</strong><br><span class="muted">高风险识别提示词</span></td><td>Prompt</td><td>210/214</td><td>${statusBadge("ok","通过")}</td><td>${statusBadge("warn","需抽检")}</td><td><button class="btn secondary" data-action="toast">抽检</button></td></tr>
+              </tbody>
+            </table>
+          `)}
+          ${section("红线失败详情", `
+            <div class="context-body">
+              <div class="alert err"><strong>refund-price-conflict</strong><br>价格快照过期时，候选回复仍出现“可按活动价退款”的表达。必须转人工。</div>
+              <div class="kv">
+                <div class="kv-row"><span>影响范围</span><strong>价格 / 退款</strong></div>
+                <div class="kv-row"><span>建议处理</span><strong>修正规则闸门并重跑评测</strong></div>
+                <div class="kv-row"><span>阻断版本</span><strong class="mono">graph-2026.06.17</strong></div>
+              </div>
+            </div>
+          `)}
+        </div>
+      `;
+    }
+
+    function securityView() {
+      return `
+        <div class="metric-grid">
+          ${metric("跨租户访问", "37", "全部有审计", "trend-up")}
+          ${metric("敏感查看", "5", "需复核", "trend-down")}
+          ${metric("冻结凭据", "2", "本周", "trend-down")}
+          ${metric("失败登录", "14", "无暴力破解", "trend-up")}
+        </div>
+        ${section("系统审计日志", `
+          <table>
+            <thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>对象</th><th>原因</th><th>风险</th></tr></thead>
+            <tbody>
+              <tr><td>14:32:08</td><td>support@agent</td><td>查看消息 trace</td><td class="mono">dec_8fd2a912</td><td>客户排障工单 #1842</td><td>${statusBadge("warn","跨租户")}</td></tr>
+              <tr><td>13:56:40</td><td>ops@agent</td><td>重发邀请</td><td>洛川户外</td><td>客户管理员未接受</td><td>${statusBadge("ok","正常")}</td></tr>
+              <tr><td>12:18:22</td><td>admin@agent</td><td>冻结 API Key</td><td>南山母婴</td><td>异常调用量</td><td>${statusBadge("err","高风险")}</td></tr>
+              <tr><td>11:47:03</td><td>release@agent</td><td>发布规则模板</td><td>rule-template-v1.8</td><td>评测通过</td><td>${statusBadge("ok","正常")}</td></tr>
+            </tbody>
+          </table>
+        `)}
+      `;
+    }
+
+    function healthView() {
+      const services = [
+        ["API Gateway", "99.98%", "42ms", "ok"],
+        ["Decision Worker", "99.91%", "210ms", "ok"],
+        ["PostgreSQL", "99.99%", "18ms", "ok"],
+        ["Redis Checkpoint", "99.96%", "9ms", "ok"],
+        ["Object Storage", "99.84%", "88ms", "warn"],
+        ["LLM Provider", "98.72%", "1340ms", "warn"],
+        ["pgvector", "99.95%", "74ms", "ok"],
+        ["Webhook Callback", "97.48%", "620ms", "err"]
+      ];
+      return `
+        <div class="metric-grid">
+          ${metric("API 成功率", "99.2%", "最近 15 分钟", "trend-up")}
+          ${metric("P95 延迟", "1.42s", "LLM 拉高", "trend-down")}
+          ${metric("回调失败", "28", "4 个死信", "trend-down")}
+          ${metric("集群状态", "正常", "8/8 服务在线", "trend-up")}
+        </div>
+        ${section("服务健康", `
+          <table>
+            <thead><tr><th>服务</th><th>SLA</th><th>P95</th><th>状态</th><th>最近事件</th></tr></thead>
+            <tbody>
+              ${services.map(s => `<tr><td><strong>${s[0]}</strong></td><td>${s[1]}</td><td>${s[2]}</td><td>${statusBadge(s[3], s[3] === "ok" ? "正常" : s[3] === "warn" ? "降级" : "异常")}</td><td>${s[3] === "ok" ? "无异常" : s[3] === "warn" ? "延迟波动" : "回调重试失败"}</td></tr>`).join("")}
+            </tbody>
+          </table>
+        `)}
+      `;
+    }
+
+    function metric(title, value, note, trend) {
+      return `
+        <div class="metric">
+          <div class="metric-title"><span>${title}</span><i data-lucide="activity"></i></div>
+          <div class="metric-value">${value}</div>
+          <div class="metric-note ${trend || ""}">${note}</div>
+        </div>
+      `;
+    }
+
+    function section(title, body) {
+      return `
+        <section class="section">
+          <div class="section-head">
+            <h2 class="section-title">${title}</h2>
+          </div>
+          ${body}
+        </section>
+      `;
+    }
+
+    function traceTable() {
+      return `
+        <table>
+          <thead><tr><th>Decision ID</th><th>租户 / 店铺</th><th>Action</th><th>状态</th><th>置信度</th><th>延迟</th><th>时间</th></tr></thead>
+          <tbody>
+            ${traces.map(t => `
+              <tr class="clickable" data-action="open-trace" data-id="${t.id}">
+                <td class="mono"><strong>${t.id}</strong></td>
+                <td>${t.org}<br><span class="muted">${t.store}</span></td>
+                <td class="mono">${t.action}</td>
+                <td>${statusBadge(t.risk, t.status)}</td>
+                <td>${t.confidence}</td>
+                <td>${t.latency}</td>
+                <td>${t.time}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function traceSummaryList() {
+      return `
+        <div class="trace-summary-row trace-summary-head">
+          <div>Decision / 租户</div><div>Action</div><div>状态</div><div>时间</div>
+        </div>
+        ${traces.map(t => `
+          <div class="trace-summary-row" data-action="open-trace" data-id="${t.id}">
+            <div><strong class="mono">${t.id}</strong><br><span class="muted">${t.org} · ${t.store}</span></div>
+            <div class="trace-action">${t.action}</div>
+            <div>${statusBadge(t.risk, t.status)}</div>
+            <div>${t.time}</div>
+          </div>
+        `).join("")}
+      `;
+    }
+
+    function readinessBars() {
+      return `
+        <div class="list">
+          ${readinessChecks.map(r => listRow(r.label, `${r.pass} 个通过，${r.warn} 个警告，${r.fail} 个阻断。`, `<div style="min-width:110px"><strong>${r.pass}%</strong><div class="progress"><span style="width:${r.pass}%"></span></div></div>`)).join("")}
+        </div>
+      `;
+    }
+
+    function taskList(items) {
+      return `<div class="list">${items.map(t => listRow(t.name, `${t.org} · ${t.detail}`, taskBadge(t.status))).join("")}</div>`;
+    }
+
+    function taskBadge(status) {
+      const map = {
+        failed: ["err", "失败"],
+        running: ["info", "运行中"],
+        completed: ["ok", "完成"],
+        blocked: ["err", "阻断"]
+      };
+      const [kind, text] = map[status] || ["neutral", status];
+      return statusBadge(kind, text);
+    }
+
+    function listRow(title, sub, right) {
+      return `
+        <div class="list-row">
+          <div><div class="list-title">${title}</div><div class="list-sub">${sub}</div></div>
+          <div>${right}</div>
+        </div>
+      `;
+    }
+
+    function step(kind, title, detail, right) {
+      return `
+        <div class="step">
+          <div class="dot ${kind}"></div>
+          <div><div class="step-title">${title}</div><div class="step-detail">${detail}</div></div>
+          <strong>${right}</strong>
+        </div>
+      `;
+    }
+
+    function traceTimeline() {
+      return `
+        <div class="timeline">
+          ${step("ok", "ingest", "外部客服系统提交最小问答字段，request_id 已去重。", "32ms")}
+          ${step("ok", "normalization", "识别租户、店铺、平台、会话和消息意图。", "85ms")}
+          ${step("warn", "context request", "缺少订单上下文，返回 context_requests[type=orders]。", "等待")}
+          ${step("ok", "risk gate", "动作 update-note 需外部系统执行结果，禁止直接确认完成。", "通过")}
+          ${step("warn", "persistence", "已写 decision_record，等待 action_result 或人工反馈。", "1820ms")}
+        </div>
+      `;
+    }
+
+    function openDrawer(kind, id) {
+      const drawer = document.getElementById("drawer");
+      const backdrop = document.getElementById("drawerBackdrop");
+      const title = document.getElementById("drawerTitle");
+      const kicker = document.getElementById("drawerKicker");
+      const body = document.getElementById("drawerBody");
+      if (kind === "trace") {
+        const trace = traces.find(t => t.id === id) || traces[0];
+        kicker.textContent = "MESSAGE TRACE";
+        title.textContent = trace.id;
+        body.innerHTML = `
+          ${section("决策摘要", `
+            <div class="context-body kv">
+              <div class="kv-row"><span>租户</span><strong>${trace.org}</strong></div>
+              <div class="kv-row"><span>店铺</span><strong>${trace.store}</strong></div>
+              <div class="kv-row"><span>Action</span><strong class="mono">${trace.action}</strong></div>
+              <div class="kv-row"><span>状态</span><strong>${trace.status}</strong></div>
+              <div class="kv-row"><span>置信度</span><strong>${trace.confidence}</strong></div>
+            </div>
+          `)}
+          ${section("处理链路", traceTimeline())}
+          ${section("审计边界", `
+            <div class="context-body">
+              <div class="alert">默认展示摘要、引用 ID 和错误原因。查看 raw payload 需要二次确认，并写入系统审计。</div>
+              <button class="btn danger" data-action="toast"><i data-lucide="eye"></i>申请查看 raw payload</button>
+            </div>
+          `)}
+        `;
+      } else if (kind === "tenant") {
+        const tenant = tenants.find(t => t.org === id) || tenants[0];
+        kicker.textContent = "TENANT DETAIL";
+        title.textContent = tenant.org;
+        body.innerHTML = `
+          ${section("组织与店铺", `
+            <div class="context-body kv">
+              <div class="kv-row"><span>主店铺</span><strong>${tenant.store}</strong></div>
+              <div class="kv-row"><span>套餐</span><strong>${tenant.plan}</strong></div>
+              <div class="kv-row"><span>状态</span><strong>${tenant.status}</strong></div>
+              <div class="kv-row"><span>管理员</span><strong>${tenant.admin}</strong></div>
+              <div class="kv-row"><span>完成度</span><strong>${tenant.readiness}%</strong></div>
+            </div>
+          `)}
+          ${section("上线检查", readinessBars())}
+          ${section("建议动作", `
+            <div class="context-body">
+              <div class="alert ${tenant.risk === "ok" ? "ok" : tenant.risk === "error" ? "err" : "warn"}"><strong>${tenant.issue}</strong><br>处理后重新运行配置完成度检查。</div>
+              <button class="btn primary" data-action="toast"><i data-lucide="send"></i>分派给负责人</button>
+            </div>
+          `)}
+        `;
+      } else {
+        const task = tasks.find(t => t.name === id) || tasks[0];
+        kicker.textContent = "TASK DETAIL";
+        title.textContent = task.name;
+        body.innerHTML = `
+          ${section("任务状态", `
+            <div class="context-body kv">
+              <div class="kv-row"><span>租户</span><strong>${task.org}</strong></div>
+              <div class="kv-row"><span>类型</span><strong class="mono">${task.type}</strong></div>
+              <div class="kv-row"><span>状态</span><strong>${taskBadge(task.status)}</strong></div>
+              <div class="kv-row"><span>重试</span><strong>${task.retry}</strong></div>
+              <div class="kv-row"><span>更新时间</span><strong>${task.updated}</strong></div>
+            </div>
+          `)}
+          ${section("错误摘要", `<div class="context-body"><div class="alert ${task.status === "failed" || task.status === "blocked" ? "err" : "ok"}">${task.detail}</div></div>`)}
+          ${section("操作", `<div class="context-body"><button class="btn primary" data-action="toast"><i data-lucide="rotate-cw"></i>重试幂等安全任务</button></div>`)}
+        `;
+      }
+      backdrop.classList.add("open");
+      drawer.classList.add("open");
+      refreshIcons();
+    }
+
+    function closeDrawer() {
+      document.getElementById("drawerBackdrop").classList.remove("open");
+      document.getElementById("drawer").classList.remove("open");
+    }
+
+    function openModal(type) {
+      const title = document.getElementById("modalTitle");
+      const body = document.getElementById("modalBody");
+      const foot = document.getElementById("modalFoot");
+      if (type === "create-org") {
+        title.textContent = "创建组织";
+        body.innerHTML = `
+          <div class="form-grid">
+            <div class="form-field"><label>组织名称</label><input class="field" value="新客户组织" /></div>
+            <div class="form-field"><label>套餐</label><select class="field"><option>Pro</option><option>Enterprise</option><option>Pilot</option></select></div>
+            <div class="form-field"><label>主平台</label><select class="field"><option>拼多多</option><option>淘宝</option><option>京东</option><option>抖音</option></select></div>
+            <div class="form-field"><label>初始店铺</label><input class="field" value="PDD-主店" /></div>
+            <div class="form-field full"><label>开通备注</label><textarea class="field">创建组织、初始店铺和客户后台管理员邀请。</textarea></div>
+          </div>
+        `;
+        foot.innerHTML = `<button class="btn secondary" data-action="close-modal">取消</button><button class="btn primary" data-action="submit-modal"><i data-lucide="plus"></i>创建并邀请</button>`;
+      } else if (type === "release-confirm") {
+        title.textContent = "发布规则版本";
+        body.innerHTML = `<div class="alert warn"><strong>发布前检查</strong><br>规则模板通过 deterministic 测试和红线用例，但仍会影响全部适用店铺。发布操作会写入 release_record 和系统审计。</div>`;
+        foot.innerHTML = `<button class="btn secondary" data-action="close-modal">取消</button><button class="btn primary" data-action="submit-modal"><i data-lucide="rocket"></i>确认发布</button>`;
+      } else if (type === "freeze-key") {
+        title.textContent = "冻结 API 凭据";
+        body.innerHTML = `<div class="alert err"><strong>高风险操作</strong><br>冻结后外部系统将无法继续调用接入 API。必须填写原因并通知客户。</div><div class="form-field"><label>原因</label><textarea class="field">异常调用量，等待客户确认后恢复。</textarea></div>`;
+        foot.innerHTML = `<button class="btn secondary" data-action="close-modal">取消</button><button class="btn danger" data-action="submit-modal"><i data-lucide="ban"></i>冻结凭据</button>`;
+      } else {
+        title.textContent = "追踪查询";
+        body.innerHTML = `<div class="form-field"><label>Decision ID / Request ID / 外部消息 ID</label><input class="field" value="dec_8fd2a912" /></div>`;
+        foot.innerHTML = `<button class="btn secondary" data-action="close-modal">取消</button><button class="btn primary" data-action="submit-modal"><i data-lucide="search"></i>查询</button>`;
+      }
+      document.getElementById("modalBackdrop").classList.add("open");
+      document.getElementById("modal").classList.add("open");
+      refreshIcons();
+    }
+
+    function closeModal() {
+      document.getElementById("modalBackdrop").classList.remove("open");
+      document.getElementById("modal").classList.remove("open");
+    }
+
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message || "操作已记录到系统审计";
+      toast.classList.add("show");
+      window.setTimeout(() => toast.classList.remove("show"), 1800);
+    }
+
+    function renderPage() {
+      renderNav();
+      renderHeader();
+      renderContext();
+      const map = {
+        dashboard: dashboardView,
+        tenants: tenantsView,
+        readiness: readinessView,
+        content: contentView,
+        traces: tracesView,
+        tasks: tasksView,
+        rules: rulesView,
+        release: releaseView,
+        security: securityView,
+        health: healthView
+      };
+      document.getElementById("view").innerHTML = map[currentPage]();
+      refreshIcons();
+    }
+
+    function refreshIcons() {
+      if (window.lucide) window.lucide.createIcons({ attrs: { "stroke-width": 1.75 } });
+    }
+
+    document.addEventListener("click", (event) => {
+      const navButton = event.target.closest("[data-page]");
+      if (navButton) {
+        currentPage = navButton.dataset.page;
+        renderPage();
+        return;
+      }
+
+      const actionEl = event.target.closest("[data-action]");
+      if (!actionEl) return;
+      const action = actionEl.dataset.action;
+      event.stopPropagation();
+
+      if (action === "close-drawer") closeDrawer();
+      else if (action === "close-modal") closeModal();
+      else if (action === "submit-modal") { closeModal(); showToast("操作已保存并写入审计"); }
+      else if (action === "create-org" || action === "invite-admin" || action === "release-confirm" || action === "freeze-key" || action === "trace-search" || action === "open-command") openModal(action);
+      else if (action === "open-alerts") { currentPage = "security"; renderPage(); showToast("已切换到安全审计"); }
+      else if (action === "open-trace") openDrawer("trace", actionEl.dataset.id);
+      else if (action === "open-tenant") openDrawer("tenant", actionEl.dataset.org);
+      else if (action === "open-task") openDrawer("task", actionEl.dataset.task);
+      else if (action === "tasks") { currentPage = "tasks"; renderPage(); }
+      else if (action === "release") { currentPage = "release"; renderPage(); }
+      else showToast("操作已记录到系统审计");
+    });
+
+    document.getElementById("drawerBackdrop").addEventListener("click", closeDrawer);
+    document.getElementById("modalBackdrop").addEventListener("click", closeModal);
+    document.getElementById("scopeSelect").addEventListener("change", renderContext);
+    document.getElementById("globalSearch").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        currentPage = "traces";
+        renderPage();
+        openDrawer("trace", "dec_8fd2a912");
+      }
+    });
+
+    renderPage();
+  </script>
+</body>
+</html>

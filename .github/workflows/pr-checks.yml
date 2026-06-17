@@ -1,0 +1,54 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: PR Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Ruby YAML parse
+        run: |
+          ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path); puts "YAML ok: #{path}" }' \
+            docs/openapi.yaml \
+            .github/workflows/codeql.yml \
+            .github/workflows/pr-checks.yml
+
+      - name: Install Python project
+        run: python -m pip install -e ".[dev]"
+
+      - name: OpenAPI ref check
+        run: python scripts/check_openapi_refs.py docs/openapi.yaml
+
+      - name: Markdown link check
+        run: python scripts/check_markdown_links.py .
+
+      - name: Eval CLI unittest
+        run: python -m unittest tests.evals.test_live_cli -v
+
+      - name: Eval CLI help
+        run: python -m evals.cli --help
+
+      - name: Pytest
+        run: python -m pytest tests -q
+
+      - name: Git whitespace check
+        run: git diff --check
+
+      - name: Sensitive pattern scan
+        run: python scripts/check_sensitive_patterns.py .

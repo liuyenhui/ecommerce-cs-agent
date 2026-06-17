@@ -1,2 +1,12 @@
 .DS_Store
 .codegraph/
+.env
+*.env
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+reports/evals/
+reports/*.png

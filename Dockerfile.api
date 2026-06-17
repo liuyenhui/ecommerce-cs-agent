@@ -1,0 +1,28 @@
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    APP_ENV=production \
+    SERVICE_NAME=ecommerce-cs-agent-api \
+    PORT=8000
+
+WORKDIR /opt/app
+
+RUN addgroup --system app && adduser --system --ingroup app --home /opt/app app \
+    && chown -R app:app /opt/app
+
+COPY --chown=app:app pyproject.toml README.md ./
+COPY --chown=app:app ecommerce_cs_agent ./ecommerce_cs_agent
+
+RUN pip install --no-cache-dir \
+        "fastapi>=0.115,<1" \
+        "uvicorn>=0.34,<1" \
+        "pydantic>=2.8,<3" \
+        "psycopg[binary]>=3.2,<4" \
+    && pip install --no-cache-dir --no-deps .
+
+USER app
+
+EXPOSE 8000
+
+CMD ["sh", "-c", "uvicorn ecommerce_cs_agent.api.app:app --host 0.0.0.0 --port ${PORT:-8000}"]
