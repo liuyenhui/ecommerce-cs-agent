@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+from ecommerce_cs_agent.api.app import create_app
+from ecommerce_cs_agent.core.config import Settings, load_settings
+
+
+def test_external_api_token_cannot_call_customer_admin():
+    client = TestClient(create_app())
+
+    response = client.get(
+        "/v1/admin/auth/me",
+        headers={"Authorization": "Bearer test-agent-token"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "forbidden"
+
+
+def test_customer_admin_session_cannot_call_system_admin():
+    client = TestClient(create_app())
+
+    response = client.get(
+        "/v1/system-admin/health",
+        headers={"Cookie": "agent_admin_session=test-admin-session"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "forbidden"
+
+
+def test_customer_admin_me_and_core_lists():
+    client = TestClient(create_app())
+    headers = {"Cookie": "agent_admin_session=test-admin-session"}
+
+    me = client.get("/v1/admin/auth/me", headers=headers)
+    organizations = client.get("/v1/admin/organizations", headers=headers)
+    stores = client.get("/v1/admin/stores", headers=headers)
+    audit = client.get("/v1/admin/audit-logs", headers=headers)
+
+    assert me.status_code == 200
+    assert me.json()["active_organization_id"] == "org-001"
+    assert organizations.status_code == 200
+    assert organizations.json()["items"][0]["id"] == "org-001"
+    assert stores.status_code == 200
+    assert stores.json()["items"][0]["id"] == "store-001"
+    assert audit.status_code == 200
+    assert "items" in audit.json()
+    assert organizations.json()["page"] == {"page": 1, "page_size": 50, "total": 1}
+
+
+def test_system_admin_core_health_and_readiness():
+    client = TestClient(create_app())
+    headers = {"Cookie": "agent_system_admin_session=test-system-session"}
+
+    me = client.get("/v1/system-admin/auth/me", headers=headers)
+    health = client.get("/v1/system-admin/health", headers=headers)
+    readiness = client.get("/v1/system-admin/readiness/stores", headers=headers)
+
+    assert me.status_code == 200
+    assert me.json()["user"]["role"] == "super_admin"
+    assert health.status_code == 200
+    assert health.json()["status"] in {"healthy", "degraded"}
+    assert readiness.status_code == 200
+    assert readiness.json()["items"][0]["store_id"] == "store-001"
+
+
+def test_admin_login_rejects_bad_credentials_and_sets_spec_cookie_for_valid_credentials():
+    client = TestClient(create_app())
+
+    bad = client.post("/v1/admin/auth/login", json={"email": "admin@example.test", "password": "bad"})
+    good = client.post(
+        "/v1/admin/auth/login",
+        json={"email": "admin@example.test", "password": "admin-password"},
+    )
+
+    assert bad.status_code == 401
+    assert good.status_code == 200
+    assert "agent_admin_session=" in good.headers["set-cookie"]
+
+
+def test_system_admin_login_rejects_bad_credentials_and_sets_spec_cookie_for_valid_credentials():
+    client = TestClient(create_app())
+
+    bad = client.post(
+        "/v1/system-admin/auth/login",
+        json={"email": "system-admin@example.test", "password": "bad"},
+    )
+    good = client.post(
+        "/v1/system-admin/auth/login",
+        json={"email": "system-admin@example.test", "password": "system-admin-password"},
+    )
+
+    assert bad.status_code == 401
+    assert good.status_code == 200
+    assert "agent_system_admin_session=" in good.headers["set-cookie"]
+
+
+def test_production_settings_fail_fast_without_required_secrets(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    for key in (
+        "AGENT_API_TOKEN",
+        "ADMIN_SESSION_SECRET",
+        "SYSTEM_ADMIN_SESSION_SECRET",
+        "ADMIN_INITIAL_EMAIL",
+        "ADMIN_INITIAL_PASSWORD_HASH",
+        "SYSTEM_ADMIN_INITIAL_EMAIL",
+        "SYSTEM_ADMIN_INITIAL_PASSWORD_HASH",
+        "DATABASE_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    try:
+        load_settings()
+    except RuntimeError as exc:
+        assert "Missing required production settings" in str(exc)
+    else:
+        raise AssertionError("production settings should require external secrets")
+
+
+def test_development_settings_accept_local_test_defaults(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    settings = load_settings()
+
+    assert settings.agent_api_token == "test-agent-token"

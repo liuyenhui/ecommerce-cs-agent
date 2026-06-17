@@ -1442,20 +1442,23 @@
     const technologyArchitecture = {
       title: '应用技术架构',
       summary: '用 HTML 图表集中展示技术栈、数据库、协议、AI/RAG、前后台分层、部署原则和接入边界。',
-      description: '这张图用于实施、客户沟通和交付说明。它不改变总体架构流程，只把已有系统边界和技术选型集中展示。',
+      description: '这张图用于实施、客户沟通和交付说明。它不改变总体架构流程，只把已有系统边界和技术选型集中展示；公开宣传页、客户后台登录、权限、设置、审核和 UI 视觉基准见独立文档。',
       layers: [
         {
           title: '前台 / 后台 / Agent 分层',
           cards: [
+            ['公开宣传页', '客服 Agent 自有公开入口，展示产品能力、后台预览和登录按钮，不读取租户业务数据。'],
             ['外部客服前台', '平台消息接入、客服工作台、人工确认和真实发送动作仍由外部客服系统负责。'],
             ['Agent API 服务', 'Python 3.12 + FastAPI + Pydantic v2，提供候选回复、决策、转人工和上下文请求。'],
-            ['Admin / 运营后台', '负责商品资料上传、Markdown 审稿、知识片段审核、规则配置、反馈标注和审计查询。']
+            ['Admin / 运营后台', '第一版必备模块，负责客户登录、组织/店铺切换、商品资料上传、Markdown 审稿、知识片段审核、规则配置、动作能力配置和审计查询。'],
+            ['宣传页 / Admin UI 视觉基准', '宣传页由 Notion 主导：黑白中性基调、大留白、AI Agent 叙事、产品预览和黑色主 CTA；Admin 仍采用 IBM / Carbon 企业后台结构，Ant Design 只作为组件能力层。']
           ]
         },
         {
           title: 'AI 与 RAG 架构',
           cards: [
             ['Provider Adapter', '统一封装 OpenAI-compatible LLM，隔离模型供应商、模型版本和调用参数。'],
+            ['LangGraph Decision Orchestrator', '内部编排意图、缺上下文等待、RAG、生成、动作结果、人工介入和规则闸门；不改变外部 API。'],
             ['结构化输出', '模型只生成候选、分类或 JSON 结构，不直接决定是否发送买家消息。'],
             ['RAG 召回', '说明书先转 Markdown 审稿稿件，再抽取片段；只有人工审核通过的知识进入 knowledge_entry 和 embedding。'],
             ['LLM 模拟问答', 'LLM 辅助生成买家问题、参考答案、同义问法和覆盖率提示，但不最终批准知识入库。']
@@ -1464,41 +1467,53 @@
         {
           title: '数据、协议与部署',
           cards: [
-            ['PostgreSQL 16+', 'JSONB 保存商品资料版本、上下文快照、trace、raw metadata 和规则条件，pgvector 保存向量。'],
+            ['PostgreSQL 16+', 'JSONB 保存商品资料版本、上下文快照、trace、LangGraph checkpoint、raw metadata 和规则条件，pgvector 保存向量。'],
             ['HTTP/JSON 接入', 'OpenAPI 描述同步接口，Webhook 和轮询用于后续异步任务与结果回传。'],
             ['k8s 无状态', 'Agent 服务容器无状态运行，持久化交给 PostgreSQL 和对象存储。']
           ]
         }
       ],
       flow: [
+        ['公开宣传页', '产品介绍 / 登录入口'],
         ['外部客服系统', '平台接入 / 工作台 / 真实发送'],
+        ['客户 Admin 后台', '登录 / 设置 / 资料 / 审核'],
         ['HTTP API', 'HTTP/JSON / OpenAPI / API Key'],
-        ['Agent 领域服务', 'Context / Retrieval / Generator / Policy Gate'],
+        ['Agent 领域服务', 'LangGraph / Context / Retrieval / Policy Gate'],
         ['AI + RAG', 'Provider Adapter / Structured Output / pgvector'],
         ['持久化与部署', 'PostgreSQL / JSONB / Docker / k8s']
       ],
       matrix: [
         ['编程语言', 'Python 3.12', '后端 Agent 服务主语言，便于 FastAPI、Pydantic 和 AI/RAG 生态集成。'],
         ['服务框架', 'FastAPI + Pydantic v2', '定义 HTTP API、请求响应 schema、OpenAPI 文档和结构化校验。'],
-        ['数据库', 'PostgreSQL 16+ / JSONB / pgvector', '业务主库、商品资料、价格快照、上下文快照、决策 trace、知识库和向量召回统一落库。'],
+        ['Agent 编排', 'LangGraph StateGraph', '内部表达决策状态、条件边、interrupt/resume、节点级 trace 和 checkpoint，不暴露为外部 API。'],
+        ['数据库', 'PostgreSQL 16+ / JSONB / pgvector', '业务主库、商品资料、价格快照、上下文快照、LangGraph checkpoint、决策 trace、知识库和向量召回统一落库。'],
         ['ORM / 迁移', 'SQLAlchemy + Alembic', '管理表结构、索引、JSONB 字段和后续版本迁移。'],
         ['接入协议', 'HTTP/JSON / Webhook / Polling', '第一版同步决策，后续支持异步事件、任务查询和回调。'],
+        ['公开页面', 'GET /, GET /login, GET /admin', '宣传页公开访问，登录页建立 Agent 自有 Admin session，/admin 未登录重定向到 /login。'],
+        ['Admin 后台', '客户登录 / RBAC / Admin API', '第一版支持组织和店铺上下文、商品资料维护、知识审核、规则配置、动作能力配置和审计查询。'],
+        ['Admin UI 视觉', 'Notion 宣传页 + IBM / Carbon 后台规则', '宣传页使用黑色主 CTA 和 AI Agent 叙事；Admin 保持密集表格、队列、表单和 hairline，Ant Design 提供组件能力。'],
         ['AI 访问', 'Provider Adapter / OpenAI-compatible LLM', '隔离模型供应商，统一 prompt 版本、模型版本和结构化输出。'],
         ['RAG', 'product_knowledge_candidate + knowledge_entry + knowledge_embedding', '商品说明书先转 Markdown 审稿，再按知识片段审核；只对审核通过知识做 embedding。'],
         ['部署', 'Docker / k8s Stateless Service', '服务无状态扩缩容，持久化、归档和对象数据放到外部存储。']
       ],
       boundaries: [
+        '公开宣传页和登录入口属于 Agent 自身，不属于外部系统或 ERP。',
         'Agent 不直接登录电商平台，不直接发送买家消息。',
         '外部客服系统负责平台接入、客服工作台、真实发送和动作执行。',
+        '客户 Admin 后台属于 Agent 自身，负责长期资料和配置维护，后台写入 PostgreSQL 或对象存储，Admin 服务自身保持无状态。',
         'Agent 只输出 candidate、auto_reply、handoff、context_request 或 action_request。',
         '人工最终回复和商品资料 Markdown 都不会自动进入知识库，必须经过知识片段候选和 Admin 审核。',
-        '价格回答以外部平台或 ERP 当前有效价格快照为权威，缺失、过期或冲突时不自动报价。'
+        '价格回答以外部系统当前有效价格快照为权威，ERP、平台或其他业务系统都只是来源示例。',
+        '外部官网和 DESIGN.md 只能作为规则参考，不复制品牌、Logo、授权字体、素材、文案或行业语义。'
       ],
       principles: [
         '第一版优先同步 HTTP 接入，外部系统提交最小问答请求，缺商品、订单、物流或规则时按类型回填。',
+        '内部 Decision Orchestrator 采用 LangGraph 状态图设计，decision_id 映射 graph thread_id，checkpoint 必须落外部存储。',
+        '公开宣传页只作为产品介绍和登录入口，/admin 登录状态由 Agent 自有 session 校验。',
+        '宣传页由 Notion 主导：黑白中性基调、大留白、AI Agent 叙事、产品能力模块、可信背书、产品预览和黑色主 CTA；Admin 不做 Notion 化，仍按 IBM / Carbon 企业后台规则设计。',
         '所有决策都记录 decision_id、trace、模型版本、规则命中和上下文引用。',
         '高风险场景由规则闸门优先拦截，模型置信度不能覆盖 P0 风险规则。',
-        '后续再引入 Connector、队列、Webhook、灰度评估和批量学习。',
+        '后续再引入 Connector、队列、Webhook、通用企业 SSO、MFA、灰度评估和批量学习。',
         '商品资料中心保留原始资产、Markdown 审稿稿件、知识片段、模拟问答和价格快照版本，支撑决策回放。'
       ]
     };
@@ -1526,7 +1541,7 @@
           ['4. 展示、发送或转人工', '当 action(处理动作) 是 auto_reply(自动回复) 时，外部系统决定是否自动发送；当 action(处理动作) 是 candidate(候选回复) 时，外部系统展示给客服确认或编辑；当 action(处理动作) 是 handoff(转人工) 时，外部系统转人工并展示原因。'],
           ['5. 补上下文或执行动作', '当 action(处理动作) 是 context_request(补上下文请求) 时，外部系统按 context_requests[] 中的 type 并行调用 products、orders、logistics、rules 回填接口。当 action(处理动作) 是 action_request(动作执行请求) 时，外部系统执行自己的业务 API(应用接口)，再调用 actions/results 回传执行结果。'],
           ['6. 反馈与追踪', '客服最终发送、修改、拒绝或升级后，外部系统调用 POST(提交) /v1/feedback/human-replies(提交人工回复反馈) 回传处理结果。需要解释或排障时，外部系统调用 GET(查询) /v1/message-traces/{decision_id}(查询消息追踪) 查询对外可见的追踪摘要。'],
-          ['7. 商品资料维护', '运营后台上传说明书、照片和视频等 product_asset(商品资产)，系统保留原始文件并转换为 Markdown(审稿稿件)，再抽取 product_knowledge_candidate(商品知识候选)。LLM 可生成模拟问答和覆盖率提示，人工按片段审核后才进入知识库。']
+          ['7. 商品资料维护', '客户 Admin 后台上传说明书、照片和视频等 product_asset(商品资产)，系统保留原始文件并转换为 Markdown(审稿稿件)，再抽取 product_knowledge_candidate(商品知识候选)。LLM 可生成模拟问答和覆盖率提示，人工按片段审核后才进入知识库。']
         ],
         businessFlowFutureNote: ['实时通知（非本期目标）', 'WebSocket(实时连接) 是后续异步通知能力，用于状态变化、处理完成或补充事件推送；本期接入流程不依赖实时通知，客户系统按同步 API(应用接口) 返回和查询接口完成闭环。']
       },
@@ -1689,6 +1704,7 @@
                 ['score', 'number', '必返，召回相似度或相关性分数。'],
                 ['source_type', 'string', '必返，来源类型，例如 approved_knowledge / historical_reply。']
               ]],
+              ['graph_version', 'string', '必返，LangGraph 决策图版本；不用作外部协议分支，只用于恢复、回放和排障。'],
               ['model_version', 'string', '必返，模型供应商、模型名或内部版本。'],
               ['duration_ms', 'number', '必返，本次决策耗时。']
             ]]
@@ -1900,7 +1916,7 @@
               ['product_profile_ids[]', 'array', '可选，本次决策引用的客户维护商品资料 ID。', [
                 ['item', 'string', '必返，商品资料 ID。']
               ]],
-              ['product_price_snapshot_ids[]', 'array', '可选，本次决策引用的外部平台或 ERP 价格快照 ID。', [
+              ['product_price_snapshot_ids[]', 'array', '可选，本次决策引用的外部系统价格快照 ID。', [
                 ['item', 'string', '必返，价格快照 ID。']
               ]],
               ['knowledge_eval_case_ids[]', 'array', '可选，本次召回或回归评估关联的模拟问答案例 ID。', [
@@ -1929,7 +1945,7 @@
           title: '商品资料维护',
           method: 'Admin/API',
           path: '/v1/product-content/*',
-          purpose: '后续 Admin 或 API 维护商品资料、说明书 Markdown 审稿稿件、知识片段候选、模拟问答和价格快照；第一版不扩大 reply decision 请求体。',
+          purpose: '第一版客户 Admin 后台或 API 维护商品资料、说明书 Markdown 审稿稿件、知识片段候选、模拟问答和价格快照；不扩大 reply decision 请求体。',
           request: [
             ['product_profile', 'object', '商品主资料，包含外部商品 ID、标题、状态、适用店铺和平台。'],
             ['product_sku_profile', 'object', 'SKU、规格、属性和资料适用范围。'],
@@ -1937,7 +1953,7 @@
             ['product_asset_markdown', 'object', '由原始资产转换出的 Markdown 审稿稿件，保留来源页码、章节和图片引用。'],
             ['product_knowledge_candidate', 'object', '从 Markdown 抽取出的待审核知识片段，必须人工批准后才能入知识库。'],
             ['knowledge_eval_case', 'object', 'LLM 生成并经人工确认的模拟买家问题、参考答案、同义问法和覆盖率提示。'],
-            ['product_price_snapshot', 'object', '外部平台或 ERP 当前有效价格快照，记录生效时间、失效时间、来源和更新时间。']
+            ['product_price_snapshot', 'object', '外部系统当前有效价格快照，记录生效时间、失效时间、来源和更新时间。']
           ],
           response: [
             ['status', 'string', 'accepted / queued / rejected。'],
@@ -2018,6 +2034,7 @@
         '  "trace_summary": {',
         '    "rule_hits": ["missing_logistics_requires_context"],',
         '    "knowledge_refs": [],',
+        '    "graph_version": "reply-decision-graph-v1",',
         '    "model_version": "openai-compatible:gpt-4.1-mini",',
         '    "duration_ms": 218',
         '  }',
@@ -2149,11 +2166,13 @@
     const viewDetails = {
       overview: {
         title: '总体架构',
-        summary: '展示外部客服系统、独立 Agent 服务、商品资料中心、数据与知识层、LLM 和后续 Connector 的边界关系。',
-        description: '外部客服系统负责平台消息和实际发送。Agent 服务负责理解、检索、生成、评分和规则闸门。商品资料中心负责客户手工维护说明书、照片、SKU 和资料审核。第一版由外部系统提交最小问答请求，并按 context_requests[] 回填商品、订单、物流或规则；后续再让 Connector 主动查外部系统。',
+        summary: '展示公开宣传页、外部客服系统、独立 Agent 服务、商品资料中心、数据与知识层、LLM 和后续 Connector 的边界关系。',
+        description: '公开宣传页和客户 Admin 后台属于 Agent 自身，负责产品介绍、登录入口和长期资料配置维护。外部客服系统负责平台消息和实际发送。Agent 服务通过 LangGraph 编排理解、检索、生成、评分、补上下文等待、动作结果恢复和规则闸门。商品资料中心负责客户手工维护说明书、照片、SKU 和资料审核。第一版由外部系统提交最小问答请求，并按 context_requests[] 回填商品、订单、物流或规则；后续再让 Connector 主动查外部系统。',
         points: [
+          '公开宣传页只展示产品能力和登录入口，不展示租户业务数据。',
           '外部客服系统仍然是平台消息和发送动作的所有者。',
           'Agent 不绕过外部系统直接发消息，只输出 auto_reply、candidate 或 handoff。',
+          'LangGraph 只作为内部 Decision Orchestrator，不改变外部 HTTP API。',
           '商品说明书、照片和 SKU 资料由运营后台维护，先归档、转 Markdown、按知识片段审核。',
           'PostgreSQL + JSONB + pgvector 做第一版主存储和语义召回。',
           '所有决策记录 decision_id，便于反馈、审计和回放。'
@@ -2163,15 +2182,17 @@
           ['反馈接口', 'POST /v1/feedback/human-replies'],
           ['商品资料', 'Markdown 审稿 + 片段审核'],
           ['第一版上下文', '最小请求 + 按需回填'],
+          ['内部编排', 'LangGraph StateGraph'],
           ['后续扩展', 'Connector / Async / Webhook']
         ]
       },
       components: {
         title: '应用组件',
         summary: '把系统拆成 API 层、领域服务层、持久化层和运维治理层，便于后续落代码。',
-        description: 'API 层处理鉴权、幂等和 schema 校验；领域服务层负责上下文构建、商品资料引用、意图、风险、召回、生成、评分和规则闸门；持久化层保存会话、商品资料、价格快照、决策、知识、反馈和向量。',
+        description: 'API 层处理鉴权、幂等和 schema 校验；领域服务层用 LangGraph 编排上下文构建、商品资料引用、意图、风险、召回、生成、评分、动作等待和规则闸门；持久化层保存会话、商品资料、价格快照、决策、checkpoint、知识、反馈和向量。',
         points: [
           'Context Builder 把平台差异字段映射成标准上下文，同时保留 raw metadata。',
+          'LangGraph Decision Orchestrator 以 decision_id 作为 thread_id，管理等待上下文、动作结果和人工介入的恢复。',
           '同类商品、订单、规则和会话摘要多次出现时，Context Builder 选择最近有效快照。',
           'Product Content Center 保留原始商品资产、Markdown 审稿稿件、知识片段候选、模拟问答和价格快照。',
           'Capability Registry 保存平台级 / 店铺级 action_type、参数 schema 和自然语言触发表达。',
@@ -2182,6 +2203,7 @@
         ],
         metrics: [
           ['API 框架', 'FastAPI'],
+          ['编排', 'LangGraph StateGraph'],
           ['Schema', 'Pydantic v2'],
           ['迁移', 'Alembic'],
           ['观测', 'OpenTelemetry / Prometheus']
@@ -2190,21 +2212,23 @@
       syncFlow: {
         title: '同步决策数据流',
         summary: '描述外部系统调用 POST /v1/reply-decisions 后，Agent 内部的完整执行链路。',
-        description: '同步路径适合第一版接入：外部系统收到买家消息后先提交最小问答请求。Agent 先做轻量意图和上下文需求判断，缺商品、订单、物流或规则时返回 context_requests[]，客户端并行回填，服务端在 5 秒预算内聚合后返回决策和 trace。',
+        description: '同步路径适合第一版接入：外部系统收到买家消息后先提交最小问答请求。Agent 内部用 LangGraph 先做轻量意图和上下文需求判断，缺商品、订单、物流或规则时 interrupt 并返回 context_requests[]，客户端并行回填后恢复同一 decision_id/thread_id，服务端在 5 秒预算内聚合后返回决策和 trace。',
         points: [
           '入口先做鉴权、幂等检查和请求校验。',
           '主请求只必填消息、最小会话、租户、店铺、平台和模式；商品、订单、物流、规则是可选上下文。',
           '缺上下文时一次返回所有当前可判断出的 context_requests[]，客户端按类型并行回填。',
+          '每次主请求、上下文回填和动作结果回传都恢复同一个 LangGraph thread，并写入 checkpoint。',
           '保存商品、订单、物流和会话快照，当前决策引用最近有效快照、商品资料版本和价格快照，历史快照保留用于回放。',
           '动作类需求先匹配 capability，再生成 context_requests[] 或 action_request。',
           '检索审核通过的商品知识、模拟问答和历史人工回复后再生成候选。',
-          '价格类问题只引用外部平台或 ERP 当前有效价格快照，缺失、过期或冲突时不自动报价。',
+          '价格类问题只引用外部系统当前有效价格快照，缺失、过期或冲突时不自动报价。',
           '规则闸门输出统一 action，外部系统决定展示、发送、补上下文、执行动作或转人工。'
         ],
         metrics: [
           ['入口', 'POST /v1/reply-decisions'],
           ['补上下文', '/contexts/products / orders / logistics / rules'],
           ['等待预算', '最高 5 秒'],
+          ['恢复键', 'decision_id / thread_id'],
           ['输出动作', 'auto_reply / candidate / context_request / action_request / handoff'],
           ['主审计表', 'decision_record'],
           ['关键追踪字段', 'trace.rule_hits / model_version']
@@ -2232,13 +2256,14 @@
       },
       decision: {
         title: '决策机制',
-        summary: '展示上下文完整性、风险识别、知识召回、候选生成、置信度评分和规则闸门。',
-        description: '决策不能依赖模型自评。模型可以生成候选和辅助分类，但自动回复必须被规则闸门放行，且高风险规则优先级高于置信度。',
+        summary: '展示 LangGraph 状态图中的上下文完整性、风险识别、知识召回、候选生成、动作规划、置信度评分和规则闸门。',
+        description: '决策不能依赖模型自评。LangGraph 负责编排节点、条件边、interrupt/resume 和 trace，模型可以生成候选和辅助分类，但自动回复必须被规则闸门放行，且高风险规则优先级高于置信度。',
         points: [
+          'decision_id 映射 LangGraph thread_id，补上下文和动作结果都恢复同一决策。',
           'P0 风险包括投诉升级、赔付承诺、退款争议、平台处罚和辱骂威胁。',
           '需要订单或物流数据但缺失时，禁止让模型猜测。',
           '商品参数、发货时间等低风险问题可较早自动化，但商品知识必须来自审核通过片段。',
-          '价格类回答必须使用外部平台或 ERP 当前有效价格快照，不能从说明书或 Markdown 猜价格。',
+          '价格类回答必须使用外部系统当前有效价格快照，不能从说明书或 Markdown 猜价格。',
           '新商品、新规则和历史采用率不足的场景先保持 candidate。'
         ],
         metrics: [
@@ -2250,15 +2275,16 @@
       },
       dataModel: {
         title: '数据模型',
-        summary: '展示 PostgreSQL 第一版核心表：组织、店铺、平台账号、商品资料、会话、消息、快照、决策、动作、人工反馈、待审核知识、审核、知识、向量、模拟问答和规则。',
-        description: '数据资产不只是问答文本。系统必须保存商品资料版本、Markdown 审稿稿件、价格快照、上下文快照、决策 trace、外部动作请求与结果、人工最终回复、编辑差异和处理结果；人工回复和商品资料 Markdown 都只能进入待审核知识候选，不能自动进入知识库或向量库。',
+        summary: '展示 PostgreSQL 第一版核心表：组织、店铺、平台账号、商品资料、会话、消息、快照、决策、LangGraph checkpoint、动作、人工反馈、待审核知识、审核、知识、向量、模拟问答和规则。',
+        description: '数据资产不只是问答文本。系统必须保存商品资料版本、Markdown 审稿稿件、价格快照、上下文快照、决策 trace、LangGraph checkpoint、外部动作请求与结果、人工最终回复、编辑差异和处理结果；人工回复和商品资料 Markdown 都只能进入待审核知识候选，不能自动进入知识库或向量库。',
         points: [
           'decision_record.trace 保存规则命中、知识来源、商品资料版本、价格快照、模型版本、缺失上下文和 selected_snapshot_refs。',
+          'decision_graph_checkpoint 保存 LangGraph thread state、node_name、resume_token、graph_version 和 decision_status，生产环境不能依赖 API 容器内存。',
           'product_profile / product_sku_profile / product_asset 记录客户后台维护的商品主资料、SKU 和原始资产。',
           'product_asset_markdown 是可读审稿稿件，不直接作为自动回复知识源。',
           'product_knowledge_candidate 是从 Markdown 抽取的待审核知识片段，批准后才进入 knowledge_entry。',
           'knowledge_eval_case 保存 LLM 生成并经人工确认的模拟问答，用于覆盖率检查和回归评测。',
-          'product_price_snapshot 保存外部平台或 ERP 当前有效价格，价格缺失、过期或冲突时不自动报价。',
+          'product_price_snapshot 保存外部系统当前有效价格，价格缺失、过期或冲突时不自动报价。',
           'product_snapshot / order_snapshot 每次请求新增，当前决策引用最近有效快照和商品资料引用，不覆盖历史快照。',
           'action_capability 记录平台级 / 店铺级动作能力，action_request / action_result 记录外部执行闭环。',
           'human_reply 全量保存客服最终回复，但不直接进入知识库或向量库。',
@@ -2270,6 +2296,7 @@
           ['平台隔离字段', 'platform / external_*_id'],
           ['商品资料', 'product_profile / product_asset'],
           ['价格权威', 'product_price_snapshot'],
+          ['编排状态', 'decision_graph_checkpoint'],
           ['动作契约', 'action_type / payload_schema'],
           ['待审核实体', 'knowledge_candidate / product_knowledge_candidate'],
           ['审核操作', 'approve / reject / redact']
@@ -2347,7 +2374,7 @@
       },
       {
         table: 'product_price_snapshot',
-        purpose: '外部平台或 ERP 的价格快照和有效期；价格类回复只引用当前有效快照。',
+        purpose: '外部系统价格快照和有效期；价格类回复只引用当前有效快照。',
         key: 'id PK',
         relations: 'product_profile_id FK, product_sku_profile_id FK nullable, store_id FK',
         fields: 'source, current_price, campaign_price, currency, effective_at, expires_at, external_updated_at, captured_at, status'
@@ -2386,6 +2413,13 @@
         key: 'id PK; request_id UNIQUE',
         relations: 'conversation_id FK, message_id FK',
         fields: 'action, confidence, risk_level, missing_context JSONB, trace JSONB, selected_snapshot_refs JSONB, model_version'
+      },
+      {
+        table: 'decision_graph_checkpoint',
+        purpose: 'LangGraph 决策编排检查点；保存同一 decision_id/thread_id 的节点状态、恢复令牌和 graph 版本。',
+        key: 'id PK; UNIQUE(decision_id, checkpoint_seq)',
+        relations: 'decision_id FK -> decision_record.id, conversation_id FK',
+        fields: 'thread_id, graph_version, node_name, decision_status, state JSONB, resume_token, checkpoint_seq, expires_at, created_at'
       },
       {
         table: 'agent_suggestion',
@@ -2492,13 +2526,14 @@
           { key: 'auth', text: '鉴权与租户识别', sub: 'API Key / Bearer Token', kind: 'service' },
           { key: 'normalize', text: '上下文标准化', sub: '平台字段映射 / JSONB raw', kind: 'service' },
           { key: 'productContent', text: '商品资料中心', sub: 'Markdown 审稿 / 片段审核 / 价格快照', kind: 'service' },
-          { key: 'decision', text: '决策编排', sub: '意图 / 风险 / 检索 / 生成 / 评分', kind: 'service' },
+          { key: 'decision', text: 'LangGraph 决策编排', sub: 'StateGraph / interrupt / resume', kind: 'service' },
           { key: 'gate', text: '规则闸门', sub: '自动回复 / 候选 / 转人工', kind: 'risk' },
           { key: 'feedback', text: '反馈学习入口', sub: '人工回复 / 采用率 / 修改幅度', kind: 'service' },
           { key: 'pg', text: 'PostgreSQL', sub: '业务主库 / JSONB', kind: 'data' },
           { key: 'vector', text: 'pgvector', sub: '相似问答 / 知识召回', kind: 'data' },
           { key: 'archive', text: 'JSONL / 对象存储', sub: '原始归档 / 训练导出', kind: 'data' },
           { key: 'metrics', text: '指标与审计', sub: 'decision_record / evaluation', kind: 'data' },
+          { key: 'checkpoint', text: '编排检查点', sub: 'thread_id / graph_version / state', kind: 'data' },
           { key: 'llm', text: 'LLM Provider', sub: '回复生成 / 分类辅助', kind: 'external' },
           { key: 'connector', text: '后续 Connector', sub: '订单 / 商品 / 规则按需查询', kind: 'async' }
         ],
@@ -2515,6 +2550,7 @@
           ['gate', 'api', 'action'],
           ['api', 'cs', '决策响应'],
           ['decision', 'pg', '读写'],
+          ['decision', 'checkpoint', 'checkpoint'],
           ['decision', 'vector', '召回'],
           ['decision', 'llm', '生成'],
           ['decision', 'metrics', '记录'],
@@ -2535,6 +2571,7 @@
           { key: 'idem', text: 'Idempotency', sub: 'request_id 去重', kind: 'external' },
           { key: 'validation', text: 'Validation', sub: 'Pydantic Schema', kind: 'external' },
           { key: 'context', text: 'Context Builder', sub: '标准上下文 / 最近有效快照', kind: 'service' },
+          { key: 'orchestrator', text: 'LangGraph Orchestrator', sub: 'StateGraph / checkpoint / resume', kind: 'service' },
           { key: 'productContent', text: 'Product Content Center', sub: '资料归档 / Markdown / 价格快照', kind: 'service' },
           { key: 'intent', text: 'Intent Classifier', sub: '商品 / 物流 / 售后 / 投诉', kind: 'service' },
           { key: 'risk', text: 'Risk Detector', sub: '退款 / 承诺 / 处罚风险', kind: 'risk' },
@@ -2555,8 +2592,8 @@
         ],
         links: [
           ['router', 'auth'], ['auth', 'idem'], ['idem', 'validation'], ['validation', 'context'],
-          ['context', 'productContent'], ['productContent', 'intent'], ['intent', 'risk'], ['risk', 'retrieval'], ['retrieval', 'generator'],
-          ['generator', 'scorer'], ['scorer', 'gate'], ['context', 'actionPlanner'], ['capability', 'actionPlanner'], ['actionPlanner', 'gate'],
+          ['context', 'orchestrator'], ['orchestrator', 'productContent'], ['orchestrator', 'intent'], ['productContent', 'intent'], ['intent', 'risk'], ['risk', 'retrieval'], ['retrieval', 'generator'],
+          ['generator', 'scorer'], ['scorer', 'gate'], ['orchestrator', 'actionPlanner'], ['capability', 'actionPlanner'], ['actionPlanner', 'gate'],
           ['context', 'conversationRepo'], ['productContent', 'assetRepo'], ['productContent', 'knowledgeRepo'], ['productContent', 'evalCaseRepo'], ['retrieval', 'knowledgeRepo'], ['retrieval', 'vectorRepo'],
           ['gate', 'decisionRepo'], ['gate', 'audit'], ['generator', 'prompt'], ['scorer', 'decisionRepo']
         ]
@@ -2568,6 +2605,7 @@
           { key: 'api', text: 'POST /v1/reply-decisions', sub: '同步决策入口', kind: 'service' },
           { key: 'check', text: '鉴权 / 幂等 / Schema', sub: 'API Key + request_id', kind: 'service' },
           { key: 'context', text: '构建标准上下文', sub: '最小请求 / 最近有效快照', kind: 'service' },
+          { key: 'orchestrator', text: 'LangGraph 状态图', sub: 'thread_id / checkpoint / resume', kind: 'service' },
           { key: 'productContent', text: '引用商品资料', sub: '资料版本 / 价格快照 / 审核知识', kind: 'service' },
           { key: 'snapshot', text: '保存上下文快照', sub: '新增快照 / 不覆盖历史', kind: 'data' },
           { key: 'contextRefill', text: '按类型补上下文', sub: 'products / orders / logistics / rules', kind: 'service' },
@@ -2579,9 +2617,9 @@
           { key: 'response', text: '返回决策', sub: 'answer_ready / candidate / handoff', kind: 'external' }
         ],
         links: [
-          ['start', 'api'], ['api', 'check'], ['check', 'context'], ['context', 'snapshot'],
-          ['context', 'productContent'], ['productContent', 'snapshot'], ['productContent', 'retrieval'],
-          ['context', 'contextRefill'], ['contextRefill', 'snapshot'], ['context', 'actionPlan'], ['actionPlan', 'gate'], ['context', 'retrieval'], ['retrieval', 'generate'], ['generate', 'gate'],
+          ['start', 'api'], ['api', 'check'], ['check', 'context'], ['context', 'orchestrator'], ['orchestrator', 'snapshot'],
+          ['orchestrator', 'productContent'], ['productContent', 'snapshot'], ['productContent', 'retrieval'],
+          ['orchestrator', 'contextRefill'], ['contextRefill', 'snapshot'], ['orchestrator', 'actionPlan'], ['actionPlan', 'gate'], ['orchestrator', 'retrieval'], ['retrieval', 'generate'], ['generate', 'gate'],
           ['gate', 'record'], ['record', 'response']
         ]
       },
@@ -2611,6 +2649,7 @@
         layout: 'LayeredDigraph',
         nodes: [
           { key: 'start', text: '标准化上下文', sub: '消息 + 商品 + 订单 + 规则', kind: 'service' },
+          { key: 'graph', text: 'LangGraph StateGraph', sub: 'thread_id / conditional edges / checkpoint', kind: 'service' },
           { key: 'valid', text: '上下文是否足够', sub: '关键字段校验', kind: 'neutral' },
           { key: 'missing', text: '缺少关键上下文', sub: '记录 missing_context', kind: 'risk' },
           { key: 'intent', text: '识别意图', sub: '商品 / 物流 / 售后 / 投诉', kind: 'service' },
@@ -2627,7 +2666,7 @@
           { key: 'record', text: 'decision_record', sub: 'trace / rule_hits / model_version', kind: 'data' }
         ],
         links: [
-          ['start', 'valid'], ['valid', 'missing', '不足'], ['missing', 'candidate', '可补充'],
+          ['start', 'graph'], ['graph', 'valid'], ['valid', 'missing', '不足'], ['missing', 'candidate', '可补充'],
           ['missing', 'handoff', '不可判断'], ['valid', 'intent', '足够'], ['intent', 'risk'],
           ['risk', 'p0'], ['p0', 'handoff', '命中'], ['p0', 'retrieve', '未命中'],
           ['retrieve', 'generate'], ['generate', 'actionPlan'], ['actionPlan', 'score'], ['generate', 'score'], ['score', 'gate'],
@@ -2651,6 +2690,7 @@
           { key: 'product', text: '商品快照\nPRODUCT_SNAPSHOT', sub: 'product_refs / business_updated_at', kind: 'data' },
           { key: 'order', text: '订单快照\nORDER_SNAPSHOT', sub: 'order_id / business_updated_at', kind: 'data' },
           { key: 'decision', text: '决策记录\nDECISION_RECORD', sub: 'trace JSONB / selected_snapshot_refs', kind: 'risk' },
+          { key: 'checkpoint', text: '编排检查点\nDECISION_GRAPH_CHECKPOINT', sub: 'thread_id / graph_version / state', kind: 'data' },
           { key: 'suggestion', text: '候选回复\nAGENT_SUGGESTION', sub: 'reply_text / evidence JSONB', kind: 'service' },
           { key: 'capability', text: '动作能力\nACTION_CAPABILITY', sub: 'action_type / payload_schema', kind: 'risk' },
           { key: 'actionRequest', text: '动作请求\nACTION_REQUEST', sub: 'target / payload / status', kind: 'service' },
@@ -2674,6 +2714,7 @@
           ['productProfile', 'product', '引用资料'], ['skuProfile', 'product', '引用 SKU'], ['priceSnapshot', 'product', '引用价格'],
           ['conversation', 'message', 'contains'], ['message', 'product', 'references'],
           ['message', 'order', 'references'], ['conversation', 'decision', 'produces'],
+          ['decision', 'checkpoint', 'checkpoints'],
           ['decision', 'suggestion', 'includes'], ['store', 'capability', 'configures'],
           ['decision', 'actionRequest', 'plans'], ['actionRequest', 'actionResult', 'receives'],
           ['decision', 'human', 'receives'],
@@ -2694,7 +2735,7 @@
           { key: 'connector', text: 'Connector Layer', sub: '订单 / 商品 / 规则查询', kind: 'service' },
           { key: 'capability', text: 'Capability Manifest', sub: 'action_type / schema / callback', kind: 'service' },
           { key: 'externalApi', text: '外部系统 API', sub: '超时 / 重试 / 熔断', kind: 'external' },
-          { key: 'decision', text: '决策编排', sub: '复用同步决策能力', kind: 'service' },
+          { key: 'decision', text: 'LangGraph 决策编排', sub: '复用同步 graph / 子图扩展', kind: 'service' },
           { key: 'action', text: 'Action Dispatcher', sub: 'idempotency_key / result', kind: 'async' },
           { key: 'db', text: 'PostgreSQL / pgvector', sub: '任务 / 决策 / 知识', kind: 'data' },
           { key: 'webhook', text: 'Webhook Dispatcher', sub: '签名 / 重试 / 死信', kind: 'async' },
@@ -2744,6 +2785,7 @@
         connector: [2, 5],
         decision: [1, 6],
         llm: [2, 6],
+        checkpoint: [0, 7],
         gate: [1, 7],
         pg: [0, 8],
         vector: [1, 8],
@@ -2757,6 +2799,7 @@
         idem: [2, 2],
         validation: [2, 3],
         context: [2, 4],
+        orchestrator: [0.55, 5],
         conversationRepo: [0.9, 4],
         productContent: [3.35, 4.7],
         assetRepo: [4.7, 4.7],
@@ -2780,15 +2823,16 @@
         api: [1, 1],
         check: [1, 2],
         context: [1, 3],
-        productContent: [2, 3],
-        snapshot: [0, 4],
+        orchestrator: [1, 4],
+        productContent: [2, 4],
+        snapshot: [0, 5],
         contextRefill: [3, 4],
-        actionPlan: [2, 5],
-        retrieval: [1, 5],
-        generate: [1, 6],
-        gate: [1, 7],
-        record: [1, 8],
-        response: [1, 9]
+        actionPlan: [2, 6],
+        retrieval: [1, 6],
+        generate: [1, 7],
+        gate: [1, 8],
+        record: [1, 9],
+        response: [1, 10]
       },
       messageTrace: {
         lookup: [1, 0],
@@ -2806,20 +2850,21 @@
       },
       decision: {
         start: [1, 0],
-        valid: [1, 1],
-        missing: [0, 2],
-        intent: [1, 2],
-        risk: [1, 3],
-        p0: [1, 4],
-        retrieve: [1, 5],
-        generate: [1, 6],
-        actionPlan: [2, 7],
-        score: [1, 7],
-        gate: [1, 8],
-        auto: [0, 9],
-        candidate: [1, 9],
-        handoff: [2, 9],
-        record: [1, 10]
+        graph: [1, 1],
+        valid: [1, 2],
+        missing: [0, 3],
+        intent: [1, 3],
+        risk: [1, 4],
+        p0: [1, 5],
+        retrieve: [1, 6],
+        generate: [1, 7],
+        actionPlan: [2, 8],
+        score: [1, 8],
+        gate: [1, 9],
+        auto: [0, 10],
+        candidate: [1, 10],
+        handoff: [2, 10],
+        record: [1, 11]
       },
       dataModel: {
         org: [1, 0],
@@ -2837,6 +2882,7 @@
         order: [2, 4],
         decision: [1, 5],
         suggestion: [0, 6],
+        checkpoint: [0, 7],
         capability: [3, 4],
         actionRequest: [3, 5],
         actionResult: [3, 6],
@@ -3685,6 +3731,7 @@
         <h4>落地原则</h4>
         <ul>${technologyArchitecture.principles.map(item => `<li>${item}</li>`).join('')}</ul>
         <a class="doc-link" href="application-technology-architecture.md">打开 Markdown 文档</a>
+        <a class="doc-link" href="customer-admin-design.md">打开客户后台设计</a>
       `;
     }
 
@@ -4206,7 +4253,7 @@
           id: 'cs',
           frameId: 'frame-request',
           title: '1. 外部客服系统',
-          subtitles: ['接收消息 / 整理上下文 / 真实发送', ''],
+          subtitles: ['接收消息 / 最小会话 / 真实发送', ''],
           kind: 'external',
           x: mainX,
           y: 270,
@@ -4216,8 +4263,8 @@
         {
           id: 'request',
           frameId: 'frame-request',
-          title: '2. 调用决策接口',
-          subtitles: ['POST(提交)', '/v1/reply-decisions(创建回复决策)'],
+          title: '2. 创建回复决策',
+          subtitles: ['POST /v1/reply-decisions', '最小问答 + 可选上下文'],
           kind: 'process',
           x: mainX,
           y: 450,
@@ -4227,8 +4274,8 @@
         {
           id: 'agent',
           frameId: 'frame-agent',
-          title: '客服 Agent(客服智能体)',
-          subtitles: ['黑盒决策服务', ''],
+          title: '3. 轻量判断与聚合',
+          subtitles: ['意图 / 缺口 / 5 秒预算', '先不跑生成模型'],
           kind: 'service',
           x: mainX,
           y: 780,
@@ -4238,8 +4285,8 @@
         {
           id: 'response',
           frameId: 'frame-agent',
-          title: '3. 读取返回动作',
-          subtitles: ['decision_id(决策编号) /', 'action(处理动作)'],
+          title: '4. 返回状态与动作',
+          subtitles: ['context_requests[] / answer_ready', 'action_request / handoff'],
           kind: 'service',
           x: mainX,
           y: 960,
@@ -4249,8 +4296,8 @@
         {
           id: 'workbench',
           frameId: 'frame-action',
-          title: '4. 客服工作台 / 自动化发送',
-          subtitles: ['展示候选 / 自动发送 / 转人工', ''],
+          title: '5. 客服工作台 / 自动化',
+          subtitles: ['展示 / 自动发送 / 转人工', '并行补上下文'],
           kind: 'external',
           x: mainX,
           y: 1290,
@@ -4260,8 +4307,8 @@
         {
           id: 'business',
           frameId: 'frame-action',
-          title: '5. 外部业务系统',
-          subtitles: ['补上下文 / 执行业务', 'API(应用接口)'],
+          title: '6. 回填上下文 / 动作结果',
+          subtitles: ['/contexts/* 回填', '/actions/results'],
           kind: 'external',
           x: branchLeft,
           y: 1600,
@@ -4271,7 +4318,7 @@
         {
           id: 'feedback',
           frameId: 'frame-action',
-          title: '6. 反馈回传',
+          title: '7. 反馈回传',
           subtitles: ['最终回复 / 采用 / 修改 / 升级', ''],
           kind: 'data',
           x: branchMiddle,
@@ -4380,7 +4427,7 @@
           target: 'cs',
           sourceAnchor: 'bottom',
           targetAnchor: 'top',
-          label: ['平台消息', 'HTTP(超文本传输)', 'Webhook(回调)']
+          label: ['平台消息', 'HTTP / Webhook']
         },
         {
           id: 'edge-cs-request',
@@ -4389,7 +4436,7 @@
           target: 'request',
           sourceAnchor: 'bottom',
           targetAnchor: 'top',
-          label: ['HTTP(超文本传输)', 'JSON(结构化数据)']
+          label: ['最小问答请求', 'message + conversation', 'mode']
         },
         {
           id: 'edge-request-agent',
@@ -4398,7 +4445,7 @@
           target: 'agent',
           sourceAnchor: 'bottom',
           targetAnchor: 'top',
-          label: ['请求黑盒服务']
+          label: ['HTTP JSON', '创建 decision_id']
         },
         {
           id: 'edge-agent-response',
@@ -4407,7 +4454,7 @@
           target: 'response',
           sourceAnchor: 'bottom',
           targetAnchor: 'top',
-          label: ['HTTP(超文本传输)', 'JSON(结构化数据)']
+          label: ['decision_status', 'action']
         },
         {
           id: 'edge-response-workbench',
@@ -4416,7 +4463,7 @@
           target: 'workbench',
           sourceAnchor: 'bottom',
           targetAnchor: 'top',
-          label: ['按 action(处理动作) 分流']
+          label: ['answer_ready / candidate', 'context_request / handoff']
         },
         {
           id: 'edge-workbench-business',
@@ -4426,7 +4473,18 @@
           sourceAnchor: 'bottom',
           targetAnchor: 'top',
           offsetX: -56,
-          label: ['补上下文 / 动作', 'HTTP(超文本传输)']
+          label: ['context_requests[]', '并行回填 / 执行动作']
+        },
+        {
+          id: 'edge-business-agent',
+          labelId: 'label-business-agent',
+          source: 'business',
+          target: 'agent',
+          sourceAnchor: 'top',
+          targetAnchor: 'left',
+          offsetX: -120,
+          offsetY: -120,
+          label: ['contexts/* 回填', 'actions/results', '同一 decision_id']
         },
         {
           id: 'edge-workbench-feedback',
@@ -4436,7 +4494,7 @@
           sourceAnchor: 'bottom',
           targetAnchor: 'top',
           offsetY: 56,
-          label: ['反馈回传', 'POST(提交)', 'HTTP(超文本传输)']
+          label: ['反馈回传', 'POST /feedback/human-replies']
         },
         {
           id: 'edge-workbench-trace',
@@ -4446,7 +4504,7 @@
           sourceAnchor: 'bottom',
           targetAnchor: 'top',
           offsetX: 56,
-          label: ['追踪查询', 'GET(查询)', 'HTTP(超文本传输)']
+          label: ['追踪查询', 'GET /message-traces']
         }
       ];
 
@@ -4585,6 +4643,12 @@
             connectionPoint: { name: 'boundary' }
           },
           connector: { name: 'normal' },
+          router: {
+            name: 'manhattan',
+            args: {
+              padding: 24
+            }
+          },
           zIndex: 10,
           data: {
             role: 'flow-edge'

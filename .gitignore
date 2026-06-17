@@ -1,12 +1,12 @@
 .DS_Store
 .codegraph/
-.venv/
 .env
-.env.*
-!.env.example
+*.env
+.venv/
 .pytest_cache/
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
 *.egg-info/
 reports/evals/
-evals/cases/generated/
+reports/*.png

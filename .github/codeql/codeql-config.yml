@@ -3,6 +3,8 @@ name: ecommerce-cs-agent-codeql
 paths:
   - .github/workflows
   - docs/scripts
+  - ecommerce_cs_agent
+  - scripts
 
 paths-ignore:
   - docs/vendor

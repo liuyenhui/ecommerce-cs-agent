@@ -99,7 +99,7 @@ order_snapshot
 | JSON 规则引擎 | 规则可配置，可后台编辑 | 表达复杂逻辑会别扭 | 中等 | 适合运营配置低风险规则 |
 | OPA / Rego | 策略即代码，审计和测试能力强 | 学习成本高，不适合生成回复本身 | 高 | 适合“是否允许自动回复”的安全闸门 |
 | Drools / DMN | 企业级规则系统，很成熟 | Java 体系重，接入成本高 | 高 | 除非规则极复杂，否则不建议一开始用 |
-| LangGraph | 适合多步骤 Agent、人审、状态流 | 新一些，依赖栈更复杂 | 中高 | Agent 流程复杂后可用 |
+| LangGraph | 适合多步骤 Agent、补上下文等待、动作结果恢复、人审、状态流和节点级 trace | 需要管理 checkpoint、graph version 和状态 schema 演进 | 中高 | 推荐作为内部 Decision Orchestrator |
 | LlamaIndex / Haystack | RAG、知识库、检索增强成熟 | 不负责业务风险决策 | 中高 | 适合知识召回，不适合当最终决策器 |
 | Rasa | 对传统意图识别、对话管理成熟 | 电商客服里商品、订单、RAG、LLM 结合会比较重 | 高 | 如果要做传统机器人可选，不是首选 |
 
@@ -109,6 +109,7 @@ order_snapshot
 
 ```text
 PostgreSQL + JSONB + pgvector
++ LangGraph StateGraph 内部决策编排
 + 代码规则闸门
 + RAG 检索
 + LLM 生成候选回复
@@ -121,8 +122,28 @@ PostgreSQL + JSONB + pgvector
 Qdrant / Milvus：更强向量检索
 ClickHouse：指标分析
 OPA：策略治理
-LangGraph：复杂 Agent 编排
+LangGraph 子图 / 异步 Worker：更复杂多 Agent 协作和后台长任务
 ```
+
+### LangGraph 定位
+
+LangGraph 不作为对外 API 边界。外部系统仍只接入 `POST /v1/reply-decisions`、typed context refill、`actions/results` 和反馈接口。
+
+推荐用 LangGraph 承载：
+
+- `decision_id` 到 graph `thread_id` 的状态恢复。
+- `context_requests[]` 等待和 `/contexts/*` 回填后的 resume。
+- `action_request` 等待和 `/actions/results` 回传后的 resume。
+- 高风险回复、动作执行前确认等 human-in-the-loop interrupt。
+- 意图、风险、RAG、生成、规则闸门等节点级 trace。
+- 后续多模型、多平台、多上下文类型扩展。
+
+不建议用 LangGraph 替代：
+
+- 对外 HTTP API 契约。
+- 规则闸门和权限控制。
+- 商品知识人工审核。
+- 外部系统价格、订单、物流的权威来源。
 
 ## 置信度设计
 
@@ -148,4 +169,3 @@ LangGraph：复杂 Agent 编排
 - LangGraph: https://docs.langchain.com/langgraph
 - Haystack: https://docs.haystack.deepset.ai/docs/intro
 - LlamaIndex Workflows: https://docs.llamaindex.ai/en/stable/module_guides/workflow/
-
