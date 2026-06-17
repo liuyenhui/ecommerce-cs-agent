@@ -73,6 +73,8 @@ def test_postgres_repository_uses_tenant_request_lookup_and_jsonb_state() -> Non
 
     assert restored is not None
     assert restored.context_refills[("ctx-001", "idem-001")] == {"accepted": True}
+    assert "org.id::text = decision.organization_id::text" in connection.executed[0][0]
+    assert "st.id::text = decision.store_id::text" in connection.executed[0][0]
     assert connection.executed[0][1] == ("org-001", "store-001", "req-001")
     compat_insert = [item for item in connection.executed if "INSERT INTO app_decision_state" in item[0]][0]
     insert_params = compat_insert[1]
