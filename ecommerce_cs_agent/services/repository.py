@@ -319,8 +319,8 @@ class PostgresDecisionRepository:
                 (SELECT st.id FROM store st JOIN organization org ON org.id = st.organization_id
                   WHERE org.external_organization_id = %s AND st.platform = %s AND st.external_store_id = %s),
                 (SELECT conv.id FROM conversation conv
-                  JOIN organization org ON org.id = conv.organization_id
-                  JOIN store st ON st.id = conv.store_id
+                  JOIN organization org ON org.id::text = conv.organization_id::text
+                  JOIN store st ON st.id::text = conv.store_id::text
                   WHERE org.external_organization_id = %s
                     AND st.platform = %s
                     AND st.external_store_id = %s
@@ -379,15 +379,15 @@ class PostgresDecisionRepository:
                 (SELECT st.id FROM store st JOIN organization org ON org.id = st.organization_id
                   WHERE org.external_organization_id = %s AND st.platform = %s AND st.external_store_id = %s),
                 (SELECT conv.id FROM conversation conv
-                  JOIN organization org ON org.id = conv.organization_id
-                  JOIN store st ON st.id = conv.store_id
+                  JOIN organization org ON org.id::text = conv.organization_id::text
+                  JOIN store st ON st.id::text = conv.store_id::text
                   WHERE org.external_organization_id = %s
                     AND st.platform = %s
                     AND st.external_store_id = %s
                     AND conv.external_conversation_id = %s),
                 (SELECT msg.id FROM message msg
-                  JOIN organization org ON org.id = msg.organization_id
-                  JOIN store st ON st.id = msg.store_id
+                  JOIN organization org ON org.id::text = msg.organization_id::text
+                  JOIN store st ON st.id::text = msg.store_id::text
                   WHERE org.external_organization_id = %s
                     AND st.platform = %s
                     AND st.external_store_id = %s
