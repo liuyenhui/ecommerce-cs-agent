@@ -113,7 +113,21 @@ class PsycopgMigrationConnection:
         with self._connect(self._database_url) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT version, checksum FROM schema_migration")
-                return {row[0]: row[1] for row in cur.fetchall()}
+                records = {row[0]: row[1] for row in cur.fetchall()}
+                if any(checksum is None for checksum in records.values()):
+                    records = normalize_legacy_records(records, self._core_schema_exists(cur))
+                return records
+
+    def _core_schema_exists(self, cur: object) -> bool:
+        cur.execute(
+            """
+            SELECT to_regclass('public.organization') IS NOT NULL
+               AND to_regclass('public.store') IS NOT NULL
+               AND to_regclass('public.decision_record') IS NOT NULL
+            """
+        )
+        row = cur.fetchone()
+        return bool(row and row[0])
 
     def execute_migration(self, migration: MigrationFile) -> None:
         with self._connect(self._database_url) as conn:
@@ -196,6 +210,19 @@ def plan_migrations(
             )
         )
     return plan
+
+
+def normalize_legacy_records(
+    records: Mapping[str, str | None],
+    core_schema_exists: bool,
+) -> dict[str, str | None]:
+    if core_schema_exists:
+        return dict(records)
+    return {
+        version: checksum
+        for version, checksum in records.items()
+        if checksum is not None
+    }
 
 
 def apply_migrations(
