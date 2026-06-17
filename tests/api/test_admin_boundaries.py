@@ -161,7 +161,9 @@ def test_production_settings_fail_fast_without_required_secrets(monkeypatch):
     for key in (
         "AGENT_API_TOKEN",
         "ADMIN_SESSION_SECRET",
+        "SESSION_SECRET",
         "SYSTEM_ADMIN_SESSION_SECRET",
+        "JWT_SECRET",
         "ADMIN_INITIAL_EMAIL",
         "ADMIN_INITIAL_PASSWORD_HASH",
         "SYSTEM_ADMIN_INITIAL_EMAIL",
@@ -176,6 +178,30 @@ def test_production_settings_fail_fast_without_required_secrets(monkeypatch):
         assert "Missing required production settings" in str(exc)
     else:
         raise AssertionError("production settings should require external secrets")
+
+
+def test_production_settings_accept_existing_runtime_secret_keys(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("AGENT_API_TOKEN", "agent-token")
+    monkeypatch.setenv("SESSION_SECRET", "admin-session")
+    monkeypatch.setenv("JWT_SECRET", "system-session")
+    monkeypatch.setenv("ADMIN_INITIAL_EMAIL", "admin@example.test")
+    monkeypatch.setenv("ADMIN_INITIAL_PASSWORD_HASH", "plain:admin-password")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    for key in (
+        "ADMIN_SESSION_SECRET",
+        "SYSTEM_ADMIN_SESSION_SECRET",
+        "SYSTEM_ADMIN_INITIAL_EMAIL",
+        "SYSTEM_ADMIN_INITIAL_PASSWORD_HASH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    settings = load_settings()
+
+    assert settings.admin_session == "admin-session"
+    assert settings.system_admin_session == "system-session"
+    assert settings.system_admin_initial_email == "admin@example.test"
+    assert settings.system_admin_initial_password_hash == "plain:admin-password"
 
 
 def test_development_settings_accept_local_test_defaults(monkeypatch):

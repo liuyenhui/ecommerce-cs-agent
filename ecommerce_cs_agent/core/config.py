@@ -23,18 +23,18 @@ class Settings:
 def load_settings() -> Settings:
     environment = os.environ.get("APP_ENV", os.environ.get("ENVIRONMENT", "development"))
     production = environment.lower() in {"production", "prod"}
-    required = [
-        "AGENT_API_TOKEN",
-        "ADMIN_SESSION_SECRET",
-        "SYSTEM_ADMIN_SESSION_SECRET",
-        "ADMIN_INITIAL_EMAIL",
-        "ADMIN_INITIAL_PASSWORD_HASH",
-        "SYSTEM_ADMIN_INITIAL_EMAIL",
-        "SYSTEM_ADMIN_INITIAL_PASSWORD_HASH",
-        "DATABASE_URL",
+    required_groups = [
+        ("AGENT_API_TOKEN",),
+        ("ADMIN_SESSION_SECRET", "SESSION_SECRET"),
+        ("SYSTEM_ADMIN_SESSION_SECRET", "JWT_SECRET"),
+        ("ADMIN_INITIAL_EMAIL",),
+        ("ADMIN_INITIAL_PASSWORD_HASH",),
+        ("SYSTEM_ADMIN_INITIAL_EMAIL", "ADMIN_INITIAL_EMAIL"),
+        ("SYSTEM_ADMIN_INITIAL_PASSWORD_HASH", "ADMIN_INITIAL_PASSWORD_HASH"),
+        ("DATABASE_URL",),
     ]
     if production:
-        missing = [key for key in required if not os.environ.get(key)]
+        missing = _missing_required_groups(required_groups)
         if missing:
             raise RuntimeError(f"Missing required production settings: {', '.join(missing)}")
 
@@ -44,14 +44,35 @@ def load_settings() -> Settings:
         graph_version=os.environ.get("GRAPH_VERSION", "reply-decision-graph-v1"),
         model_version=os.environ.get("MODEL_VERSION", "reply-generator-v1"),
         agent_api_token=os.environ.get("AGENT_API_TOKEN", "test-agent-token"),
-        admin_session=os.environ.get("ADMIN_SESSION_SECRET", "test-admin-session"),
-        system_admin_session=os.environ.get("SYSTEM_ADMIN_SESSION_SECRET", "test-system-session"),
+        admin_session=_env_first("ADMIN_SESSION_SECRET", "SESSION_SECRET", default="test-admin-session"),
+        system_admin_session=_env_first("SYSTEM_ADMIN_SESSION_SECRET", "JWT_SECRET", default="test-system-session"),
         admin_initial_email=os.environ.get("ADMIN_INITIAL_EMAIL", "admin@example.test"),
         admin_initial_password_hash=os.environ.get("ADMIN_INITIAL_PASSWORD_HASH", "plain:admin-password"),
-        system_admin_initial_email=os.environ.get("SYSTEM_ADMIN_INITIAL_EMAIL", "system-admin@example.test"),
-        system_admin_initial_password_hash=os.environ.get(
+        system_admin_initial_email=_env_first(
+            "SYSTEM_ADMIN_INITIAL_EMAIL",
+            "ADMIN_INITIAL_EMAIL",
+            default="system-admin@example.test",
+        ),
+        system_admin_initial_password_hash=_env_first(
             "SYSTEM_ADMIN_INITIAL_PASSWORD_HASH",
-            "plain:system-admin-password",
+            "ADMIN_INITIAL_PASSWORD_HASH",
+            default="plain:system-admin-password",
         ),
         database_url=os.environ.get("DATABASE_URL"),
     )
+
+
+def _env_first(*keys: str, default: str) -> str:
+    for key in keys:
+        value = os.environ.get(key)
+        if value:
+            return value
+    return default
+
+
+def _missing_required_groups(groups: list[tuple[str, ...]]) -> list[str]:
+    missing: list[str] = []
+    for group in groups:
+        if not any(os.environ.get(key) for key in group):
+            missing.append("|".join(group))
+    return missing
