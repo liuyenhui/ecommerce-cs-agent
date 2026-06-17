@@ -115,6 +115,24 @@ def test_legacy_schema_migration_record_with_missing_checksum_is_skipped(tmp_pat
     assert plan[0].status == "skipped"
 
 
+def test_legacy_schema_record_without_core_tables_is_treated_as_pending(tmp_path: Path) -> None:
+    write_migration(tmp_path, "001_initial.sql", "create table example(id uuid primary key);")
+
+    normalized = migrations.normalize_legacy_records({"001_initial.sql": None}, core_schema_exists=False)
+    plan = migrations.plan_migrations(tmp_path, normalized)
+
+    assert plan[0].status == "pending"
+
+
+def test_legacy_schema_record_with_core_tables_remains_skipped(tmp_path: Path) -> None:
+    write_migration(tmp_path, "001_initial.sql", "create table example(id uuid primary key);")
+
+    normalized = migrations.normalize_legacy_records({"001_initial.sql": None}, core_schema_exists=True)
+    plan = migrations.plan_migrations(tmp_path, normalized)
+
+    assert plan[0].status == "skipped"
+
+
 def test_runtime_alignment_migration_contains_v1_state_tables() -> None:
     sql = Path("migrations/002_v1_runtime_alignment.sql").read_text(encoding="utf-8").lower()
 
