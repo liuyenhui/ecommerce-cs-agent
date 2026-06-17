@@ -9,7 +9,7 @@ LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 
 
 def markdown_files():
-    ignored_parts = {".git", ".venv", "__pycache__", ".pytest_cache"}
+    ignored_parts = {".git", ".venv", "__pycache__", ".pytest_cache", "node_modules", "dist"}
     for path in ROOT.rglob("*.md"):
         if ignored_parts.intersection(path.parts):
             continue

@@ -74,8 +74,126 @@ def test_postgres_repository_uses_tenant_request_lookup_and_jsonb_state() -> Non
     assert restored is not None
     assert restored.context_refills[("ctx-001", "idem-001")] == {"accepted": True}
     assert connection.executed[0][1] == ("org-001", "store-001", "req-001")
-    insert_params = connection.executed[1][1]
+    compat_insert = [item for item in connection.executed if "INSERT INTO app_decision_state" in item[0]][0]
+    insert_params = compat_insert[1]
     assert insert_params[:4] == ("decision-001", "org-001", "store-001", "req-001")
+
+
+def test_postgres_repository_reads_canonical_decision_record_before_compat_state() -> None:
+    canonical_state = DecisionState(
+        request={"organization_id": "org-001", "store_id": "store-001", "request_id": "req-001"},
+        response={"decision_id": "decision-001", "action": "candidate", "decision_status": "candidate"},
+        context_refills={("ctx-orders", "idem-001"): {"accepted": True}},
+    )
+    connection = _FakeConnection(fetch_rows=[(_state_to_payload(canonical_state),)])
+    repository = PostgresDecisionRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    restored = repository.get_by_request("org-001", "store-001", "req-001")
+
+    assert restored == canonical_state
+    assert "FROM decision_record" in connection.executed[0][0]
+    assert "state_payload" not in connection.executed[0][0]
+
+
+def test_postgres_repository_falls_back_to_compat_state_when_canonical_missing() -> None:
+    compat_state = DecisionState(
+        request={"organization_id": "org-001", "store_id": "store-001", "request_id": "req-001"},
+        response={"decision_id": "decision-001", "action": "context_request"},
+    )
+    connection = _FakeConnection(fetch_rows=[None, (_state_to_payload(compat_state),)])
+    repository = PostgresDecisionRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    restored = repository.get_by_request("org-001", "store-001", "req-001")
+
+    assert restored == compat_state
+    assert "FROM decision_record" in connection.executed[0][0]
+    assert "FROM app_decision_state" in connection.executed[1][0]
+
+
+def test_postgres_repository_dual_writes_canonical_runtime_tables_and_compat_state() -> None:
+    state = DecisionState(
+        request={
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "request_id": "req-001",
+            "platform": "pdd",
+            "message": {"external_message_id": "msg-001", "content": "什么时候发货"},
+            "conversation": {"external_conversation_id": "conv-001", "buyer_ref": "buyer-001"},
+        },
+        response={
+            "decision_id": "decision-001",
+            "decision_status": "action_request",
+            "action": "action_request",
+            "risk_level": "medium",
+            "risk_flags": [],
+            "trace": {
+                "graph_version": "reply-decision-graph-v1",
+                "steps": [{"step_id": "classify", "name": "classify_request", "status": "completed"}],
+            },
+            "context_requests": [
+                {"context_request_id": "ctx-orders-001", "type": "orders"},
+            ],
+            "action_requests": [
+                {
+                    "action_id": "action-001",
+                    "action_type": "update-note",
+                    "idempotency_key": "idem-action-001",
+                    "payload": {"instruction": "备注"},
+                },
+            ],
+        },
+        context_refills={
+            ("ctx-orders-001", "idem-ctx-001"): {
+                "decision_id": "decision-001",
+                "context_request_id": "ctx-orders-001",
+                "accepted": True,
+                "_request_payload": {"source": "external-system", "items": [{"id": "order-001"}]},
+            }
+        },
+        action_results={
+            ("action-001", "idem-action-result-001"): {
+                "decision_id": "decision-001",
+                "action_id": "action-001",
+                "accepted": True,
+                "_request_payload": {"status": "success"},
+            }
+        },
+        feedback=[
+            {
+                "human_reply_id": "human-reply-001",
+                "decision_id": "decision-001",
+                "human_reply": "已回复",
+                "resolution_status": "resolved",
+            }
+        ],
+    )
+    connection = _FakeConnection(fetch_rows=[])
+    repository = PostgresDecisionRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    repository.save_state(
+        organization_id="org-001",
+        store_id="store-001",
+        request_id="req-001",
+        decision_id="decision-001",
+        state=state,
+    )
+
+    executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    assert "INSERT INTO organization" in executed_sql
+    assert "INSERT INTO store" in executed_sql
+    assert "INSERT INTO conversation" in executed_sql
+    assert "INSERT INTO message" in executed_sql
+    assert "INSERT INTO decision_record" in executed_sql
+    assert "INSERT INTO decision_trace_step" in executed_sql
+    assert "INSERT INTO decision_graph_checkpoint" in executed_sql
+    assert "INSERT INTO context_snapshot" in executed_sql
+    assert "INSERT INTO action_request" in executed_sql
+    assert "INSERT INTO action_result" in executed_sql
+    assert "INSERT INTO human_reply" in executed_sql
+    assert "INSERT INTO app_decision_state" in executed_sql
 
 
 class _FakeConnection:

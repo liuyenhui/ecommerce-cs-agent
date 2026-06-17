@@ -149,6 +149,22 @@ class DecisionService:
         state = self.repository.get_by_decision_id(decision_id)
         if not state:
             return None
+        return self._trace_from_state(decision_id, state)
+
+    def list_traces(
+        self,
+        organization_id: str | None = None,
+        store_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        states = self.repository.list_recent(organization_id, store_id, limit)
+        traces: list[dict[str, Any]] = []
+        for state in states:
+            decision_id = str(state.response.get("decision_id", ""))
+            traces.append(self._trace_from_state(decision_id, state))
+        return traces
+
+    def _trace_from_state(self, decision_id: str, state: DecisionState) -> dict[str, Any]:
         request = state.request
         response = state.response
         message = request.get("message", {})
@@ -236,11 +252,12 @@ class DecisionService:
             "missing_context": missing_context,
             "handoff_reason": handoff_reason,
             "trace": self._trace(
-                "classify_request",
-                "classify_request",
+                "classify_intent",
+                "classify_intent",
                 inputs_ref=[f"message:{payload.get('message', {}).get('external_message_id', '')}"],
                 outputs_ref=[f"decision:{decision_id}"],
                 rule_hits=risk_flags,
+                graph=True,
             ),
         }
 
@@ -303,8 +320,39 @@ class DecisionService:
         inputs_ref: list[str] | None = None,
         outputs_ref: list[str] | None = None,
         rule_hits: list[str] | None = None,
+        graph: bool = False,
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        if graph:
+            steps = []
+            graph_steps = [
+                ("normalize", inputs_ref or [], ["normalized_request"]),
+                ("retrieve_context", ["normalized_request"], ["context_candidates"]),
+                ("classify_intent", ["normalized_request", "context_candidates"], outputs_ref or ["intent"]),
+                ("risk_policy", ["intent"], ["risk_policy_result"]),
+                ("generate_candidate", ["risk_policy_result"], outputs_ref or ["candidate"]),
+                ("persist_trace", outputs_ref or ["decision"], [f"checkpoint:{self.settings.graph_version}"]),
+            ]
+            for item_step_id, item_inputs, item_outputs in graph_steps:
+                steps.append(
+                    {
+                        "step_id": item_step_id,
+                        "name": item_step_id,
+                        "status": "completed",
+                        "started_at": now,
+                        "ended_at": now,
+                        "inputs_ref": item_inputs,
+                        "outputs_ref": item_outputs,
+                        "error": None,
+                    }
+                )
+            return {
+                "matched_knowledge_ids": [],
+                "rule_hits": rule_hits or [],
+                "graph_version": self.settings.graph_version,
+                "model_version": self.settings.model_version,
+                "steps": steps,
+            }
         return {
             "matched_knowledge_ids": [],
             "rule_hits": rule_hits or [],

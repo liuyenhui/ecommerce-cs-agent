@@ -10,7 +10,18 @@ def test_api_and_admin_dockerfiles_exist() -> None:
     assert "ecommerce_cs_agent.api.app:app" in api
     assert "python -m ecommerce_cs_agent.db.cli migrate" not in api
     assert "COPY --chown=app:app migrations ./migrations" in api
+    assert "npm run build" in admin
     assert "nginx" in admin
+
+
+def test_admin_web_is_vite_react_app() -> None:
+    package = yaml.safe_load(Path("admin-web/package.json").read_text(encoding="utf-8"))
+    app = Path("admin-web/src/main.tsx").read_text(encoding="utf-8")
+
+    assert package["scripts"]["build"] == "vite build"
+    assert "客户后台" in app
+    assert "系统后台" in app
+    assert "fetch(" in app
 
 
 def test_helm_values_define_dev_runtime_contract() -> None:
@@ -52,3 +63,14 @@ def test_helm_templates_include_api_admin_and_migration_job() -> None:
     assert "python\", \"-m\", \"ecommerce_cs_agent.db.cli\", \"migrate" in (
         chart_dir / "templates/migration-job.yaml"
     ).read_text(encoding="utf-8")
+
+
+def test_ci_runs_with_pgvector_postgres_service() -> None:
+    pr_checks = Path(".github/workflows/pr-checks.yml").read_text(encoding="utf-8")
+    publish = Path(".github/workflows/publish-images.yml").read_text(encoding="utf-8")
+
+    for workflow in (pr_checks, publish):
+        assert "pgvector/pgvector:pg16" in workflow
+        assert "PG_DSN" in workflow
+        assert 'DATABASE_URL="$PG_DSN"' in workflow
+        assert "python -m ecommerce_cs_agent.db.cli migrate" in workflow

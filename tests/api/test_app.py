@@ -73,7 +73,11 @@ def test_missing_order_logistics_returns_parallel_context_requests(monkeypatch) 
         "orders",
         "logistics",
     ]
-    assert payload["trace"]["steps"][0]["name"] == "classify_request"
+    assert [step["name"] for step in payload["trace"]["steps"][:3]] == [
+        "normalize",
+        "retrieve_context",
+        "classify_intent",
+    ]
 
 
 def test_redline_complaint_returns_handoff(monkeypatch) -> None:

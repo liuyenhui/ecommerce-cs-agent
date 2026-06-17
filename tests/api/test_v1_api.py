@@ -75,6 +75,28 @@ def test_reply_decision_requests_missing_order_and_logistics_context_and_is_idem
     assert body["trace"]["steps"]
 
 
+def test_reply_decision_trace_contains_replayable_graph_steps():
+    response = client().post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=minimal_reply_request("req-graph", "这个商品有什么材质？"),
+    )
+
+    assert response.status_code == 200
+    steps = response.json()["trace"]["steps"]
+    names = [step["name"] for step in steps]
+    assert names == [
+        "normalize",
+        "retrieve_context",
+        "classify_intent",
+        "risk_policy",
+        "generate_candidate",
+        "persist_trace",
+    ]
+    assert all(step["status"] == "completed" for step in steps)
+    assert all(step["outputs_ref"] for step in steps)
+
+
 def test_high_risk_message_is_not_auto_replied():
     response = client().post(
         "/v1/reply-decisions",

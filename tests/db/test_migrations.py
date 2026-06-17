@@ -127,3 +127,41 @@ def test_runtime_alignment_migration_contains_v1_state_tables() -> None:
         "create table if not exists app_audit_log",
     ]:
         assert snippet in sql
+
+
+def test_canonical_runtime_alignment_migration_contains_external_mapping_and_indexes() -> None:
+    sql = Path("migrations/003_canonical_runtime_alignment.sql").read_text(encoding="utf-8").lower()
+
+    for snippet in [
+        "alter table organization add column if not exists external_organization_id",
+        "idx_organization_external_organization_id",
+        "idx_store_external_lookup",
+        "idx_decision_record_tenant_status_created",
+        "idx_decision_trace_step_decision_created",
+        "idx_context_snapshot_decision_type",
+        "idx_action_result_decision_action",
+        "alter table product add column if not exists public_product_id",
+        "alter table product_knowledge_candidate add column if not exists public_candidate_id",
+        "alter table product_asset add column if not exists public_asset_id",
+        "alter table product_price_snapshot add column if not exists public_price_snapshot_id",
+        "create table if not exists knowledge_entry",
+        "create table if not exists knowledge_embedding",
+        "idx_knowledge_entry_store_status_created",
+    ]:
+        assert snippet in sql
+
+
+def test_admin_auth_runtime_migration_contains_membership_invitation_and_session_extensions() -> None:
+    sql = Path("migrations/004_admin_auth_runtime.sql").read_text(encoding="utf-8").lower()
+
+    for snippet in [
+        "create table if not exists admin_membership",
+        "create table if not exists admin_invitation",
+        "alter table admin_session add column if not exists active_store_id",
+        "alter table admin_session add column if not exists last_seen_at",
+        "alter table admin_session add column if not exists request_metadata",
+        "idx_admin_session_hash_active",
+        "idx_admin_membership_user_org",
+        "idx_admin_invitation_org_status_created",
+    ]:
+        assert snippet in sql
