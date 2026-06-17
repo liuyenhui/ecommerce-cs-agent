@@ -84,8 +84,8 @@ class PostgresDecisionRepository:
             """
             SELECT checkpoint.state
             FROM decision_record decision
-            JOIN organization org ON org.id = decision.organization_id
-            JOIN store st ON st.id = decision.store_id
+            JOIN organization org ON org.id::text = decision.organization_id::text
+            JOIN store st ON st.id::text = decision.store_id::text
             JOIN decision_graph_checkpoint checkpoint
               ON checkpoint.decision_id = decision.decision_id
              AND checkpoint.checkpoint_key = 'latest'
@@ -146,8 +146,8 @@ class PostgresDecisionRepository:
             f"""
             SELECT checkpoint.state
             FROM decision_record decision
-            JOIN organization org ON org.id = decision.organization_id
-            JOIN store st ON st.id = decision.store_id
+            JOIN organization org ON org.id::text = decision.organization_id::text
+            JOIN store st ON st.id::text = decision.store_id::text
             JOIN decision_graph_checkpoint checkpoint
               ON checkpoint.decision_id = decision.decision_id
             WHERE {' AND '.join(conditions)}

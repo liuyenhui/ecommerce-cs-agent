@@ -7,17 +7,71 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_organization_external_organization_id
 CREATE INDEX IF NOT EXISTS idx_store_external_lookup
     ON store (organization_id, platform, external_store_id);
 
+ALTER TABLE decision_record ADD COLUMN IF NOT EXISTS status text;
+UPDATE decision_record
+SET status = COALESCE(
+    status,
+    to_jsonb(decision_record)->>'decision_status',
+    to_jsonb(decision_record)->>'action',
+    'completed'
+)
+WHERE status IS NULL;
+ALTER TABLE decision_record ALTER COLUMN status SET DEFAULT 'completed';
+
+ALTER TABLE decision_record ADD COLUMN IF NOT EXISTS decision_type text;
+UPDATE decision_record
+SET decision_type = COALESCE(
+    decision_type,
+    to_jsonb(decision_record)->>'action',
+    'unknown'
+)
+WHERE decision_type IS NULL;
+ALTER TABLE decision_record ALTER COLUMN decision_type SET DEFAULT 'unknown';
+
+ALTER TABLE decision_record ADD COLUMN IF NOT EXISTS reasons jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE decision_record ADD COLUMN IF NOT EXISTS message_id uuid;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_decision_record_organization_request_id
+    ON decision_record (organization_id, request_id);
+
 CREATE INDEX IF NOT EXISTS idx_decision_record_tenant_status_created
     ON decision_record (organization_id, store_id, status, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_decision_trace_step_decision_step_order
+    ON decision_trace_step (decision_id, step_order);
 
 CREATE INDEX IF NOT EXISTS idx_decision_trace_step_decision_created
     ON decision_trace_step (decision_id, created_at DESC);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_context_snapshot_decision_context_request
+    ON context_snapshot (decision_id, context_request_id);
+
 CREATE INDEX IF NOT EXISTS idx_context_snapshot_decision_type
     ON context_snapshot (decision_id, context_type);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_decision_graph_checkpoint_decision_key
+    ON decision_graph_checkpoint (decision_id, checkpoint_key);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_action_request_decision_action
+    ON action_request (decision_id, action_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_action_result_decision_action_idempotency
+    ON action_result (decision_id, action_id, idempotency_key);
+
 CREATE INDEX IF NOT EXISTS idx_action_result_decision_action
     ON action_result (decision_id, action_id);
+
+ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS organization_id uuid;
+ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS store_id uuid;
+ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS decision_id text;
+ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS replied_by_ref text;
+ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS final_reply_redacted text;
+ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS adopted_suggestion boolean;
+ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS outcome text NOT NULL DEFAULT 'submitted';
+ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS feedback_payload jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_human_reply_decision_id
+    ON human_reply (decision_id);
 
 ALTER TABLE product ADD COLUMN IF NOT EXISTS public_product_id text;
 
