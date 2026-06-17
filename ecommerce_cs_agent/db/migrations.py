@@ -38,16 +38,16 @@ class MigrationPlanItem:
 
 class MigrationConnection(Protocol):
     def ensure_schema_migration(self) -> None:
-        ...
+        pass
 
     def get_applied_migrations(self) -> Mapping[str, str]:
-        ...
+        pass
 
     def execute_migration(self, migration: MigrationFile) -> None:
-        ...
+        pass
 
     def record_migration(self, migration: MigrationFile) -> None:
-        ...
+        pass
 
 
 class InMemoryMigrationConnection:
