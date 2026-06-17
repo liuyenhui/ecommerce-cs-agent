@@ -153,6 +153,26 @@ CREATE TABLE IF NOT EXISTS knowledge_entry (
     UNIQUE (organization_id, store_id, source_product_candidate_id)
 );
 
+ALTER TABLE knowledge_entry ADD COLUMN IF NOT EXISTS organization_id uuid;
+ALTER TABLE knowledge_entry ADD COLUMN IF NOT EXISTS product_id uuid;
+ALTER TABLE knowledge_entry ADD COLUMN IF NOT EXISTS source_product_candidate_id uuid;
+ALTER TABLE knowledge_entry ADD COLUMN IF NOT EXISTS scope text NOT NULL DEFAULT 'product';
+ALTER TABLE knowledge_entry ADD COLUMN IF NOT EXISTS content text NOT NULL DEFAULT '';
+UPDATE knowledge_entry
+SET content = COALESCE(NULLIF(content, ''), to_jsonb(knowledge_entry)->>'body', '')
+WHERE content = '';
+ALTER TABLE knowledge_entry ADD COLUMN IF NOT EXISTS source_type text NOT NULL DEFAULT 'manual';
+UPDATE knowledge_entry
+SET source_type = COALESCE(source_type, to_jsonb(knowledge_entry)->>'source', 'manual')
+WHERE source_type = 'manual';
+ALTER TABLE knowledge_entry ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'approved';
+UPDATE knowledge_entry
+SET status = CASE
+    WHEN COALESCE((to_jsonb(knowledge_entry)->>'enabled')::boolean, true) THEN status
+    ELSE 'disabled'
+END
+WHERE to_jsonb(knowledge_entry) ? 'enabled';
+
 CREATE TABLE IF NOT EXISTS knowledge_embedding (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id uuid NOT NULL REFERENCES organization(id),
