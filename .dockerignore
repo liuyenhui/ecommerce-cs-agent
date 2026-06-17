@@ -1,12 +1,11 @@
 .DS_Store
 .codegraph/
-.venv/
-.env
-.env.*
-!.env.example
+.git/
 .pytest_cache/
+.venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
-reports/evals/
+reports/
 evals/cases/generated/
+terraform.tfstate*

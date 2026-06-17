@@ -1,0 +1,38 @@
+imagePullSecrets: []
+
+proxy:
+  enabled: false
+  httpProxy: ""
+  httpsProxy: ""
+  noProxy: ""
+
+api:
+  replicas: 1
+  envFromSecret: ecommerce-cs-agent-runtime
+  image:
+    repository: ghcr.io/liuyenhui/ecommerce-cs-agent-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8000
+  ingress:
+    enabled: false
+    host: ""
+    tlsSecretName: ""
+
+admin:
+  replicas: 1
+  image:
+    repository: ghcr.io/liuyenhui/ecommerce-cs-agent-admin
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  ingress:
+    enabled: false
+    host: ""
+    tlsSecretName: ""
+
+migration:
+  enabled: true
+  backoffLimit: 2

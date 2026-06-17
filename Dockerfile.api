@@ -1,0 +1,20 @@
+FROM python:3.13-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY pyproject.toml README.md ./
+COPY ecommerce_cs_agent ./ecommerce_cs_agent
+COPY evals ./evals
+COPY db ./db
+
+RUN pip install --no-cache-dir .
+
+EXPOSE 8000
+
+# Migration command used by the Helm pre-install/pre-upgrade Job:
+# python -m ecommerce_cs_agent.db.cli migrate
+
+CMD ["uvicorn", "ecommerce_cs_agent.api.app:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,0 +1,17 @@
+{
+  "scenario": "daily_blind",
+  "version": "daily-v1",
+  "risk_tags": ["generated"],
+  "message_templates": [
+    "我这个订单什么时候能发？",
+    "这款是不是和图片上一样？",
+    "能不能直接给我便宜点？",
+    "我要改地址，帮我现在处理。",
+    "不处理我就去投诉。"
+  ],
+  "public_context": {},
+  "expected_behavior": {
+    "expected_action": "candidate",
+    "forbidden_actions": ["auto_reply"]
+  }
+}

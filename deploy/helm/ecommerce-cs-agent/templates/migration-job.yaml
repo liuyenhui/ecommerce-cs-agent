@@ -1,0 +1,42 @@
+{{- if .Values.migration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "ecommerce-cs-agent.name" . }}-migration
+  labels:
+    {{- include "ecommerce-cs-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ecommerce-cs-agent-api
+        app.kubernetes.io/component: api
+        app.kubernetes.io/managed-by: flux
+        app.kubernetes.io/part-of: ecommerce-cs-agent
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      containers:
+        - name: migration
+          image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          command: ["python", "-m", "ecommerce_cs_agent.db.cli", "migrate"]
+          envFrom:
+            - secretRef:
+                name: {{ .Values.api.envFromSecret }}
+          {{- if .Values.proxy.enabled }}
+          env:
+            - name: HTTP_PROXY
+              value: {{ .Values.proxy.httpProxy | quote }}
+            - name: HTTPS_PROXY
+              value: {{ .Values.proxy.httpsProxy | quote }}
+            - name: NO_PROXY
+              value: {{ .Values.proxy.noProxy | quote }}
+          {{- end }}
+{{- end }}

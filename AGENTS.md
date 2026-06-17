@@ -30,6 +30,8 @@ Keep architecture content in one source file.
 
 - `docs/system-architecture.html` is the only interactive architecture document. It contains architecture views, nodes, links, labels, summaries, details, and the right-side database schema panel.
 - Do not add generated architecture duplicates for the same content. Update `docs/system-architecture.html` directly.
+- `docs/customer-admin-design.md` is the source document for customer Admin backend design. Keep detailed public landing/login entry, tenant/store switching, roles, settings, product-content maintenance, knowledge review, rule configuration, action capability configuration, and audit requirements there.
+- Architecture documents may summarize customer Admin behavior, but they should link to `docs/customer-admin-design.md` instead of duplicating the full Admin design.
 
 ### Required workflow after architecture changes
 
@@ -40,11 +42,46 @@ node docs/scripts/validate-x6-architecture-runtime.mjs
 node docs/scripts/validate-business-flow-x6-labels.mjs
 ```
 
+### API and business-flow diagram coupling
+
+- When changing `/v1/reply-decisions`, `context_requests[]`, typed context refill APIs, action result APIs, decision statuses, or the external-system interaction flow, update these documents in the same change:
+  - `docs/http-api-design.md`
+  - `docs/system-architecture.md`
+  - `docs/application-technology-architecture.md`
+  - `docs/system-architecture.html`
+- When changing LangGraph / Decision Orchestrator design, graph state, checkpoint storage, `thread_id`, `graph_version`, interrupt/resume behavior, or node-level trace behavior, update the same documents plus `docs/technical-options.md`.
+- In `docs/system-architecture.html`, keep the API text and the `#api-business-flow` diagram synchronized. Update `apiDocumentation.quickStart.businessFlow`, API endpoint definitions, and `initBusinessFlowDiagram()` `flowNodes` / `flowEdges` together.
+- The `#api-business-flow` diagram must use right-angle X6 edges for process links. Do not introduce diagonal business-flow connectors when updating nodes, labels, or branches.
+- After changing the business-flow diagram, update `docs/scripts/validate-business-flow-x6-labels.mjs` if the intended nodes, edges, labels, routing style, or layout expectations changed.
+
 ### Database model rules
 
 - Data model table nodes must show a Chinese short name plus the English table name, for example `决策记录\nDECISION_RECORD`.
 - The right-side `databaseSchema` section in `docs/system-architecture.html` must remain the detailed database design reference.
 - If a table is added, renamed, or removed, update `dataModel.nodes`, `databaseSchema`, and validation assertions together.
+
+### Customer Admin design rules
+
+- Customer Admin is a first-version required capability, not a future-only module.
+- When changing public landing entry, Admin login routes, session boundaries, roles, tenant/store permissions, settings, product-content maintenance, knowledge review, rule configuration, action capability configuration, or audit behavior, update `docs/customer-admin-design.md` in the same change.
+- Keep `docs/system-architecture.md`, `docs/application-technology-architecture.md`, `docs/http-api-design.md`, and `docs/system-architecture.html` linked to the Admin design when their summaries mention Admin behavior.
+
+### Admin UI/UX design rules
+
+- The public landing page is Notion-led: black/neutral palette, generous whitespace, clear AI Agent narrative, product capability modules, trust proof, product previews, and a black primary CTA.
+- The logged-in customer Admin must not become Notion-like. It remains an IBM / Carbon-style dense enterprise console with scan-friendly tables, queues, forms, low shadows, and hairline dividers.
+- Ant Design may be used as the component capability layer, but it is not the visual style source. Final Admin visuals must be controlled by project theme tokens, custom CSS, and the project-owned visual baseline.
+- When changing public landing pages, login pages, Admin shell, tables, forms, review queues, or configuration screens, update `docs/customer-admin-design.md` in the same change and keep architecture summaries consistent when they mention UI/UX rules.
+- External websites and `DESIGN.md` files are reference material only. Do not copy their brands, Logo, licensed fonts, assets, copywriting, rounded-corner language, or brand-specific semantics into this project.
+
+### System independence rules
+
+- The customer service Agent is an independent system. Any external system can integrate through the public Agent APIs without depending on `open_erp_agent`.
+- Do not depend on `open_erp_agent` login state, organization tables, store tables, WeChat users, sessions, tokens, Admin UI, or server internals for Agent Admin login, tenant resolution, permissions, SSO, or runtime behavior.
+- ERP systems are only design references or example external integrators. Do not describe ERP as the default identity provider, default upstream, required deployment component, or source of truth for Agent data.
+- External-system integration, Admin login, tenant/store permissions, and SSO design must remain provider-agnostic. Use generic external references and stable Agent-owned identifiers instead of vendor-specific or project-specific identity fields.
+- If documentation mentions ERP, it must be phrased as one possible external-system example and must not alter the standalone Agent API contract or Admin ownership model.
+- Public landing pages, login pages, Admin routes, and Admin sessions belong to the customer service Agent itself. They must not use ERP or any external system login state as the default entry, identity source, or session authority.
 
 ## 开发规则
 - 开发的应用,后台,服务,要可支持 k8s 无状态 部署
@@ -57,6 +94,17 @@ node docs/scripts/validate-business-flow-x6-labels.mjs
 - 仓库公开后，CodeQL workflow 上传 SARIF 到 GitHub Code Scanning，并继续解析 SARIF 让 alert 阻断 job；如果仓库改回 private 且未启用 Code Security，上传会失败。
 - 邮件拦截通知发送到 `46164072@qq.com`；SMTP 连接信息必须放在 GitHub Secrets：`SMTP_HOST`、`SMTP_PORT`、`SMTP_USERNAME`、`SMTP_PASSWORD`、`MAIL_FROM`、`SECURITY_NOTIFY_TO`。不要把 SMTP 密钥写入 Git、文档或聊天记录。
 - SonarQube、Snyk/Dependabot、镜像扫描、Helm/K8s 配置扫描是后续 CI/CD 优化项，暂不作为当前第一阶段 required check。
+
+## 镜像发布规则
+
+- 不要从 Codex 本机执行 `docker push` 发布业务镜像。API/Admin 镜像发布走 GitHub Actions workflow：`.github/workflows/publish-images.yml`。
+- GHCR 镜像名为 `ghcr.io/liuyenhui/ecommerce-cs-agent-api:<tag>` 和 `ghcr.io/liuyenhui/ecommerce-cs-agent-admin:<tag>`，作为备份和 GitHub 原生发布记录。
+- 国内 dev/K8s 默认拉取阿里云镜像：`registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-api:<tag>` 和 `registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-admin:<tag>`。
+- `Publish Images` 在有 GitHub Secrets `ALIYUN_REGISTRY_USERNAME`、`ALIYUN_REGISTRY_PASSWORD` 时同时推送阿里云 `:<tag>`、`:sha-<commit>`、`:deploy`；没有这两个 Secrets 时只推 GHCR。
+- 需要发布指定 dev tag 时，推送分支 `codex/publish-<tag>`，workflow 会把分支后缀作为镜像 tag；也可以在 GitHub Actions 手动运行 `Publish Images` 并输入 `tag`。
+- `Publish Images` 必须先通过 Python tests、Helm lint、Helm template，再构建并推送 API/Admin 镜像。
+- K8s dev 使用 Helm values 中的 `aliyun-registry-auth` 拉阿里云镜像，保留 `ghcr-auth` 作为备份。发布后创建临时 pull-check Pod，设置 `imagePullPolicy: Always` 验证远端 tag 可拉取；验证完成后删除临时 Pod。
+- Watchtower 方案仅适用于服务器 docker compose 自动更新；本项目 dev 环境是 Kubernetes/Helm，不使用 Watchtower，部署由 Helm/GitOps 更新 image tag 完成。
 
 ## Public Repository Safety
 
