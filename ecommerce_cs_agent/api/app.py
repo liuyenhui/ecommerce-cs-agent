@@ -5,17 +5,17 @@ from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from ecommerce_cs_agent.api.auth import (
     Principal,
-    require_admin_session,
     require_agent_api,
     require_system_admin_session,
 )
 from ecommerce_cs_agent.api.errors import api_error
 from ecommerce_cs_agent.core.config import Settings, load_settings
 from ecommerce_cs_agent.services.admin import admin_repository_for
+from ecommerce_cs_agent.services.admin_auth import admin_auth_service_for
 from ecommerce_cs_agent.services.decision import DecisionService
 
 
@@ -24,6 +24,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="ecommerce-cs-agent", version="0.1.0")
     decisions = DecisionService(settings)
     admin_data = admin_repository_for(settings)
+    admin_auth = admin_auth_service_for(settings)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -47,11 +48,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return require_agent_api(settings, request.headers.get("Authorization"))
 
     def admin_principal(request: Request) -> Principal:
-        return require_admin_session(
-            settings,
-            request.headers.get("Cookie"),
-            request.headers.get("Authorization"),
-        )
+        principal, _session = admin_auth.require_session(request.headers.get("Cookie"), request.headers.get("Authorization"))
+        return principal
+
+    def admin_session(request: Request) -> Any:
+        _principal, session = admin_auth.require_session(request.headers.get("Cookie"), request.headers.get("Authorization"))
+        return session
 
     def system_principal(request: Request) -> Principal:
         return require_system_admin_session(
@@ -164,72 +166,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/v1/admin/auth/login")
     async def admin_login(request: Request) -> JSONResponse:
         payload = await request.json()
-        if not _password_matches(
-            payload.get("email"),
-            payload.get("password"),
-            settings.admin_initial_email,
-            settings.admin_initial_password_hash,
-        ):
-            raise api_error(401, "unauthorized", "invalid admin credentials")
-        response = JSONResponse(content=_admin_auth_payload())
-        response.set_cookie("agent_admin_session", settings.admin_session, httponly=True, samesite="lax")
+        content, token = admin_auth.login(payload)
+        response = JSONResponse(content=content)
+        response.set_cookie("agent_admin_session", token, httponly=True, samesite="lax")
         return response
 
     @app.post("/v1/admin/auth/logout")
-    def admin_logout(_principal: Principal = Depends(admin_principal)) -> JSONResponse:
-        response = JSONResponse(content={"accepted": True})
+    def admin_logout(request: Request, _principal: Principal = Depends(admin_principal)) -> Response:
+        cookies = _parse_cookie(request.headers.get("Cookie"))
+        admin_auth.logout(cookies.get("agent_admin_session", ""))
+        response = Response(status_code=204)
         response.delete_cookie("agent_admin_session")
         return response
 
     @app.get("/v1/admin/auth/me")
-    def get_admin_me(_principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
-        return {**_admin_auth_payload(), "active_organization_id": "org-001", "active_store_id": "store-001"}
+    def get_admin_me(session: Any = Depends(admin_session)) -> dict[str, Any]:
+        return admin_auth.me(session)
 
     @app.get("/v1/admin/organizations")
-    def list_admin_organizations(_principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
-        return {"items": [_organization()], "page": _page(1)}
+    def list_admin_organizations(session: Any = Depends(admin_session)) -> dict[str, Any]:
+        return admin_auth.list_organizations(session)
 
     @app.get("/v1/admin/stores")
-    def list_admin_stores(_principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
-        return {"items": [_store()], "page": _page(1)}
+    def list_admin_stores(request: Request, session: Any = Depends(admin_session)) -> dict[str, Any]:
+        return admin_auth.list_stores(session, request.query_params.get("organization_id"))
 
     @app.patch("/v1/admin/stores/{store_id}/settings")
-    async def update_admin_store_settings(store_id: str, _request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
-        return {
-            "store_id": store_id,
-            "organization_id": "org-001",
-            "settings": {},
-            "updated_at": _now(),
-            "audit_log_id": "audit-admin-001",
-        }
+    async def update_admin_store_settings(store_id: str, request: Request, session: Any = Depends(admin_session)) -> dict[str, Any]:
+        payload = await request.json()
+        return admin_auth.update_store_settings(session, store_id, payload)
 
     @app.get("/v1/admin/users")
-    def list_admin_users(_principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
-        return {"items": [_admin_user()], "page": _page(1)}
+    def list_admin_users(request: Request, session: Any = Depends(admin_session)) -> dict[str, Any]:
+        return admin_auth.list_users(session, request.query_params.get("organization_id"))
 
     @app.post("/v1/admin/invitations")
-    async def create_admin_invitation(_request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
-        payload = await _request.json()
-        return {
-            "invitation_id": "inv-001",
-            "organization_id": "org-001",
-            "email": payload.get("email", "invitee@example.test"),
-            "roles": payload.get("roles", ["operator"]),
-            "store_ids": payload.get("store_ids", []),
-            "status": "pending",
-            "expires_at": _now(),
-            "audit_log_id": "audit-admin-001",
-        }
+    async def create_admin_invitation(request: Request, session: Any = Depends(admin_session)) -> JSONResponse:
+        payload = await request.json()
+        return JSONResponse(status_code=201, content=admin_auth.create_invitation(session, payload))
 
     @app.patch("/v1/admin/users/{user_id}/roles")
-    async def update_admin_user_roles(user_id: str, _request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
-        user = {**_admin_user(), "id": user_id}
-        return {"user": user, "audit_log_id": "audit-admin-001"}
+    async def update_admin_user_roles(user_id: str, request: Request, session: Any = Depends(admin_session)) -> dict[str, Any]:
+        payload = await request.json()
+        return admin_auth.update_roles(session, user_id, payload)
 
     @app.get("/v1/admin/audit-logs")
-    def list_admin_audit_logs(_principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
-        items = admin_data.list_audit_logs("admin") or [_audit_log("admin_audit", "admin-001")]
-        return {"items": items, "page": _page(len(items))}
+    def list_admin_audit_logs(request: Request, session: Any = Depends(admin_session)) -> dict[str, Any]:
+        auth_logs = admin_auth.list_audit_logs(session, request.query_params.get("organization_id"))
+        repo_logs = admin_data.list_audit_logs("admin")
+        if repo_logs:
+            auth_logs["items"].extend(repo_logs)
+            auth_logs["page"] = _page(len(auth_logs["items"]))
+            auth_logs["page_info"] = _page(len(auth_logs["items"]))
+        return auth_logs
 
     @app.post("/v1/product-content/products")
     async def upsert_product_content_product(request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
@@ -237,26 +226,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return admin_data.upsert_product(payload, _principal.user_id or "admin-001")
 
     @app.post("/v1/product-content/assets")
-    async def create_product_asset(_request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
-        return {"asset_id": "asset-001", "status": "draft"}
+    async def create_product_asset(request: Request, _principal: Principal = Depends(admin_principal)) -> JSONResponse:
+        payload = await request.json()
+        asset = admin_data.create_asset(payload, _principal.user_id or "admin-001")
+        return JSONResponse(status_code=201, content={
+            "asset_id": asset["asset_id"],
+            "product_id": asset["product_id"],
+            "asset_type": asset["asset_type"],
+            "review_status": asset["review_status"],
+        })
 
     @app.post("/v1/product-content/assets/{asset_id}/markdown")
-    async def create_product_asset_markdown(asset_id: str, _request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
-        return {"asset_id": asset_id, "markdown_id": "md-001", "conversion_status": "pending_review"}
+    async def create_product_asset_markdown(asset_id: str, request: Request, _principal: Principal = Depends(admin_principal)) -> JSONResponse:
+        payload = await request.json()
+        try:
+            markdown = admin_data.create_asset_markdown(asset_id, payload, _principal.user_id or "admin-001")
+        except KeyError as exc:
+            raise api_error(404, "not_found", "asset not found") from exc
+        return JSONResponse(status_code=201, content={
+            "asset_id": markdown["asset_id"],
+            "markdown_id": markdown["markdown_id"],
+            "conversion_status": markdown["conversion_status"],
+            "candidate_ids": markdown["candidate_ids"],
+        })
 
     @app.post("/v1/product-content/knowledge-candidates/{candidate_id}/reviews")
-    async def review_product_knowledge_candidate(candidate_id: str, _request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
+    async def review_product_knowledge_candidate(candidate_id: str, _request: Request, _principal: Principal = Depends(admin_principal)) -> JSONResponse:
         payload = await _request.json()
         candidate = admin_data.review_knowledge_candidate(candidate_id, payload, _principal.user_id or "admin-001")
-        return {
+        return JSONResponse(status_code=201, content={
+            "review_id": f"review-{candidate_id}",
             "candidate_id": candidate["candidate_id"],
+            "action": payload.get("action", "approve" if candidate["review_status"] == "accepted" else "reject"),
             "accepted": candidate["review_status"] == "accepted",
-            "knowledge_entry_id": f"knowledge-{candidate_id}" if candidate["review_status"] == "accepted" else None,
-        }
+            "knowledge_entry_id": candidate.get("knowledge_entry_id") or (f"knowledge-{candidate_id}" if candidate["review_status"] == "accepted" else None),
+            "reviewed_at": candidate.get("reviewed_at") or _now(),
+        })
 
     @app.post("/v1/product-content/price-snapshots")
-    async def create_product_price_snapshot(_request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
-        return {"price_snapshot_id": "price-001", "status": "active"}
+    async def create_product_price_snapshot(_request: Request, _principal: Principal = Depends(admin_principal)) -> JSONResponse:
+        payload = await _request.json()
+        snapshot = admin_data.create_price_snapshot(payload, _principal.user_id or "admin-001")
+        return JSONResponse(status_code=201, content=snapshot)
 
     @app.get("/v1/product-content/products/{product_id}/health")
     def get_product_content_health(product_id: str, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
@@ -320,8 +331,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"store": _store(), "accepted": True}
 
     @app.get("/v1/system-admin/message-traces")
-    def list_system_message_traces(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        return {"items": [], "page": _page(0)}
+    def list_system_message_traces(request: Request, _principal: Principal = Depends(system_principal)) -> dict[str, Any]:
+        items = decisions.list_traces(
+            organization_id=request.query_params.get("organization_id"),
+            store_id=request.query_params.get("store_id"),
+        )
+        return {"items": items, "page": _page(len(items))}
 
     @app.get("/v1/system-admin/message-traces/{decision_id}")
     def get_system_message_trace(decision_id: str, _principal: Principal = Depends(system_principal)) -> dict[str, Any]:
@@ -336,7 +351,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/v1/system-admin/tasks/{task_id}/retry")
     async def retry_system_task(task_id: str, _request: Request, _principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        return {"task_id": task_id, "accepted": True, "status": "queued"}
+        raise api_error(404, "not_found", f"task {task_id} not found or is not retryable")
 
     @app.get("/v1/system-admin/audit-logs")
     def list_system_audit_logs(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:
@@ -437,6 +452,18 @@ def _audit_log(log_type: str, actor_id: str) -> dict[str, Any]:
 
 def _page(total: int) -> dict[str, int]:
     return {"page": 1, "page_size": 50, "total": total}
+
+
+def _parse_cookie(cookie: str | None) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    if not cookie:
+        return parsed
+    for part in cookie.split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        parsed[key.strip()] = value.strip()
+    return parsed
 
 
 async def _not_implemented() -> None:
