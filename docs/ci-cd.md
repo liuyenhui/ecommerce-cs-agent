@@ -11,22 +11,22 @@
 
 ## 1. 当前状态
 
-当前仓库已有 `.github/workflows/codeql.yml`，只做 GitHub CodeQL / GitHub Advanced Security SAST 门禁。
+当前仓库已有 CodeQL、PR checks、镜像发布和 dev GitOps 更新 workflow。CodeQL 负责 SAST；PR checks 负责可重复的契约 / 测试门禁；`Publish Images` 在 `main` 发布 API/Admin 镜像；`Deploy Dev GitOps` 在镜像发布成功后更新独立 GitOps 仓库的 dev values。
 
 | 项目 | 当前状态 |
 | --- | --- |
 | CodeQL SAST | 已有 workflow，触发 `pull_request` 到 `main`、`push` 到 `main` 和每周定时扫描。 |
 | 邮件通知 | 已有 `Notify security gate blocked` job，CodeQL 失败时使用 SMTP GitHub Secrets 发送拦截通知。 |
-| Markdown / OpenAPI 校验 | 待实现。 |
-| Python tests | 待实现为 CI 必跑 workflow。 |
-| Eval CLI unit tests | 待实现为 CI 必跑 workflow。 |
-| Helm lint / template | 待实现为 CI 必跑 workflow。 |
-| API / Admin image build | 待实现。 |
-| GHCR + 阿里云 Registry 推送 | 待实现。 |
-| GitOps image tag 更新 | 待实现。 |
-| K8s rollout 与 health / live eval | 待实现。 |
+| Markdown / OpenAPI 校验 | 已在 `.github/workflows/pr-checks.yml` 中执行。 |
+| Python tests | 已在 PR checks 和 `Publish Images` verify job 中执行。 |
+| Eval CLI unit tests | 已在 PR checks 中执行。 |
+| Helm lint / template | 已在 `Publish Images` verify job 中执行。 |
+| API / Admin image build | 已在 `.github/workflows/publish-images.yml` 中构建。 |
+| GHCR + 阿里云 Registry 推送 | 已在 `Publish Images` 中推送；阿里云凭据来自 GitHub Secrets。 |
+| GitOps image tag 更新 | 已由 `.github/workflows/deploy-dev.yml` 写入 `liuyenhui/fhg-gitops-repo` dev values。 |
+| K8s rollout 与 health / live eval | 由发布执行者在 Flux 同步后做上线验收并记录证据。 |
 
-当前第一阶段不要把 build、test、push、deploy 的完成状态和 CodeQL 混在一起。CodeQL 只覆盖 SAST；应用构建、镜像发布、GitOps 部署和发布后验证仍需要单独 workflow。
+第一阶段仍不要把 build、test、push、deploy 的完成状态和 CodeQL 混在一起。CodeQL 只覆盖 SAST；应用构建、镜像发布、GitOps 更新和发布后验证保持独立 workflow 与独立证据。
 
 ## 2. 目标流水线
 
@@ -50,8 +50,8 @@ PR
 | Workflow | 触发 | 职责 |
 | --- | --- | --- |
 | `pr-checks` | `pull_request` | Markdown / OpenAPI、unit / contract / integration、eval CLI unit tests、Helm lint / template。 |
-| `build-images` | `push` 到 `main`、release tag | 构建 API / Admin 镜像，推送 GHCR 和阿里云 Registry。 |
-| `deploy-dev` 或 `gitops-update` | 镜像发布成功后 | 更新 GitOps image tag / values，由 Flux 同步到 K8s，再执行 rollout、health 和 live eval。 |
+| `Publish Images` | `push` 到 `main`、`workflow_dispatch`、`codex/publish-*` | 构建 API / Admin 镜像，推送 GHCR 和阿里云 Registry。 |
+| `Deploy Dev GitOps` | `Publish Images` 成功后或 `workflow_dispatch` | 更新 GitOps image tag / values，由 Flux 同步到 K8s；rollout、health 和 live eval 由发布执行者验证。 |
 
 PR 阶段原则上不推送正式镜像、不改 GitOps 目标状态；main / release 阶段才发布镜像和触发部署。
 
@@ -78,12 +78,12 @@ GHCR 默认优先使用 GitHub Actions 内置 `GITHUB_TOKEN` 和 workflow `packa
 
 ### 3.3 GitOps / K8s
 
-本仓库不直接 `kubectl` 修改集群。后续如果确实需要由 GitHub Actions 触发 GitOps 仓库更新或读取 rollout 状态，可按实际方案选择以下 key：
+本仓库不直接 `kubectl` 修改集群。`Deploy Dev GitOps` 使用以下 GitHub Secret 推送 GitOps 仓库的 dev values 变更：
 
 - `GITOPS_TOKEN`
 - `KUBECONFIG`
 
-`KUBECONFIG` 只作为后续需要时的备选方案，不作为默认部署方式。默认路径应通过 GitOps repo 的 tag / values 变更驱动 Flux。
+`KUBECONFIG` 只作为后续需要时的备选方案，不作为默认部署方式。默认路径通过 GitOps repo 的 tag / values 变更驱动 Flux。
 
 ## 4. PR Checks
 

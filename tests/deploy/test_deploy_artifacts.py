@@ -8,7 +8,8 @@ def test_api_and_admin_dockerfiles_exist() -> None:
     admin = Path("admin-web/Dockerfile").read_text(encoding="utf-8")
 
     assert "ecommerce_cs_agent.api.app:app" in api
-    assert "python -m ecommerce_cs_agent.db.cli migrate" in api
+    assert "python -m ecommerce_cs_agent.db.cli migrate" not in api
+    assert "COPY --chown=app:app migrations ./migrations" in api
     assert "nginx" in admin
 
 
@@ -48,3 +49,6 @@ def test_helm_templates_include_api_admin_and_migration_job() -> None:
     assert (chart_dir / "templates/admin-service.yaml").exists()
     assert (chart_dir / "templates/admin-ingress.yaml").exists()
     assert (chart_dir / "templates/migration-job.yaml").exists()
+    assert "python\", \"-m\", \"ecommerce_cs_agent.db.cli\", \"migrate" in (
+        chart_dir / "templates/migration-job.yaml"
+    ).read_text(encoding="utf-8")

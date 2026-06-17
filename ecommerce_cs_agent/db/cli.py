@@ -4,7 +4,9 @@ import argparse
 import json
 import sys
 
-from ecommerce_cs_agent.db.migrations import apply_migrations
+from dataclasses import asdict
+
+from ecommerce_cs_agent.db.migrations import apply_migrations, connection_from_environment
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -14,8 +16,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "migrate":
-        applied = apply_migrations()
-        print(json.dumps({"applied": applied}, ensure_ascii=False))
+        applied = apply_migrations(connection=connection_from_environment())
+        print(json.dumps({"migrations": [asdict(item) for item in applied]}, ensure_ascii=False, default=str))
         return 0
     parser.error(f"unknown command: {args.command}")
     return 2

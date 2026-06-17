@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import uuid
 from typing import Any
 
 from ecommerce_cs_agent.core.config import Settings
+from ecommerce_cs_agent.services.decision_types import DecisionState
+from ecommerce_cs_agent.services.repository import (
+    DecisionRepository,
+    InMemoryDecisionRepository,
+    PostgresDecisionRepository,
+)
 
 
 HIGH_RISK_KEYWORDS = ("退款", "赔偿", "投诉", "平台介入", "处罚", "refund", "complaint")
@@ -15,40 +20,26 @@ PRODUCT_KEYWORDS = ("材质", "尺寸", "颜色", "规格", "参数", "material"
 ACTION_KEYWORDS = ("改备注", "备注", "改地址", "修改地址", "收货地址", "update note", "change address")
 
 
-@dataclass
-class DecisionState:
-    request: dict[str, Any]
-    response: dict[str, Any]
-    context_refills: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
-    action_results: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
-    feedback: list[dict[str, Any]] = field(default_factory=list)
-
-
 class DecisionService:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, repository: DecisionRepository | None = None):
         self.settings = settings
-        self._by_request: dict[tuple[str, str, str], DecisionState] = {}
-        self._by_decision_id: dict[str, DecisionState] = {}
+        self.repository = repository or _repository_for(settings)
 
     def create_reply_decision(self, payload: dict[str, Any]) -> dict[str, Any]:
-        key = (
-            str(payload.get("organization_id", "")),
-            str(payload.get("store_id", "")),
-            str(payload.get("request_id", "")),
-        )
-        if key in self._by_request:
-            return self._by_request[key].response
+        organization_id, store_id, request_id = _request_key(payload)
+        existing = self.repository.get_by_request(organization_id, store_id, request_id)
+        if existing:
+            return existing.response
 
-        decision_id = self._decision_id(key)
+        decision_id = self._decision_id((organization_id, store_id, request_id))
         content = str(payload.get("message", {}).get("content", ""))
         response = self._build_response(decision_id, payload, content)
         state = DecisionState(request=payload, response=response)
-        self._by_request[key] = state
-        self._by_decision_id[decision_id] = state
+        self._save_state(organization_id, store_id, request_id, decision_id, state)
         return response
 
     def refill_context(self, decision_id: str, context_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
-        state = self._by_decision_id.get(decision_id)
+        state = self.repository.get_by_decision_id(decision_id)
         if not state:
             return {
                 "decision_id": decision_id,
@@ -64,6 +55,7 @@ class DecisionService:
                     outputs_ref=[f"context:{context_type}:{payload.get('context_request_id')}"],
                 ),
             }
+        organization_id, store_id, request_id = _request_key(state.request)
         if ("organization_id" in payload or "store_id" in payload) and not self._same_tenant_store(state, payload):
             raise PermissionError("context refill does not belong to the decision tenant/store")
         known_request_ids = {item["context_request_id"] for item in state.response.get("context_requests", [])}
@@ -99,12 +91,14 @@ class DecisionService:
                 ),
             }
             state.context_refills[key] = {**accepted, "_request_payload": comparable}
+            self._save_state(organization_id, store_id, request_id, decision_id, state)
         return _public(state.context_refills[key])
 
     def submit_action_result(self, decision_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
-        state = self._by_decision_id.get(decision_id)
+        state = self.repository.get_by_decision_id(decision_id)
         if not state:
             return None
+        organization_id, store_id, request_id = _request_key(state.request)
         if payload.get("organization_id") and not self._same_tenant_store(state, payload):
             raise PermissionError("action result does not belong to the decision tenant/store")
         action_id = str(payload.get("action_id", ""))
@@ -132,15 +126,18 @@ class DecisionService:
                     outputs_ref=[f"action_result:{action_id}"],
                 ),
             }
+            self._save_state(organization_id, store_id, request_id, decision_id, state)
         return _public(state.action_results[key])
 
     def submit_feedback(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         decision_id = str(payload.get("decision_id", ""))
-        state = self._by_decision_id.get(decision_id)
+        state = self.repository.get_by_decision_id(decision_id)
         if not state:
             return None
+        organization_id, store_id, request_id = _request_key(state.request)
         human_reply_id = f"human-reply-{uuid.uuid4().hex[:12]}"
         state.feedback.append({"human_reply_id": human_reply_id, **payload})
+        self._save_state(organization_id, store_id, request_id, decision_id, state)
         return {
             "human_reply_id": human_reply_id,
             "decision_id": decision_id,
@@ -149,7 +146,7 @@ class DecisionService:
         }
 
     def get_trace(self, decision_id: str) -> dict[str, Any] | None:
-        state = self._by_decision_id.get(decision_id)
+        state = self.repository.get_by_decision_id(decision_id)
         if not state:
             return None
         request = state.request
@@ -331,6 +328,36 @@ class DecisionService:
         digest = hashlib.sha256("|".join(key).encode("utf-8")).hexdigest()[:24]
         return f"decision-{digest}"
 
+    def _save_state(
+        self,
+        organization_id: str,
+        store_id: str,
+        request_id: str,
+        decision_id: str,
+        state: DecisionState,
+    ) -> None:
+        self.repository.save_state(
+            organization_id=organization_id,
+            store_id=store_id,
+            request_id=request_id,
+            decision_id=decision_id,
+            state=state,
+        )
+
 
 def _public(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if not key.startswith("_")}
+
+
+def _request_key(payload: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(payload.get("organization_id", "")),
+        str(payload.get("store_id", "")),
+        str(payload.get("request_id", "")),
+    )
+
+
+def _repository_for(settings: Settings) -> DecisionRepository:
+    if settings.database_url and settings.environment.lower() not in {"test"}:
+        return PostgresDecisionRepository(settings.database_url)
+    return InMemoryDecisionRepository()

@@ -1,0 +1,92 @@
+name: Deploy Dev GitOps
+
+on:
+  workflow_dispatch:
+    inputs:
+      head_sha:
+        description: Commit SHA whose published images should be deployed.
+        required: true
+        type: string
+  workflow_run:
+    workflows:
+      - Publish Images
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-dev-gitops
+  cancel-in-progress: false
+
+jobs:
+  update-gitops:
+    name: Update GitOps Dev Values
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+    env:
+      GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+      GITOPS_REPO: liuyenhui/fhg-gitops-repo
+      VALUES_PATH: apps/overlays/dev/ecommerce-cs-agent/values.yaml
+    steps:
+      - name: Resolve image tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            head_sha="${{ inputs.head_sha }}"
+          else
+            head_sha="${{ github.event.workflow_run.head_sha }}"
+          fi
+          if [[ ! "$head_sha" =~ ^[0-9a-fA-F]{12,40}$ ]]; then
+            echo "Invalid head_sha" >&2
+            exit 1
+          fi
+          short_sha="${head_sha:0:12}"
+          echo "image_tag=sha-${short_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout GitOps repository
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ env.GITOPS_TOKEN }}
+          path: gitops
+
+      - name: Update dev image tags
+        shell: bash
+        working-directory: gitops
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          path = Path(os.environ["VALUES_PATH"])
+          tag = "${{ steps.tag.outputs.image_tag }}"
+          text = path.read_text(encoding="utf-8")
+          text = re.sub(r"(api:\n(?:  .*\n)*?    tag: )[-A-Za-z0-9_.]+", rf"\g<1>{tag}", text)
+          text = re.sub(r"(admin:\n(?:  .*\n)*?    tag: )[-A-Za-z0-9_.]+", rf"\g<1>{tag}", text)
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Commit and push GitOps update
+        shell: bash
+        working-directory: gitops
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- "$VALUES_PATH"; then
+            echo "GitOps values already reference ${{ steps.tag.outputs.image_tag }}"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$VALUES_PATH"
+          git commit -m "Deploy ecommerce-cs-agent ${{ steps.tag.outputs.image_tag }} to dev"
+          git push origin HEAD:main

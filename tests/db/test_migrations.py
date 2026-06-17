@@ -17,7 +17,7 @@ def test_dry_run_plans_pending_migrations_without_applying(tmp_path: Path) -> No
     records: dict[str, str] = {}
     plan = migrations.plan_migrations(tmp_path, records)
 
-    assert [item.version for item in plan] == ["001"]
+    assert [item.version for item in plan] == ["001_initial.sql"]
     assert plan[0].status == "pending"
     assert records == {}
 
@@ -36,7 +36,7 @@ def test_cli_dry_run_uses_local_plan_without_postgres_driver(tmp_path: Path, cap
     )
 
     assert exit_code == 0
-    assert "001 pending 001_initial.sql" in capsys.readouterr().out
+    assert "001_initial.sql pending 001_initial.sql" in capsys.readouterr().out
 
 
 def test_apply_migrations_is_idempotent_for_matching_checksums(tmp_path: Path) -> None:
@@ -46,10 +46,10 @@ def test_apply_migrations_is_idempotent_for_matching_checksums(tmp_path: Path) -
     first = migrations.apply_migrations(tmp_path, connection)
     second = migrations.apply_migrations(tmp_path, connection)
 
-    assert [item.version for item in first] == ["001"]
+    assert [item.version for item in first] == ["001_initial.sql"]
     assert first[0].status == "applied"
     assert second[0].status == "skipped"
-    assert connection.record_count("001") == 1
+    assert connection.record_count("001_initial.sql") == 1
     assert connection.executed_sql_count == 1
 
 
@@ -59,7 +59,7 @@ def test_checksum_mismatch_stops_before_running_sql(tmp_path: Path) -> None:
     migrations.apply_migrations(tmp_path, connection)
     file_path.write_text("create table changed(id uuid primary key);", encoding="utf-8")
 
-    with pytest.raises(migrations.ChecksumMismatchError, match="001"):
+    with pytest.raises(migrations.ChecksumMismatchError, match="001_initial.sql"):
         migrations.apply_migrations(tmp_path, connection)
 
     assert connection.executed_sql_count == 1
@@ -104,4 +104,26 @@ def test_initial_migration_contains_required_extensions_tables_and_constraints()
     ]
 
     for snippet in required_snippets:
+        assert snippet in sql
+
+
+def test_legacy_schema_migration_record_with_missing_checksum_is_skipped(tmp_path: Path) -> None:
+    write_migration(tmp_path, "001_initial.sql", "create table example(id uuid primary key);")
+
+    plan = migrations.plan_migrations(tmp_path, {"001_initial.sql": None})
+
+    assert plan[0].status == "skipped"
+
+
+def test_runtime_alignment_migration_contains_v1_state_tables() -> None:
+    sql = Path("migrations/002_v1_runtime_alignment.sql").read_text(encoding="utf-8").lower()
+
+    for snippet in [
+        "alter table schema_migration add column if not exists checksum",
+        "create table if not exists app_decision_state",
+        "unique (organization_id, store_id, request_id)",
+        "create table if not exists app_product",
+        "create table if not exists app_knowledge_candidate",
+        "create table if not exists app_audit_log",
+    ]:
         assert snippet in sql
