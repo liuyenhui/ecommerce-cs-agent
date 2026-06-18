@@ -119,10 +119,21 @@ def test_system_admin_core_health_and_readiness():
 
     assert me.status_code == 200
     assert me.json()["user"]["role"] == "super_admin"
+    assert me.json()["user"]["system_user_id"] == "sysadmin-001"
+    assert me.json()["roles"] == ["super_admin"]
+    assert "system:read" in me.json()["capabilities"]
     assert health.status_code == 200
     assert health.json()["status"] in {"healthy", "degraded"}
     assert readiness.status_code == 200
     assert readiness.json()["items"][0]["store_id"] == "store-001"
+    assert {item["code"] for item in readiness.json()["items"][0]["checks"]} == {
+        "product_content",
+        "price_snapshot",
+        "knowledge_review",
+        "rules",
+        "action_capabilities",
+        "api_integration",
+    }
 
 
 def test_admin_login_rejects_bad_credentials_and_sets_spec_cookie_for_valid_credentials():
@@ -167,7 +178,7 @@ def test_system_admin_logout_revokes_server_session():
     logout = client.post("/v1/system-admin/auth/logout", headers={"Cookie": cookie})
     me = client.get("/v1/system-admin/auth/me", headers={"Cookie": cookie})
 
-    assert logout.status_code == 200
+    assert logout.status_code == 204
     assert me.status_code == 401
 
 

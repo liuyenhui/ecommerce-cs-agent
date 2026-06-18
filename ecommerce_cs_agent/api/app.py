@@ -16,6 +16,7 @@ from ecommerce_cs_agent.core.config import Settings, load_settings
 from ecommerce_cs_agent.services.admin import admin_repository_for
 from ecommerce_cs_agent.services.admin_auth import admin_auth_service_for, system_admin_auth_service_for
 from ecommerce_cs_agent.services.decision import DecisionService
+from ecommerce_cs_agent.services.system_admin import system_admin_repository_for
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -25,6 +26,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     admin_data = admin_repository_for(settings)
     admin_auth = admin_auth_service_for(settings)
     system_admin_auth = system_admin_auth_service_for(settings)
+    system_admin_data = system_admin_repository_for(settings)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -283,10 +285,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return response
 
     @app.post("/v1/system-admin/auth/logout")
-    def system_admin_logout(request: Request, _principal: Principal = Depends(system_principal)) -> JSONResponse:
+    def system_admin_logout(request: Request, _principal: Principal = Depends(system_principal)) -> Response:
         cookies = _parse_cookie(request.headers.get("Cookie"))
         system_admin_auth.logout(cookies.get("agent_system_admin_session", ""))
-        response = JSONResponse(content={"accepted": True})
+        response = Response(status_code=204)
         response.delete_cookie("agent_system_admin_session")
         return response
 
@@ -299,33 +301,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return admin_data.system_health()
 
     @app.get("/v1/system-admin/readiness/stores")
-    def list_system_store_readiness(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        items = admin_data.store_readiness()
-        return {"items": items, "page": _page(len(items))}
+    def list_system_store_readiness(request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
+        return system_admin_data.store_readiness(session, _query_filters(request))
 
     @app.get("/v1/system-admin/users")
-    def list_system_admin_users(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        return {"items": [_system_user()], "page": _page(1)}
+    def list_system_admin_users(session: Any = Depends(system_session)) -> dict[str, Any]:
+        return system_admin_data.list_users(session)
 
     @app.post("/v1/system-admin/users")
-    async def create_system_admin_user(_request: Request, _principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        return {"user": _system_user(), "accepted": True}
+    async def create_system_admin_user(_request: Request, session: Any = Depends(system_session)) -> JSONResponse:
+        payload = await _request.json()
+        _require_fields(payload, ["email", "display_name", "roles", "reason"])
+        return JSONResponse(status_code=201, content=system_admin_data.create_user(session, payload))
 
     @app.get("/v1/system-admin/organizations")
-    def list_system_organizations(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        return {"items": [_organization()], "page": _page(1)}
+    def list_system_organizations(request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
+        return system_admin_data.list_organizations(session, _query_filters(request))
 
     @app.post("/v1/system-admin/organizations")
-    async def create_system_organization(_request: Request, _principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        return {"organization": _organization(), "accepted": True}
+    async def create_system_organization(_request: Request, session: Any = Depends(system_session)) -> JSONResponse:
+        payload = await _request.json()
+        _require_fields(payload, ["name", "status", "reason"])
+        return JSONResponse(status_code=201, content=system_admin_data.create_organization(session, payload))
 
     @app.get("/v1/system-admin/stores")
-    def list_system_stores(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        return {"items": [_store()], "page": _page(1)}
+    def list_system_stores(request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
+        return system_admin_data.list_stores(session, _query_filters(request))
 
     @app.post("/v1/system-admin/stores")
-    async def create_system_store(_request: Request, _principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        return {"store": _store(), "accepted": True}
+    async def create_system_store(_request: Request, session: Any = Depends(system_session)) -> JSONResponse:
+        payload = await _request.json()
+        _require_fields(payload, ["organization_id", "name", "platform", "status", "reason"])
+        return JSONResponse(status_code=201, content=system_admin_data.create_store(session, payload))
 
     @app.get("/v1/system-admin/message-traces")
     def list_system_message_traces(request: Request, _principal: Principal = Depends(system_principal)) -> dict[str, Any]:
@@ -333,7 +340,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             organization_id=request.query_params.get("organization_id"),
             store_id=request.query_params.get("store_id"),
         )
-        return {"items": items, "page": _page(len(items))}
+        page = _page(len(items))
+        return {"items": items, "page": page, "page_info": page}
 
     @app.get("/v1/system-admin/message-traces/{decision_id}")
     def get_system_message_trace(decision_id: str, _principal: Principal = Depends(system_principal)) -> dict[str, Any]:
@@ -343,17 +351,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return response
 
     @app.get("/v1/system-admin/tasks")
-    def list_system_tasks(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        return {"items": [], "page": _page(0)}
+    def list_system_tasks(request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
+        return system_admin_data.list_tasks(session, _query_filters(request))
 
     @app.post("/v1/system-admin/tasks/{task_id}/retry")
-    async def retry_system_task(task_id: str, _request: Request, _principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        raise api_error(404, "not_found", f"task {task_id} not found or is not retryable")
+    async def retry_system_task(task_id: str, _request: Request, session: Any = Depends(system_session)) -> JSONResponse:
+        payload = await _request.json()
+        _require_fields(payload, ["idempotency_key", "reason"])
+        return JSONResponse(status_code=202, content=system_admin_data.retry_task(session, task_id, payload))
 
     @app.get("/v1/system-admin/audit-logs")
-    def list_system_audit_logs(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        items = admin_data.list_audit_logs("system") or [_audit_log("system_audit", "sysadmin-001")]
-        return {"items": items, "page": _page(len(items))}
+    def list_system_audit_logs(request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
+        return system_admin_data.list_audit_logs(session, _query_filters(request))
 
     for method, path in [
         ("POST", "/v1/events/messages"),
@@ -449,6 +458,10 @@ def _audit_log(log_type: str, actor_id: str) -> dict[str, Any]:
 
 def _page(total: int) -> dict[str, int]:
     return {"page": 1, "page_size": 50, "total": total}
+
+
+def _query_filters(request: Request) -> dict[str, Any]:
+    return {key: value for key, value in request.query_params.items() if value not in {"", None}}
 
 
 def _parse_cookie(cookie: str | None) -> dict[str, str]:

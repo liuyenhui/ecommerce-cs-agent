@@ -39,6 +39,26 @@ def test_cli_dry_run_uses_local_plan_without_postgres_driver(tmp_path: Path, cap
     assert "001_initial.sql pending 001_initial.sql" in capsys.readouterr().out
 
 
+def test_db_cli_migrate_dry_run_accepts_database_url_and_migrations_dir(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from ecommerce_cs_agent.db import cli
+
+    write_migration(tmp_path, "001_initial.sql", "create table example(id uuid primary key);")
+
+    exit_code = cli.main(
+        [
+            "migrate",
+            "--database-url",
+            "postgresql://example.local/cs_agent",
+            "--migrations-dir",
+            str(tmp_path),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    assert '"version": "001_initial.sql"' in capsys.readouterr().out
+
+
 def test_apply_migrations_is_idempotent_for_matching_checksums(tmp_path: Path) -> None:
     write_migration(tmp_path, "001_initial.sql", "create table example(id uuid primary key);")
     connection = migrations.InMemoryMigrationConnection()
@@ -218,6 +238,28 @@ def test_admin_auth_runtime_migration_contains_membership_invitation_and_session
         "idx_admin_session_hash_active",
         "idx_admin_membership_user_org",
         "idx_admin_invitation_org_status_created",
+    ]:
+        assert snippet in sql
+
+
+def test_system_admin_ops_migration_contains_background_task_and_audit_indexes() -> None:
+    sql = Path("migrations/006_system_admin_ops.sql").read_text(encoding="utf-8").lower()
+
+    for snippet in [
+        "alter table system_admin_user add column if not exists roles",
+        "set roles = array[role]",
+        "alter table system_admin_audit_log add column if not exists idempotency_key",
+        "idx_system_admin_audit_action_idempotency",
+        "idx_store_id_organization_id",
+        "create table if not exists background_task",
+        "task_id text not null unique",
+        "retryable boolean not null default true",
+        "idx_background_task_idempotency_key",
+        "fk_background_task_store_tenant",
+        "idx_background_task_tenant_status_created",
+        "idx_background_task_type_status_created",
+        "idx_system_admin_audit_tenant_created",
+        "idx_system_admin_audit_actor_created",
     ]:
         assert snippet in sql
 

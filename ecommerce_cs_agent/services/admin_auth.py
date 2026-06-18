@@ -783,16 +783,7 @@ class InMemorySystemAdminAuthService:
         return principal, session
 
     def me(self, session: SystemAdminSession) -> dict[str, Any]:
-        return {
-            "user": {
-                "id": session.user_id,
-                "email": session.email,
-                "name": session.display_name,
-                "role": session.role,
-                "status": "active",
-            },
-            "permissions": ["system:read", "system:write"],
-        }
+        return _system_admin_me_payload(session)
 
 
 class PostgresSystemAdminAuthService:
@@ -895,16 +886,7 @@ class PostgresSystemAdminAuthService:
                 return Principal("system_admin", session.user_id, None, None, session.role), session
 
     def me(self, session: SystemAdminSession) -> dict[str, Any]:
-        return {
-            "user": {
-                "id": session.user_id,
-                "email": session.email,
-                "name": session.display_name,
-                "role": session.role,
-                "status": "active",
-            },
-            "permissions": ["system:read", "system:write"],
-        }
+        return _system_admin_me_payload(session)
 
     def _bootstrap_initial_system_admin(self, cur: Any) -> None:
         cur.execute(
@@ -947,6 +929,38 @@ def system_admin_auth_service_for(settings: Settings) -> InMemorySystemAdminAuth
     if settings.database_url and settings.environment.lower() not in {"test"}:
         return PostgresSystemAdminAuthService(settings)
     return InMemorySystemAdminAuthService(settings)
+
+
+def _system_admin_me_payload(session: SystemAdminSession) -> dict[str, Any]:
+    capabilities = _system_admin_capabilities(session.role)
+    return {
+        "user": {
+            "id": session.user_id,
+            "system_user_id": session.user_id,
+            "email": session.email,
+            "name": session.display_name,
+            "display_name": session.display_name,
+            "role": session.role,
+            "roles": [session.role],
+            "status": "active",
+            "last_login_at": None,
+        },
+        "roles": [session.role],
+        "capabilities": capabilities,
+        "permissions": capabilities,
+    }
+
+
+def _system_admin_capabilities(role: str) -> list[str]:
+    role_capabilities = {
+        "super_admin": ["system:read", "system:write", "system:user:write", "system:audit:read"],
+        "platform_operator": ["system:read", "tenant:write", "store:write", "task:retry"],
+        "technical_support": ["system:read", "trace:read", "task:retry"],
+        "rule_admin": ["system:read", "rule:write"],
+        "security_auditor": ["system:read", "system:audit:read"],
+        "release_admin": ["system:read", "release:write"],
+    }
+    return role_capabilities.get(role, ["system:read"])
 
 
 def _organization_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
