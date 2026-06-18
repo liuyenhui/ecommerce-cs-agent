@@ -279,6 +279,51 @@ pre {
   padding: 14px;
 }
 
+.contextPanel > h2,
+.userSummary {
+  grid-column: 1 / -1;
+}
+
+.userSummary {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #e5eaf0;
+  border-radius: 4px;
+  background: #f7f9fb;
+  padding: 10px;
+  min-width: 0;
+}
+
+.userSummary h3 {
+  margin-bottom: 0;
+}
+
+.userSummary dl {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.userSummary div {
+  display: grid;
+  grid-template-columns: minmax(64px, 92px) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.userSummary dt {
+  color: #667489;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.userSummary dd {
+  margin: 0;
+  color: #1f2937;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .filterBar {
   display: grid;
   grid-template-columns: auto repeat(4, minmax(120px, 1fr)) auto;

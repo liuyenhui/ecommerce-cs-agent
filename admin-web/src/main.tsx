@@ -226,6 +226,7 @@ function Navigation(props: {
 
 function TopBar({ workspace, session, onRefresh, onLogout }: { workspace: Workspace; session: JsonRecord | null; onRefresh: () => void; onLogout: () => void }) {
   const user = readRecord(session, "user") || {};
+  const userBadge = formatUserBadge(workspace, user);
   const title = workspace === "customer" ? "客户资料与知识运营" : "平台运维与发布治理";
   const subtitle = workspace === "customer" ? "组织、店铺、商品资料、知识审核和审计" : "租户开通、决策追踪、任务、健康和安全审计";
   return (
@@ -241,7 +242,7 @@ function TopBar({ workspace, session, onRefresh, onLogout }: { workspace: Worksp
         </button>
         {session ? (
           <>
-            <span className="userBadge">{String(user.display_name || user.email || "已登录")}</span>
+            <span className="userBadge">{userBadge}</span>
             <button className="iconButton" onClick={onLogout} title="退出登录">
               <LogOut size={16} />退出
             </button>
@@ -632,7 +633,7 @@ function SystemWorkspace({ session, activeTab, setActiveTab, setToast }: {
         <Metric label="店铺" value={String(arrayFrom(data.stores).length)} tone="info" />
         <Metric label="Trace" value={String(arrayFrom(data.traces).length)} tone="warn" />
         <Metric label="任务" value={String(arrayFrom(data.tasks).length)} tone="bad" />
-        <RecordSummary record={readRecord(session, "user")} />
+        <SystemUserSummary user={readRecord(session, "user")} />
       </ContextPanel>
       {selected ? <Drawer title="详情" record={selected} onClose={() => setSelected(null)} /> : null}
       {modal ? <SystemCreateModal type={modal} onClose={() => setModal(null)} setToast={setToast} refresh={refresh} /> : null}
@@ -894,6 +895,26 @@ function ContextPanel({ title, children }: { title: string; children: React.Reac
   );
 }
 
+type SummaryItem = { label: string; value: string };
+
+function SystemUserSummary({ user }: { user: JsonRecord }) {
+  const items = buildSystemUserSummary(user);
+  if (!items.length) return <p className="emptyText">暂无账号摘要</p>;
+  return (
+    <section className="userSummary" aria-label="当前系统账号摘要">
+      <h3>当前账号</h3>
+      <dl>
+        {items.map((item) => (
+          <div key={item.label}>
+            <dt>{item.label}</dt>
+            <dd>{item.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
 function Drawer({ title, record, onClose }: { title: string; record: JsonRecord; onClose: () => void }) {
   return (
     <aside className="drawer">
@@ -951,6 +972,56 @@ function readRecord(source: unknown, key: string): JsonRecord {
   if (!source || typeof source !== "object") return {};
   const value = (source as JsonRecord)[key];
   return value && typeof value === "object" ? value as JsonRecord : {};
+}
+
+function formatUserBadge(workspace: Workspace, user: JsonRecord) {
+  const displayName = safeText(user.display_name) || safeText(user.name);
+  if (displayName) return displayName;
+  if (workspace === "customer") return safeText(user.email) || "已登录";
+  return firstText(user.role, user.roles) || "系统账号";
+}
+
+export function buildSystemUserSummary(user: JsonRecord): SummaryItem[] {
+  const items: SummaryItem[] = [];
+  const displayName = safeText(user.display_name) || safeText(user.name);
+  const roles = stringList(user.roles || user.role);
+  const status = safeText(user.status);
+  const capabilitiesCount = countCapabilities(user.capabilities);
+  const lastLoginAt = safeText(user.last_login_at);
+
+  if (displayName) items.push({ label: "名称", value: displayName });
+  if (roles.length) items.push({ label: "角色", value: roles.join(", ") });
+  if (status) items.push({ label: "状态", value: status });
+  if (capabilitiesCount > 0) items.push({ label: "能力", value: `${capabilitiesCount} 项` });
+  if (lastLoginAt) items.push({ label: "最近登录", value: lastLoginAt });
+
+  return items;
+}
+
+function safeText(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function firstText(...values: unknown[]) {
+  for (const value of values) {
+    const list = stringList(value);
+    if (list.length) return list[0];
+    const text = safeText(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+function stringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => safeText(item)).filter(Boolean);
+  const text = safeText(value);
+  return text ? [text] : [];
+}
+
+function countCapabilities(value: unknown) {
+  if (Array.isArray(value)) return value.length;
+  if (value && typeof value === "object") return Object.keys(value).length;
+  return 0;
 }
 
 function firstId(value: unknown, fallback: string) {
