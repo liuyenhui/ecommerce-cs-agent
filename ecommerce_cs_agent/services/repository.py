@@ -173,19 +173,19 @@ class PostgresDecisionRepository:
                    embedding.embedding_model, embedding.chunk_index
             FROM knowledge_entry entry
             JOIN organization org ON org.id = entry.organization_id
-            JOIN store st ON st.id = entry.store_id AND st.organization_id = org.id
+            JOIN store st ON st.id::text = entry.store_id::text AND st.organization_id = org.id
             LEFT JOIN product product
               ON product.id = entry.product_id
              AND product.organization_id = entry.organization_id
-             AND product.store_id = entry.store_id
+             AND product.store_id::text = entry.store_id::text
             JOIN product_knowledge_candidate candidate
               ON candidate.id = entry.source_product_candidate_id
              AND candidate.organization_id = entry.organization_id
-             AND candidate.store_id = entry.store_id
+             AND candidate.store_id::text = entry.store_id::text
             LEFT JOIN knowledge_embedding embedding
               ON embedding.knowledge_entry_id = entry.id
              AND embedding.organization_id = entry.organization_id
-             AND embedding.store_id = entry.store_id
+             AND embedding.store_id::text = entry.store_id::text
              AND embedding.chunk_index = 0
             WHERE org.external_organization_id = %s
               AND st.external_store_id = %s
