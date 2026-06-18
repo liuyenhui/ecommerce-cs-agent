@@ -13,6 +13,7 @@ from ecommerce_cs_agent.api.auth import (
 )
 from ecommerce_cs_agent.api.errors import api_error
 from ecommerce_cs_agent.core.config import Settings, load_settings
+from ecommerce_cs_agent.core.passwords import password_matches
 from ecommerce_cs_agent.services.admin import admin_repository_for
 from ecommerce_cs_agent.services.admin_auth import admin_auth_service_for, system_admin_auth_service_for
 from ecommerce_cs_agent.services.decision import DecisionService
@@ -487,11 +488,7 @@ async def _not_implemented() -> None:
 
 
 def _password_matches(email: Any, password: Any, expected_email: str, stored_hash: str) -> bool:
-    if email != expected_email or not isinstance(password, str):
-        return False
-    if stored_hash.startswith("plain:"):
-        return password == stored_hash.removeprefix("plain:")
-    return False
+    return password_matches(email, password, expected_email, stored_hash)
 
 
 app = create_app()
