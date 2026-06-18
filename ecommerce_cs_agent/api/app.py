@@ -225,9 +225,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return auth_logs
 
     @app.post("/v1/product-content/products")
-    async def upsert_product_content_product(request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
+    async def upsert_product_content_product(request: Request, _principal: Principal = Depends(admin_principal)) -> JSONResponse:
         payload = await request.json()
-        return admin_data.upsert_product(payload, _principal.user_id or "admin-001")
+        return JSONResponse(status_code=201, content=admin_data.upsert_product(payload, _principal.user_id or "admin-001"))
 
     @app.post("/v1/product-content/assets")
     async def create_product_asset(request: Request, _principal: Principal = Depends(admin_principal)) -> JSONResponse:

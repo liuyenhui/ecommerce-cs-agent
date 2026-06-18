@@ -31,6 +31,53 @@ REQUIRED_PATHS = {
     "/v1/system-admin/health",
 }
 
+CORE_JSON_REQUESTS = {
+    ("post", "/v1/reply-decisions"): "#/components/schemas/ReplyDecisionCreateRequest",
+    ("post", "/v1/admin/auth/login"): "#/components/schemas/AdminLoginRequest",
+    ("post", "/v1/product-content/products"): "#/components/schemas/ProductUpsertRequest",
+    ("post", "/v1/product-content/assets"): "#/components/schemas/ProductAssetCreateRequest",
+    ("post", "/v1/product-content/price-snapshots"): "#/components/schemas/ProductPriceSnapshotRequest",
+    ("post", "/v1/system-admin/auth/login"): "#/components/schemas/SystemAdminLoginRequest",
+    ("post", "/v1/system-admin/tasks/{task_id}/retry"): "#/components/schemas/TaskRetryRequest",
+}
+
+CORE_JSON_RESPONSES = {
+    ("post", "/v1/reply-decisions", "200"): "#/components/schemas/ReplyDecisionResponse",
+    ("post", "/v1/admin/auth/login", "200"): "#/components/schemas/AdminAuthResponse",
+    ("get", "/v1/admin/auth/me", "200"): "#/components/schemas/AdminMeResponse",
+    ("get", "/v1/admin/users", "200"): "#/components/schemas/AdminUserListResponse",
+    ("get", "/v1/admin/audit-logs", "200"): "#/components/schemas/AuditLogListResponse",
+    ("post", "/v1/product-content/products", "201"): "#/components/schemas/ProductUpsertResponse",
+    ("post", "/v1/product-content/assets", "201"): "#/components/schemas/ProductAssetResponse",
+    ("post", "/v1/product-content/price-snapshots", "201"): "#/components/schemas/ProductPriceSnapshotResponse",
+    ("get", "/v1/system-admin/auth/me", "200"): "#/components/schemas/SystemAdminMeResponse",
+    ("get", "/v1/system-admin/message-traces", "200"): "#/components/schemas/SystemMessageTraceListResponse",
+    ("get", "/v1/system-admin/tasks", "200"): "#/components/schemas/TaskListResponse",
+    ("post", "/v1/system-admin/tasks/{task_id}/retry", "202"): "#/components/schemas/TaskRetryResponse",
+    ("get", "/v1/system-admin/audit-logs", "200"): "#/components/schemas/AuditLogListResponse",
+    ("get", "/v1/system-admin/health", "200"): "#/components/schemas/SystemHealthResponse",
+}
+
+PAGINATED_SCHEMAS = {
+    "AdminUserListResponse",
+    "AuditLogListResponse",
+    "SystemMessageTraceListResponse",
+    "TaskListResponse",
+}
+
+ERROR_RESPONSE_REFS = {
+    "#/components/responses/BadRequest",
+    "#/components/responses/Unauthorized",
+    "#/components/responses/Forbidden",
+    "#/components/responses/NotFound",
+    "#/components/responses/IdempotencyConflict",
+    "#/components/responses/Conflict",
+    "#/components/responses/ValidationError",
+    "#/components/responses/ObjectStorageUnavailable",
+    "#/components/responses/TooManyRequests",
+    "#/components/responses/InternalError",
+}
+
 
 def load_openapi():
     result = subprocess.run(
@@ -77,6 +124,13 @@ def resolve_pointer(document, ref):
         else:
             raise AssertionError(f"missing $ref target: {ref}")
     return current
+
+
+def json_schema_ref(operation, status_code):
+    response = operation["responses"][status_code]
+    if "$ref" in response:
+        return response["$ref"]
+    return response["content"]["application/json"]["schema"]["$ref"]
 
 
 class OpenApiContractTest(unittest.TestCase):
@@ -149,6 +203,71 @@ class OpenApiContractTest(unittest.TestCase):
             responses["503"]["$ref"],
             "#/components/responses/ObjectStorageUnavailable",
         )
+
+    def test_core_json_request_schemas_are_explicit(self):
+        failures = []
+        for (method, path), expected_ref in sorted(CORE_JSON_REQUESTS.items()):
+            operation = self.document["paths"][path][method]
+            request_body = operation.get("requestBody")
+            if not request_body:
+                failures.append(f"missing requestBody {method.upper()} {path}")
+                continue
+            actual_ref = request_body["content"]["application/json"]["schema"].get("$ref")
+            if actual_ref != expected_ref:
+                failures.append(f"{method.upper()} {path} request schema {actual_ref} != {expected_ref}")
+
+        self.assertEqual(failures, [], "\n".join(failures))
+
+    def test_core_json_response_schemas_and_status_codes_are_explicit(self):
+        failures = []
+        for (method, path, status_code), expected_ref in sorted(CORE_JSON_RESPONSES.items()):
+            operation = self.document["paths"][path][method]
+            responses = operation.get("responses", {})
+            if status_code not in responses:
+                failures.append(f"missing {status_code} response {method.upper()} {path}")
+                continue
+            actual_ref = json_schema_ref(operation, status_code)
+            if actual_ref != expected_ref:
+                failures.append(f"{method.upper()} {path} {status_code} schema {actual_ref} != {expected_ref}")
+
+        self.assertEqual(failures, [], "\n".join(failures))
+
+    def test_standard_error_responses_use_error_response_schema(self):
+        responses = self.document["components"]["responses"]
+        failures = []
+        for response_ref in sorted(ERROR_RESPONSE_REFS):
+            response_name = response_ref.rsplit("/", 1)[-1]
+            schema_ref = responses[response_name]["content"]["application/json"]["schema"]["$ref"]
+            if schema_ref != "#/components/schemas/ErrorResponse":
+                failures.append(f"{response_name} uses {schema_ref}")
+
+        for path, path_item in self.document["paths"].items():
+            for method, operation in path_item.items():
+                if method.lower() not in {"get", "post", "put", "patch", "delete"}:
+                    continue
+                for status_code, response in operation.get("responses", {}).items():
+                    if not status_code.startswith(("4", "5")):
+                        continue
+                    if response.get("$ref") not in ERROR_RESPONSE_REFS:
+                        failures.append(f"{method.upper()} {path} {status_code} must reference a standard error response")
+
+        self.assertEqual(failures, [], "\n".join(failures))
+
+    def test_paginated_response_schemas_have_items_and_page_info(self):
+        schemas = self.document["components"]["schemas"]
+        failures = []
+        for schema_name in sorted(PAGINATED_SCHEMAS):
+            schema = schemas[schema_name]
+            required = set(schema.get("required", []))
+            properties = schema.get("properties", {})
+            if {"items", "page_info"} - required:
+                failures.append(f"{schema_name} must require items and page_info")
+            if properties.get("items", {}).get("type") != "array":
+                failures.append(f"{schema_name}.items must be array")
+            if properties.get("page_info", {}).get("$ref") != "#/components/schemas/PageInfo":
+                failures.append(f"{schema_name}.page_info must reference PageInfo")
+
+        self.assertEqual(failures, [], "\n".join(failures))
 
 
 if __name__ == "__main__":
