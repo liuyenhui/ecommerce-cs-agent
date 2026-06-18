@@ -20,12 +20,16 @@ spec:
         app.kubernetes.io/part-of: ecommerce-cs-agent
     spec:
       restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.migration.podSecurityContext | nindent 8 }}
       imagePullSecrets:
         {{- toYaml .Values.imagePullSecrets | nindent 8 }}
       containers:
         - name: migration
           image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
           imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.migration.securityContext | nindent 12 }}
           command: ["python", "-m", "ecommerce_cs_agent.db.cli", "migrate"]
           envFrom:
             - secretRef:
@@ -39,4 +43,6 @@ spec:
             - name: NO_PROXY
               value: {{ .Values.proxy.noProxy | quote }}
           {{- end }}
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
 {{- end }}

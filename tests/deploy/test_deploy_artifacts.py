@@ -10,8 +10,9 @@ def test_api_and_admin_dockerfiles_exist() -> None:
     assert "ecommerce_cs_agent.api.app:app" in api
     assert "python -m ecommerce_cs_agent.db.cli migrate" not in api
     assert "COPY --chown=app:app migrations ./migrations" in api
+    assert "USER 10001:10001" in api
     assert "npm run build" in admin
-    assert "nginx" in admin
+    assert "nginxinc/nginx-unprivileged" in admin
 
 
 def test_admin_web_is_vite_react_app() -> None:
@@ -49,6 +50,32 @@ def test_helm_values_define_dev_runtime_contract() -> None:
     assert values["proxy"]["enabled"] is True
 
 
+def test_helm_chart_defines_k8s_security_defaults() -> None:
+    values = yaml.safe_load(
+        Path("deploy/helm/ecommerce-cs-agent/values.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    for component in ("api", "admin", "migration"):
+        assert values[component]["podSecurityContext"]["runAsNonRoot"] is True
+        assert (
+            values[component]["podSecurityContext"]["seccompProfile"]["type"]
+            == "RuntimeDefault"
+        )
+        assert values[component]["securityContext"]["allowPrivilegeEscalation"] is False
+        assert values[component]["securityContext"]["readOnlyRootFilesystem"] is True
+        assert "ALL" in values[component]["securityContext"]["capabilities"]["drop"]
+        assert values[component]["resources"]["requests"]["cpu"]
+        assert values[component]["resources"]["requests"]["memory"]
+        assert values[component]["resources"]["limits"]["cpu"]
+        assert values[component]["resources"]["limits"]["memory"]
+
+    assert values["api"]["image"]["tag"] != "latest"
+    assert values["admin"]["image"]["tag"] != "latest"
+    assert values["admin"]["tmpVolume"]["enabled"] is True
+
+
 def test_helm_templates_include_api_admin_and_migration_job() -> None:
     chart_dir = Path("deploy/helm/ecommerce-cs-agent")
 
@@ -74,6 +101,7 @@ def test_ci_runs_with_pgvector_postgres_service() -> None:
         assert "PG_DSN" in workflow
         assert 'DATABASE_URL="$PG_DSN"' in workflow
         assert "python -m ecommerce_cs_agent.db.cli migrate" in workflow
+        assert "python scripts/check_k8s_security.py" in workflow
 
 
 def test_publish_workflow_generates_sbom_and_scans_images() -> None:
@@ -94,3 +122,19 @@ def test_publish_workflow_generates_sbom_and_scans_images() -> None:
         'exit-code: "1"',
     ]:
         assert snippet in publish
+
+
+def test_k8s_security_check_script_is_available() -> None:
+    script = Path("scripts/check_k8s_security.py").read_text(encoding="utf-8")
+
+    for snippet in [
+        "helm",
+        "securityContext.runAsNonRoot",
+        "readOnlyRootFilesystem",
+        "allowPrivilegeEscalation",
+        "capabilities.drop",
+        "resources.",
+        "readinessProbe",
+        ":latest",
+    ]:
+        assert snippet in script

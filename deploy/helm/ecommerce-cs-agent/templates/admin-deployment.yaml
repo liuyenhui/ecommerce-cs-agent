@@ -17,12 +17,16 @@ spec:
         app.kubernetes.io/name: {{ include "ecommerce-cs-agent.name" . }}
         app.kubernetes.io/component: admin
     spec:
+      securityContext:
+        {{- toYaml .Values.admin.podSecurityContext | nindent 8 }}
       imagePullSecrets:
         {{- toYaml .Values.imagePullSecrets | nindent 8 }}
       containers:
         - name: admin
           image: "{{ .Values.admin.image.repository }}:{{ .Values.admin.image.tag }}"
           imagePullPolicy: {{ .Values.admin.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.admin.securityContext | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ .Values.admin.service.port }}
@@ -34,3 +38,15 @@ spec:
             httpGet:
               path: /health
               port: http
+          resources:
+            {{- toYaml .Values.admin.resources | nindent 12 }}
+          {{- if .Values.admin.tmpVolume.enabled }}
+          volumeMounts:
+            - name: nginx-tmp
+              mountPath: /tmp
+          {{- end }}
+      {{- if .Values.admin.tmpVolume.enabled }}
+      volumes:
+        - name: nginx-tmp
+          emptyDir: {}
+      {{- end }}
