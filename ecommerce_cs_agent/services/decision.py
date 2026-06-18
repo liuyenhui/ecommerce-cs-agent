@@ -17,6 +17,7 @@ from ecommerce_cs_agent.services.repository import (
 
 
 HIGH_RISK_KEYWORDS = ("退款", "赔偿", "投诉", "平台介入", "处罚", "refund", "complaint")
+TENANT_SECURITY_KEYWORDS = ("隔壁店", "别的店", "其他店", "别人店", "其它店", "跨店", "其他租户", "别的租户")
 SHIPPING_KEYWORDS = ("发货", "物流", "快递", "什么时候到", "ship", "shipping", "delivery")
 PRODUCT_KEYWORDS = ("商品", "产品", "材质", "尺寸", "颜色", "规格", "参数", "material", "size")
 ACTION_KEYWORDS = ("改备注", "备注", "改地址", "修改地址", "收货地址", "update note", "change address")
@@ -207,7 +208,13 @@ class DecisionService:
         lowered = content.lower()
         organization_id, store_id, _request_id = _request_key(payload)
         matched_knowledge = self.repository.recall_knowledge(organization_id, store_id, _knowledge_query(content), limit=5)
-        risk_flags = ["refund_or_complaint"] if any(word in lowered or word in content for word in HIGH_RISK_KEYWORDS) else []
+        risk_flags: list[str] = []
+        if any(word in lowered or word in content for word in HIGH_RISK_KEYWORDS):
+            risk_flags.append("refund_or_complaint")
+        if any(word in lowered or word in content for word in TENANT_SECURITY_KEYWORDS) and (
+            "订单" in content or "信息" in content or "数据" in content or "order" in lowered or "data" in lowered
+        ):
+            risk_flags.append("cross_tenant_data_access")
         missing_context = self._missing_context(payload, lowered, content, has_product_knowledge=bool(matched_knowledge))
         action_requests: list[dict[str, Any]] = []
         evidence = [_knowledge_evidence(item) for item in matched_knowledge]
@@ -218,7 +225,7 @@ class DecisionService:
             confidence = 0.34
             risk_level = "high"
             candidates: list[dict[str, Any]] = []
-            handoff_reason = "high_risk_request"
+            handoff_reason = "cross_tenant_data_access" if "cross_tenant_data_access" in risk_flags else "high_risk_request"
         elif any(word in lowered or word in content for word in ACTION_KEYWORDS):
             action = "action_request"
             status = "action_request"
