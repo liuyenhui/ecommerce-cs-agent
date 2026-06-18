@@ -10,12 +10,11 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from ecommerce_cs_agent.api.auth import (
     Principal,
     require_agent_api,
-    require_system_admin_session,
 )
 from ecommerce_cs_agent.api.errors import api_error
 from ecommerce_cs_agent.core.config import Settings, load_settings
 from ecommerce_cs_agent.services.admin import admin_repository_for
-from ecommerce_cs_agent.services.admin_auth import admin_auth_service_for
+from ecommerce_cs_agent.services.admin_auth import admin_auth_service_for, system_admin_auth_service_for
 from ecommerce_cs_agent.services.decision import DecisionService
 
 
@@ -25,6 +24,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     decisions = DecisionService(settings)
     admin_data = admin_repository_for(settings)
     admin_auth = admin_auth_service_for(settings)
+    system_admin_auth = system_admin_auth_service_for(settings)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -56,11 +56,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return session
 
     def system_principal(request: Request) -> Principal:
-        return require_system_admin_session(
-            settings,
-            request.headers.get("Cookie"),
-            request.headers.get("Authorization"),
-        )
+        principal, _session = system_admin_auth.require_session(request.headers.get("Cookie"), request.headers.get("Authorization"))
+        return principal
+
+    def system_session(request: Request) -> Any:
+        _principal, session = system_admin_auth.require_session(request.headers.get("Cookie"), request.headers.get("Authorization"))
+        return session
 
     @app.get("/")
     def landing() -> dict[str, Any]:
@@ -276,26 +277,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/v1/system-admin/auth/login")
     async def system_admin_login(request: Request) -> JSONResponse:
         payload = await request.json()
-        if not _password_matches(
-            payload.get("email"),
-            payload.get("password"),
-            settings.system_admin_initial_email,
-            settings.system_admin_initial_password_hash,
-        ):
-            raise api_error(401, "unauthorized", "invalid system admin credentials")
-        response = JSONResponse(content=_system_me_payload())
-        response.set_cookie("agent_system_admin_session", settings.system_admin_session, httponly=True, samesite="lax")
+        content, token = system_admin_auth.login(payload)
+        response = JSONResponse(content=content)
+        response.set_cookie("agent_system_admin_session", token, httponly=True, samesite="lax")
         return response
 
     @app.post("/v1/system-admin/auth/logout")
-    def system_admin_logout(_principal: Principal = Depends(system_principal)) -> JSONResponse:
+    def system_admin_logout(request: Request, _principal: Principal = Depends(system_principal)) -> JSONResponse:
+        cookies = _parse_cookie(request.headers.get("Cookie"))
+        system_admin_auth.logout(cookies.get("agent_system_admin_session", ""))
         response = JSONResponse(content={"accepted": True})
         response.delete_cookie("agent_system_admin_session")
         return response
 
     @app.get("/v1/system-admin/auth/me")
-    def get_system_admin_me(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        return _system_me_payload()
+    def get_system_admin_me(session: Any = Depends(system_session)) -> dict[str, Any]:
+        return system_admin_auth.me(session)
 
     @app.get("/v1/system-admin/health")
     def get_system_health(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:

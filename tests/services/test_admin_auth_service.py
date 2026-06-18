@@ -3,7 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from ecommerce_cs_agent.core.config import Settings
-from ecommerce_cs_agent.services.admin_auth import AdminSession, PostgresAdminAuthService, admin_auth_service_for
+from ecommerce_cs_agent.services.admin_auth import (
+    AdminSession,
+    PostgresAdminAuthService,
+    PostgresSystemAdminAuthService,
+    admin_auth_service_for,
+    system_admin_auth_service_for,
+)
 
 
 def test_admin_auth_service_uses_postgres_when_database_url_is_configured() -> None:
@@ -12,6 +18,14 @@ def test_admin_auth_service_uses_postgres_when_database_url_is_configured() -> N
     service = admin_auth_service_for(settings)
 
     assert isinstance(service, PostgresAdminAuthService)
+
+
+def test_system_admin_auth_service_uses_postgres_when_database_url_is_configured() -> None:
+    settings = Settings(database_url="postgresql://example", environment="production")
+
+    service = system_admin_auth_service_for(settings)
+
+    assert isinstance(service, PostgresSystemAdminAuthService)
 
 
 def test_postgres_admin_auth_login_bootstraps_user_and_persists_hashed_session() -> None:
@@ -118,6 +132,76 @@ def test_postgres_admin_auth_store_invitation_roles_write_to_db_and_audit() -> N
     assert "INSERT INTO admin_invitation" in executed_sql
     assert "INSERT INTO admin_membership" in executed_sql
     assert executed_sql.count("INSERT INTO admin_audit_log") >= 3
+
+
+def test_postgres_system_admin_auth_login_persists_hashed_session_and_audit() -> None:
+    settings = Settings(database_url="postgresql://example")
+    connection = _FakeConnection(
+        fetch_rows=[
+            (
+                "sysadmin-uuid",
+                "system-admin@example.test",
+                "plain:system-admin-password",
+                "System Admin",
+                "super_admin",
+            )
+        ]
+    )
+    service = PostgresSystemAdminAuthService(settings)
+    service._connect = lambda _url: connection
+
+    response, token = service.login(
+        {"email": "system-admin@example.test", "password": "system-admin-password"}
+    )
+
+    executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    assert response["user"]["id"] == "sysadmin-uuid"
+    assert token
+    assert token != settings.system_admin_session
+    assert "INSERT INTO system_admin_user" in executed_sql
+    assert "INSERT INTO system_admin_session" in executed_sql
+    assert "INSERT INTO system_admin_audit_log" in executed_sql
+    session_insert = [item for item in connection.executed if "INSERT INTO system_admin_session" in item[0]][0]
+    assert token not in str(session_insert[1])
+
+
+def test_postgres_system_admin_auth_require_session_queries_hashed_active_session() -> None:
+    settings = Settings(database_url="postgresql://example")
+    connection = _FakeConnection(
+        fetch_rows=[
+            (
+                "sysadmin-uuid",
+                "system-admin@example.test",
+                "System Admin",
+                "super_admin",
+            )
+        ]
+    )
+    service = PostgresSystemAdminAuthService(settings)
+    service._connect = lambda _url: connection
+
+    principal, session = service.require_session("agent_system_admin_session=session-token", None)
+
+    assert principal.kind == "system_admin"
+    assert principal.user_id == "sysadmin-uuid"
+    assert principal.role == "super_admin"
+    assert session.email == "system-admin@example.test"
+    assert "FROM system_admin_session" in connection.executed[0][0]
+    assert "session-token" not in str(connection.executed[0][1])
+
+
+def test_postgres_system_admin_auth_logout_revokes_session_and_writes_audit() -> None:
+    settings = Settings(database_url="postgresql://example")
+    connection = _FakeConnection(fetch_rows=[("sysadmin-uuid",)])
+    service = PostgresSystemAdminAuthService(settings)
+    service._connect = lambda _url: connection
+
+    service.logout("session-token")
+
+    executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    assert "UPDATE system_admin_session" in executed_sql
+    assert "INSERT INTO system_admin_audit_log" in executed_sql
+    assert "session-token" not in str(connection.executed[0][1])
 
 
 class _FakeConnection:
