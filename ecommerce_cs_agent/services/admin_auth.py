@@ -24,6 +24,17 @@ class AdminSession:
     revoked_at: datetime | None = None
 
 
+@dataclass
+class SystemAdminSession:
+    token: str
+    user_id: str
+    email: str
+    display_name: str
+    role: str
+    expires_at: datetime
+    revoked_at: datetime | None = None
+
+
 class InMemoryAdminAuthService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -613,10 +624,232 @@ class PostgresAdminAuthService:
         }
 
 
+class InMemorySystemAdminAuthService:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.users: dict[str, dict[str, Any]] = {
+            "sysadmin-001": {
+                "id": "sysadmin-001",
+                "email": settings.system_admin_initial_email,
+                "name": "System Admin",
+                "role": "super_admin",
+                "status": "active",
+            }
+        }
+        self.sessions: dict[str, SystemAdminSession] = {
+            settings.system_admin_session: SystemAdminSession(
+                token=settings.system_admin_session,
+                user_id="sysadmin-001",
+                email=settings.system_admin_initial_email,
+                display_name="System Admin",
+                role="super_admin",
+                expires_at=_now_dt() + timedelta(days=1),
+            )
+        }
+
+    def login(self, payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        if not _password_matches(
+            payload.get("email"),
+            payload.get("password"),
+            self.settings.system_admin_initial_email,
+            self.settings.system_admin_initial_password_hash,
+        ):
+            raise api_error(401, "unauthorized", "invalid system admin credentials")
+        token = secrets.token_urlsafe(32)
+        self.sessions[token] = SystemAdminSession(
+            token=token,
+            user_id="sysadmin-001",
+            email=self.settings.system_admin_initial_email,
+            display_name="System Admin",
+            role="super_admin",
+            expires_at=_now_dt() + timedelta(hours=8),
+        )
+        return self.me(self.sessions[token]), token
+
+    def logout(self, token: str) -> None:
+        session = self.sessions.get(token)
+        if not session or session.revoked_at:
+            raise api_error(401, "unauthorized", "missing system admin session")
+        session.revoked_at = _now_dt()
+
+    def require_session(self, cookie: str | None, authorization: str | None) -> tuple[Principal, SystemAdminSession]:
+        if authorization and authorization.startswith("Bearer "):
+            raise api_error(403, "forbidden", "external API token cannot access system admin")
+        cookies = _parse_cookie(cookie)
+        if "agent_admin_session" in cookies and "agent_system_admin_session" not in cookies:
+            raise api_error(403, "forbidden", "customer admin session cannot access system admin")
+        token = cookies.get("agent_system_admin_session")
+        session = self.sessions.get(token or "")
+        if not session or session.revoked_at or session.expires_at <= _now_dt():
+            raise api_error(401, "unauthorized", "missing system admin session")
+        principal = Principal("system_admin", session.user_id, None, None, session.role)
+        return principal, session
+
+    def me(self, session: SystemAdminSession) -> dict[str, Any]:
+        return {
+            "user": {
+                "id": session.user_id,
+                "email": session.email,
+                "name": session.display_name,
+                "role": session.role,
+                "status": "active",
+            },
+            "permissions": ["system:read", "system:write"],
+        }
+
+
+class PostgresSystemAdminAuthService:
+    def __init__(self, settings: Settings) -> None:
+        import psycopg
+
+        self.settings = settings
+        self._connect = psycopg.connect
+
+    def login(self, payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        email = str(payload.get("email", ""))
+        password = payload.get("password")
+        with self._connect(self.settings.database_url) as conn:
+            with conn.cursor() as cur:
+                self._bootstrap_initial_system_admin(cur)
+                cur.execute(
+                    """
+                    SELECT id, email, password_hash, display_name, role
+                    FROM system_admin_user
+                    WHERE email = %s AND status = 'active'
+                    LIMIT 1
+                    """,
+                    (email,),
+                )
+                row = cur.fetchone()
+                if not row or not _password_matches(email, password, row[1], row[2]):
+                    raise api_error(401, "unauthorized", "invalid system admin credentials")
+                token = secrets.token_urlsafe(32)
+                cur.execute(
+                    """
+                    INSERT INTO system_admin_session (
+                        system_admin_user_id, session_hash, expires_at
+                    )
+                    VALUES (%s, %s, now() + interval '8 hours')
+                    """,
+                    (row[0], _hash_session(token)),
+                )
+                self._audit(cur, str(row[0]), "auth.login", "system_admin_session", "current", {"reason": "login"})
+                session = SystemAdminSession(
+                    token=token,
+                    user_id=str(row[0]),
+                    email=str(row[1]),
+                    display_name=str(row[3]),
+                    role=str(row[4]),
+                    expires_at=_now_dt() + timedelta(hours=8),
+                )
+                return self.me(session), token
+
+    def logout(self, token: str) -> None:
+        with self._connect(self.settings.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE system_admin_session
+                    SET revoked_at = now()
+                    WHERE session_hash = %s AND revoked_at IS NULL
+                    RETURNING system_admin_user_id
+                    """,
+                    (_hash_session(token),),
+                )
+                row = cur.fetchone()
+                if row:
+                    self._audit(cur, str(row[0]), "auth.logout", "system_admin_session", "current", {"reason": "logout"})
+
+    def require_session(self, cookie: str | None, authorization: str | None) -> tuple[Principal, SystemAdminSession]:
+        if authorization and authorization.startswith("Bearer "):
+            raise api_error(403, "forbidden", "external API token cannot access system admin")
+        cookies = _parse_cookie(cookie)
+        if "agent_admin_session" in cookies and "agent_system_admin_session" not in cookies:
+            raise api_error(403, "forbidden", "customer admin session cannot access system admin")
+        token = cookies.get("agent_system_admin_session")
+        if not token:
+            raise api_error(401, "unauthorized", "missing system admin session")
+        with self._connect(self.settings.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT admin.id, admin.email, admin.display_name, admin.role
+                    FROM system_admin_session session
+                    JOIN system_admin_user admin ON admin.id = session.system_admin_user_id
+                    WHERE session.session_hash = %s
+                      AND session.revoked_at IS NULL
+                      AND session.expires_at > now()
+                      AND admin.status = 'active'
+                    LIMIT 1
+                    """,
+                    (_hash_session(token),),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise api_error(401, "unauthorized", "missing system admin session")
+                session = SystemAdminSession(
+                    token=token,
+                    user_id=str(row[0]),
+                    email=str(row[1]),
+                    display_name=str(row[2]),
+                    role=str(row[3]),
+                    expires_at=_now_dt() + timedelta(hours=1),
+                )
+                return Principal("system_admin", session.user_id, None, None, session.role), session
+
+    def me(self, session: SystemAdminSession) -> dict[str, Any]:
+        return {
+            "user": {
+                "id": session.user_id,
+                "email": session.email,
+                "name": session.display_name,
+                "role": session.role,
+                "status": "active",
+            },
+            "permissions": ["system:read", "system:write"],
+        }
+
+    def _bootstrap_initial_system_admin(self, cur: Any) -> None:
+        cur.execute(
+            """
+            INSERT INTO system_admin_user (email, password_hash, display_name, role)
+            VALUES (%s, %s, 'System Admin', 'super_admin')
+            ON CONFLICT (email)
+            DO UPDATE SET password_hash = EXCLUDED.password_hash, updated_at = now()
+            """,
+            (self.settings.system_admin_initial_email, self.settings.system_admin_initial_password_hash),
+        )
+
+    def _audit(
+        self,
+        cur: Any,
+        user_id: str,
+        action: str,
+        object_type: str,
+        object_id: str,
+        diff_summary: dict[str, Any],
+    ) -> None:
+        cur.execute(
+            """
+            INSERT INTO system_admin_audit_log (
+                system_admin_user_id, action, object_type, object_id, diff_summary
+            )
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (user_id, action, object_type, object_id, Jsonb(diff_summary)),
+        )
+
+
 def admin_auth_service_for(settings: Settings) -> InMemoryAdminAuthService | PostgresAdminAuthService:
     if settings.database_url and settings.environment.lower() not in {"test"}:
         return PostgresAdminAuthService(settings)
     return InMemoryAdminAuthService(settings)
+
+
+def system_admin_auth_service_for(settings: Settings) -> InMemorySystemAdminAuthService | PostgresSystemAdminAuthService:
+    if settings.database_url and settings.environment.lower() not in {"test"}:
+        return PostgresSystemAdminAuthService(settings)
+    return InMemorySystemAdminAuthService(settings)
 
 
 def _password_matches(email: Any, password: Any, expected_email: str, stored_hash: str) -> bool:

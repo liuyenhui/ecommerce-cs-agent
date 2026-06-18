@@ -156,6 +156,21 @@ def test_system_admin_login_rejects_bad_credentials_and_sets_spec_cookie_for_val
     assert "agent_system_admin_session=" in good.headers["set-cookie"]
 
 
+def test_system_admin_logout_revokes_server_session():
+    client = TestClient(create_app())
+    login = client.post(
+        "/v1/system-admin/auth/login",
+        json={"email": "system-admin@example.test", "password": "system-admin-password"},
+    )
+    cookie = login.headers["set-cookie"].split(";", 1)[0]
+
+    logout = client.post("/v1/system-admin/auth/logout", headers={"Cookie": cookie})
+    me = client.get("/v1/system-admin/auth/me", headers={"Cookie": cookie})
+
+    assert logout.status_code == 200
+    assert me.status_code == 401
+
+
 def test_production_settings_fail_fast_without_required_secrets(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     for key in (
