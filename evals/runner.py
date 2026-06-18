@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import uuid
@@ -87,7 +88,7 @@ class LiveAgentClient:
             raise RuntimeError(f"network failure: {exc}") from exc
 
     def create_decision(self, case: TestCase) -> AgentResponse:
-        response = self._client.post("/v1/reply-decisions", json=case.request_payload)
+        response = self._client.post("/v1/reply-decisions", json=_unique_live_request_payload(case))
         response.raise_for_status()
         return AgentResponse.from_payload(response.json())
 
@@ -377,6 +378,24 @@ def _public_context_for(case: TestCase, context_type: str) -> Any:
     if prefixed_key in case.public_context:
         return case.public_context[prefixed_key]
     return []
+
+
+def _unique_live_request_payload(case: TestCase) -> dict[str, Any]:
+    payload = copy.deepcopy(case.request_payload)
+    suffix = uuid.uuid4().hex[:12]
+    payload["request_id"] = f"{payload.get('request_id') or case.case_id}-{suffix}"
+
+    message = payload.get("message")
+    if isinstance(message, dict):
+        original_message_id = message.get("external_message_id") or f"msg-{case.case_id}"
+        message["external_message_id"] = f"{original_message_id}-{suffix}"
+
+    conversation = payload.get("conversation")
+    if isinstance(conversation, dict):
+        original_conversation_id = conversation.get("external_conversation_id") or f"conv-{case.case_id}"
+        conversation["external_conversation_id"] = f"{original_conversation_id}-{suffix}"
+
+    return payload
 
 
 def _failure_types(
