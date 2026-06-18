@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Protocol
@@ -83,6 +84,8 @@ class InMemoryMigrationConnection:
 
 
 class PsycopgMigrationConnection:
+    MAX_CONNECT_ATTEMPTS = 8
+
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
         self._driver = None
@@ -104,13 +107,13 @@ class PsycopgMigrationConnection:
                 ) from exc
 
     def ensure_schema_migration(self) -> None:
-        with self._connect(self._database_url) as conn:
+        with self._connect_with_retry() as conn:
             with conn.cursor() as cur:
                 cur.execute(SCHEMA_MIGRATION_SQL)
                 cur.execute("ALTER TABLE schema_migration ADD COLUMN IF NOT EXISTS checksum text")
 
     def get_applied_migrations(self) -> Mapping[str, str | None]:
-        with self._connect(self._database_url) as conn:
+        with self._connect_with_retry() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT version, checksum FROM schema_migration")
                 records = {row[0]: row[1] for row in cur.fetchall()}
@@ -130,12 +133,12 @@ class PsycopgMigrationConnection:
         return bool(row and row[0])
 
     def execute_migration(self, migration: MigrationFile) -> None:
-        with self._connect(self._database_url) as conn:
+        with self._connect_with_retry() as conn:
             with conn.cursor() as cur:
                 cur.execute(migration.sql)
 
     def record_migration(self, migration: MigrationFile) -> None:
-        with self._connect(self._database_url) as conn:
+        with self._connect_with_retry() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -146,6 +149,21 @@ class PsycopgMigrationConnection:
                     """,
                     (migration.version, migration.checksum),
                 )
+
+    def _connect_with_retry(self) -> object:
+        if self._connect is None:
+            raise RuntimeError("PostgreSQL driver is not configured.")
+        last_error: Exception | None = None
+        for attempt in range(1, self.MAX_CONNECT_ATTEMPTS + 1):
+            try:
+                return self._connect(self._database_url)
+            except Exception as exc:  # pragma: no cover - driver-specific exception hierarchy.
+                last_error = exc
+                if attempt == self.MAX_CONNECT_ATTEMPTS:
+                    break
+                time.sleep(min(0.5 * (2 ** (attempt - 1)), 5.0))
+        assert last_error is not None
+        raise last_error
 
 
 SCHEMA_MIGRATION_SQL = """

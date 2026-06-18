@@ -210,3 +210,22 @@ def test_admin_auth_runtime_migration_contains_membership_invitation_and_session
         "idx_admin_invitation_org_status_created",
     ]:
         assert snippet in sql
+
+
+def test_psycopg_connection_retries_transient_connect_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = migrations.PsycopgMigrationConnection.__new__(migrations.PsycopgMigrationConnection)
+    connection._database_url = "postgresql://example"
+    connection._connect_attempts = 0
+    connection.MAX_CONNECT_ATTEMPTS = 3
+
+    def flaky_connect(_database_url: str) -> object:
+        connection._connect_attempts += 1
+        if connection._connect_attempts < 3:
+            raise OSError("temporary connection reset")
+        return object()
+
+    connection._connect = flaky_connect
+    monkeypatch.setattr(migrations.time, "sleep", lambda _seconds: None)
+
+    assert connection._connect_with_retry() is not None
+    assert connection._connect_attempts == 3
