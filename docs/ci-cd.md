@@ -115,11 +115,13 @@ OpenAPI 校验工具可后续选择 Redocly、Spectral 或等价 CLI；关键是
 | --- | --- |
 | 镜像构建 | 分别构建 API 和 Admin image，tag 使用 commit SHA、语义化版本或 `dev-YYYYMMDD-HHMM`。 |
 | 双 Registry 推送 | 同一 tag 推送到 GHCR 和阿里云 Registry；中国环境下 K8s 优先拉取阿里云 Registry，GHCR 保留为备份和发布记录。 |
+| SBOM / provenance | `docker/build-push-action@v6` 对 GHCR 和阿里云镜像启用 `sbom: true`、`provenance: mode=max`，在 registry 中保留供应链 attestation。 |
+| 镜像漏洞扫描 | GHCR SHA 镜像由 Trivy 生成 SARIF 并上传 Code Scanning，同时生成 CycloneDX SBOM artifact；CRITICAL 漏洞作为发布阻断门禁。 |
 | GitOps tag 更新 | 更新 GitOps repo 或本仓库约定的 values/tag 文件，由 Flux 负责同步。 |
 | 部署后验证 | 等待 K8s rollout 完成，执行 `/health` 和 quick live eval。 |
 | 发布记录 | 记录镜像 tag、Git SHA、OpenAPI 版本、eval 报告和部署环境。 |
 
-SBOM、镜像扫描、依赖漏洞扫描、Helm/K8s 安全扫描可以后续补齐，但不应阻塞第一阶段把 build / push / GitOps / rollout 闭环跑通。
+依赖漏洞扫描、Helm/K8s 安全扫描和更细的 license policy 仍可继续补强；镜像 SBOM、provenance 和 CRITICAL 漏洞扫描已经进入 `Publish Images` 发布门禁。
 
 ## 6. GitOps 部署约束
 
@@ -192,7 +194,7 @@ PR required checks passed
 - GitOps tag / values 更新方式。
 - Flux sync、K8s rollout、`/health` 和 quick live eval 的自动化验证。
 - release gate 报告归档位置和失败分类格式。
-- SBOM、镜像扫描、依赖漏洞扫描和 Helm/K8s 安全扫描。
+- 依赖漏洞扫描、Helm/K8s 安全扫描和 license policy。
 - 部署失败通知和回滚通知。
 - Branch Protection required checks 配置。
 
@@ -231,7 +233,7 @@ PR required checks passed
 - 固化 release gate 报告。
 - 增加盲测核心集和红线 suite。
 - 失败用例沉淀为回归集。
-- 根据稳定性再补 SBOM、镜像扫描、依赖漏洞扫描和 Helm/K8s 安全扫描。
+- 根据稳定性再补依赖漏洞扫描、Helm/K8s 安全扫描、license policy 和更细粒度的漏洞例外审批。
 
 ### 10.5 第五阶段：通知和治理
 

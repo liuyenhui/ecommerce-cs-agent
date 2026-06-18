@@ -74,3 +74,23 @@ def test_ci_runs_with_pgvector_postgres_service() -> None:
         assert "PG_DSN" in workflow
         assert 'DATABASE_URL="$PG_DSN"' in workflow
         assert "python -m ecommerce_cs_agent.db.cli migrate" in workflow
+
+
+def test_publish_workflow_generates_sbom_and_scans_images() -> None:
+    publish = Path(".github/workflows/publish-images.yml").read_text(encoding="utf-8")
+
+    for snippet in [
+        "security-events: write",
+        "sbom: true",
+        "provenance: mode=max",
+        "aquasecurity/trivy-action@v0.36.0",
+        "github/codeql-action/upload-sarif@v4",
+        "trivy-${{ matrix.component }}.sarif",
+        "format: cyclonedx",
+        "sbom-${{ matrix.component }}.cdx.json",
+        "actions/upload-artifact@v4",
+        "Enforce image vulnerability gate",
+        "severity: CRITICAL",
+        'exit-code: "1"',
+    ]:
+        assert snippet in publish

@@ -15,6 +15,7 @@ on:
 permissions:
   contents: read
   packages: write
+  security-events: write
 
 concurrency:
   group: publish-images-${{ github.ref }}
@@ -147,6 +148,8 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
+          sbom: true
+          provenance: mode=max
           tags: |
             ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_NAMESPACE }}/${{ matrix.image }}:${{ needs.prepare.outputs.image_tag }}
             ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_NAMESPACE }}/${{ matrix.image }}:${{ needs.prepare.outputs.sha_tag }}
@@ -154,6 +157,48 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.title=${{ matrix.image }}
+
+      - name: Generate Trivy SARIF
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_NAMESPACE }}/${{ matrix.image }}:${{ needs.prepare.outputs.sha_tag }}
+          format: sarif
+          output: trivy-${{ matrix.component }}.sarif
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-${{ matrix.component }}.sarif
+          category: trivy-${{ matrix.component }}
+
+      - name: Generate image SBOM artifact
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_NAMESPACE }}/${{ matrix.image }}:${{ needs.prepare.outputs.sha_tag }}
+          format: cyclonedx
+          output: sbom-${{ matrix.component }}.cdx.json
+          exit-code: "0"
+
+      - name: Upload image SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-sbom-${{ matrix.component }}-${{ needs.prepare.outputs.sha_tag }}
+          path: sbom-${{ matrix.component }}.cdx.json
+          if-no-files-found: error
+
+      - name: Enforce image vulnerability gate
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_NAMESPACE }}/${{ matrix.image }}:${{ needs.prepare.outputs.sha_tag }}
+          format: table
+          vuln-type: os,library
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
 
       - name: Login to Aliyun registry
         if: ${{ env.ALIYUN_REGISTRY_USERNAME != '' && env.ALIYUN_REGISTRY_PASSWORD != '' }}
@@ -170,6 +215,8 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
+          sbom: true
+          provenance: mode=max
           tags: |
             ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ matrix.image }}:${{ needs.prepare.outputs.image_tag }}
             ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ matrix.image }}:${{ needs.prepare.outputs.sha_tag }}
