@@ -356,31 +356,70 @@ class PostgresAdminAuthService:
                 return principal, session
 
     def me(self, session: AdminSession) -> dict[str, Any]:
+        organizations = self.list_organizations(session)["organizations"]
+        stores = self.list_stores(session, session.active_organization_id)["stores"]
+        users = self.list_users(session, session.active_organization_id)["items"]
+        user = users[0] if users else {
+            "user_id": session.user_id,
+            "email": "",
+            "display_name": "",
+            "roles": [],
+            "organization_ids": [session.active_organization_id],
+            "store_ids": [session.active_store_id],
+            "status": "active",
+            "last_login_at": None,
+        }
         return {
-            "user": {
-                "user_id": session.user_id,
-                "email": self.settings.admin_initial_email,
-                "display_name": "Customer Admin",
-                "roles": ["owner"],
-                "organization_ids": [session.active_organization_id],
-                "store_ids": [session.active_store_id],
-                "status": "active",
-                "last_login_at": None,
-            },
-            "organizations": [{"id": session.active_organization_id, "name": session.active_organization_id, "status": "active", "metadata": {}}],
-            "stores": [{"id": session.active_store_id, "organization_id": session.active_organization_id, "name": session.active_store_id, "platform": "pdd", "status": "active", "metadata": {}}],
+            "user": user,
+            "organizations": organizations,
+            "stores": stores,
             "active_organization_id": session.active_organization_id,
             "active_store_id": session.active_store_id,
         }
 
     def list_organizations(self, session: AdminSession) -> dict[str, Any]:
-        items = self.me(session)["organizations"]
+        with self._connect(self.settings.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT org.external_organization_id, org.name, org.status, org.settings
+                    FROM admin_membership membership
+                    JOIN organization org ON org.id = membership.organization_id
+                    WHERE membership.admin_user_id = %s
+                      AND membership.status = 'active'
+                    ORDER BY org.created_at DESC
+                    LIMIT 50
+                    """,
+                    (session.user_id,),
+                )
+                items = [_organization_from_row(row) for row in cur.fetchall()]
         return {"organizations": items, "items": items, "page": _page(len(items))}
 
     def list_stores(self, session: AdminSession, organization_id: str | None = None) -> dict[str, Any]:
-        if organization_id and organization_id != session.active_organization_id:
-            raise api_error(403, "forbidden", "admin user cannot access organization")
-        items = self.me(session)["stores"]
+        organization_id = organization_id or session.active_organization_id
+        with self._connect(self.settings.database_url) as conn:
+            with conn.cursor() as cur:
+                self._assert_org_access(cur, session, organization_id)
+                cur.execute(
+                    """
+                    SELECT st.external_store_id, org.external_organization_id, st.name,
+                           st.platform, st.status, st.settings
+                    FROM admin_membership membership
+                    JOIN organization org ON org.id = membership.organization_id
+                    JOIN store st ON st.organization_id = org.id
+                    WHERE membership.admin_user_id = %s
+                      AND membership.status = 'active'
+                      AND org.external_organization_id = %s
+                      AND (
+                        cardinality(membership.store_ids) = 0
+                        OR st.id = ANY(membership.store_ids)
+                      )
+                    ORDER BY st.created_at DESC
+                    LIMIT 50
+                    """,
+                    (session.user_id, organization_id),
+                )
+                items = [_store_from_row(row) for row in cur.fetchall()]
         return {"stores": items, "items": items, "page": _page(len(items))}
 
     def update_store_settings(self, session: AdminSession, store_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -410,7 +449,30 @@ class PostgresAdminAuthService:
         }
 
     def list_users(self, session: AdminSession, organization_id: str | None = None) -> dict[str, Any]:
-        return {"items": [self.me(session)["user"]], "page_info": _page_info(1), "page": _page(1)}
+        organization_id = organization_id or session.active_organization_id
+        with self._connect(self.settings.database_url) as conn:
+            with conn.cursor() as cur:
+                self._assert_org_access(cur, session, organization_id)
+                cur.execute(
+                    """
+                    SELECT admin.id, admin.email, admin.display_name, admin.status,
+                           membership.roles, org.external_organization_id,
+                           COALESCE(array_agg(st.external_store_id) FILTER (WHERE st.external_store_id IS NOT NULL), ARRAY[]::text[])
+                    FROM admin_user admin
+                    JOIN admin_membership membership ON membership.admin_user_id = admin.id
+                     AND membership.status = 'active'
+                    JOIN organization org ON org.id = membership.organization_id
+                    LEFT JOIN store st ON st.id = ANY(membership.store_ids)
+                    WHERE org.external_organization_id = %s
+                    GROUP BY admin.id, admin.email, admin.display_name, admin.status,
+                             membership.roles, org.external_organization_id
+                    ORDER BY admin.created_at DESC
+                    LIMIT 50
+                    """,
+                    (organization_id,),
+                )
+                items = [_admin_user_from_row(row) for row in cur.fetchall()]
+        return {"items": items, "page_info": _page_info(len(items)), "page": _page(len(items))}
 
     def create_invitation(self, session: AdminSession, payload: dict[str, Any]) -> dict[str, Any]:
         organization_id = str(payload.get("organization_id") or session.active_organization_id)
@@ -509,7 +571,42 @@ class PostgresAdminAuthService:
         }
 
     def list_audit_logs(self, session: AdminSession, organization_id: str | None = None) -> dict[str, Any]:
-        return {"items": [], "page": _page(0), "page_info": _page_info(0)}
+        organization_id = organization_id or session.active_organization_id
+        with self._connect(self.settings.database_url) as conn:
+            with conn.cursor() as cur:
+                self._assert_org_access(cur, session, organization_id)
+                cur.execute(
+                    """
+                    SELECT audit.id, org.external_organization_id, st.external_store_id,
+                           audit.admin_user_id, audit.action, audit.object_type, audit.object_id,
+                           audit.diff_summary, false, audit.created_at
+                    FROM admin_audit_log audit
+                    JOIN organization org ON org.id = audit.organization_id
+                    LEFT JOIN store st ON st.id = audit.store_id
+                    WHERE org.external_organization_id = %s
+                    ORDER BY audit.created_at DESC
+                    LIMIT 50
+                    """,
+                    (organization_id,),
+                )
+                items = [_admin_audit_from_row(row) for row in cur.fetchall()]
+        return {"items": items, "page": _page(len(items)), "page_info": _page_info(len(items))}
+
+    def _assert_org_access(self, cur: Any, session: AdminSession, organization_id: str) -> None:
+        cur.execute(
+            """
+            SELECT 1
+            FROM admin_membership membership
+            JOIN organization org ON org.id = membership.organization_id
+            WHERE membership.admin_user_id = %s
+              AND membership.status = 'active'
+              AND org.external_organization_id = %s
+            LIMIT 1
+            """,
+            (session.user_id, organization_id),
+        )
+        if not cur.fetchone():
+            raise api_error(403, "forbidden", "admin user cannot access organization")
 
     def _audit(
         self,
@@ -852,6 +949,59 @@ def system_admin_auth_service_for(settings: Settings) -> InMemorySystemAdminAuth
     return InMemorySystemAdminAuthService(settings)
 
 
+def _organization_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "id": str(row[0]),
+        "name": str(row[1]),
+        "status": str(row[2]),
+        "metadata": row[3] or {},
+    }
+
+
+def _store_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "id": str(row[0]),
+        "organization_id": str(row[1]),
+        "name": str(row[2]),
+        "platform": str(row[3]),
+        "status": str(row[4]),
+        "metadata": row[5] or {},
+    }
+
+
+def _admin_user_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
+    roles = list(row[4] or [])
+    store_ids = list(row[6] or [])
+    return {
+        "user_id": str(row[0]),
+        "email": str(row[1]),
+        "display_name": str(row[2]),
+        "roles": roles,
+        "organization_ids": [str(row[5])],
+        "store_ids": [str(item) for item in store_ids],
+        "status": str(row[3]),
+        "last_login_at": None,
+    }
+
+
+def _admin_audit_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "id": str(row[0]),
+        "audit_log_id": str(row[0]),
+        "scope": "admin",
+        "organization_id": str(row[1]),
+        "store_id": str(row[2]) if row[2] is not None else None,
+        "actor_id": str(row[3]) if row[3] is not None else None,
+        "actor_admin_user_id": str(row[3]) if row[3] is not None else None,
+        "action": str(row[4]),
+        "object_type": str(row[5]),
+        "object_id": str(row[6]) if row[6] is not None else None,
+        "diff_summary": row[7] or {},
+        "sensitive_access": bool(row[8]),
+        "created_at": _iso(row[9]),
+    }
+
+
 def _password_matches(email: Any, password: Any, expected_email: str, stored_hash: str) -> bool:
     if email != expected_email or not isinstance(password, str):
         return False
@@ -890,3 +1040,9 @@ def _now_dt() -> datetime:
 
 def _now() -> str:
     return _now_dt().replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _iso(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return str(value)

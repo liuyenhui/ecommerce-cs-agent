@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
+from fastapi import HTTPException
+
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.admin_auth import (
     AdminSession,
@@ -134,6 +138,95 @@ def test_postgres_admin_auth_store_invitation_roles_write_to_db_and_audit() -> N
     assert executed_sql.count("INSERT INTO admin_audit_log") >= 3
 
 
+def test_postgres_admin_auth_me_reads_organizations_stores_and_users_from_db() -> None:
+    settings = Settings(database_url="postgresql://example")
+    connection = _FakeConnection(
+        fetch_rows=[
+            [("org-001", "Acme", "active", {"tier": "dev"})],
+            (1,),
+            [("store-001", "org-001", "PDD Store", "pdd", "active", {"assist_enabled": True})],
+            (1,),
+            [("admin-uuid", "admin@example.test", "Customer Admin", "active", ["owner"], "org-001", ["store-001"])],
+        ]
+    )
+    service = PostgresAdminAuthService(settings)
+    service._connect = lambda _url: connection
+    session = AdminSession(
+        token="session-token",
+        user_id="admin-uuid",
+        active_organization_id="org-001",
+        active_store_id="store-001",
+        expires_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+    )
+
+    me = service.me(session)
+
+    assert me["user"]["email"] == "admin@example.test"
+    assert me["organizations"][0]["name"] == "Acme"
+    assert me["stores"][0]["metadata"]["assist_enabled"] is True
+    executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    assert "FROM admin_membership membership" in executed_sql
+    assert "JOIN store st ON st.organization_id = org.id" in executed_sql
+    assert "JOIN admin_membership membership ON membership.admin_user_id = admin.id" in executed_sql
+
+
+def test_postgres_admin_auth_list_audit_logs_reads_db_and_enforces_org_access() -> None:
+    settings = Settings(database_url="postgresql://example")
+    connection = _FakeConnection(
+        fetch_rows=[
+            (1,),
+            [
+                (
+                    "audit-001",
+                    "org-001",
+                    "store-001",
+                    "admin-uuid",
+                    "store.settings.update",
+                    "store",
+                    "store-001",
+                    {"reason": "test"},
+                    False,
+                    "2026-06-18T00:00:00Z",
+                )
+            ],
+        ]
+    )
+    service = PostgresAdminAuthService(settings)
+    service._connect = lambda _url: connection
+    session = AdminSession(
+        token="session-token",
+        user_id="admin-uuid",
+        active_organization_id="org-001",
+        active_store_id="store-001",
+        expires_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+    )
+
+    logs = service.list_audit_logs(session, "org-001")
+
+    assert logs["items"][0]["id"] == "audit-001"
+    assert logs["items"][0]["actor_id"] == "admin-uuid"
+    assert "FROM admin_audit_log audit" in connection.executed[1][0]
+
+
+def test_postgres_admin_auth_rejects_cross_org_db_list_access() -> None:
+    settings = Settings(database_url="postgresql://example")
+    connection = _FakeConnection(fetch_rows=[None])
+    service = PostgresAdminAuthService(settings)
+    service._connect = lambda _url: connection
+    session = AdminSession(
+        token="session-token",
+        user_id="admin-uuid",
+        active_organization_id="org-001",
+        active_store_id="store-001",
+        expires_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        service.list_stores(session, "org-other")
+
+    assert exc.value.status_code == 403
+
+
 def test_postgres_system_admin_auth_login_persists_hashed_session_and_audit() -> None:
     settings = Settings(database_url="postgresql://example")
     connection = _FakeConnection(
@@ -205,7 +298,7 @@ def test_postgres_system_admin_auth_logout_revokes_session_and_writes_audit() ->
 
 
 class _FakeConnection:
-    def __init__(self, fetch_rows: list[tuple[Any, ...]] | None = None) -> None:
+    def __init__(self, fetch_rows: list[Any] | None = None) -> None:
         self.fetch_rows = fetch_rows or []
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
 
@@ -234,8 +327,16 @@ class _FakeCursor:
 
     def fetchone(self) -> tuple[Any, ...] | None:
         if self.connection.fetch_rows:
-            return self.connection.fetch_rows.pop(0)
+            item = self.connection.fetch_rows.pop(0)
+            if isinstance(item, list):
+                return item[0] if item else None
+            return item
         return None
 
     def fetchall(self) -> list[tuple[Any, ...]]:
+        if self.connection.fetch_rows:
+            item = self.connection.fetch_rows.pop(0)
+            if isinstance(item, list):
+                return item
+            return [item]
         return []
