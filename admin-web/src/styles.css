@@ -17,6 +17,7 @@ body,
 body {
   margin: 0;
   min-width: 320px;
+  overflow-x: hidden;
 }
 
 button,
@@ -43,6 +44,14 @@ button {
 
 button:hover {
   border-color: #2563eb;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.45);
+  outline-offset: 2px;
 }
 
 button:disabled {
@@ -113,6 +122,7 @@ pre {
 .rail {
   position: sticky;
   top: 0;
+  min-width: 0;
   height: 100vh;
   background: #111827;
   color: #eef2f7;
@@ -121,12 +131,26 @@ pre {
   overflow: auto;
 }
 
+.railHeader {
+  display: grid;
+  gap: 8px;
+}
+
 .brandMark {
   min-height: 42px;
   display: flex;
   align-items: center;
   gap: 10px;
   font-weight: 750;
+}
+
+.mobileNavContext,
+.mobileMenuButton {
+  display: none;
+}
+
+.mobileNavPanel {
+  display: block;
 }
 
 .workspaceSwitch {
@@ -545,12 +569,80 @@ tbody tr:hover {
   }
 
   .rail {
-    position: static;
+    position: sticky;
+    z-index: 15;
     height: auto;
+    max-height: 100vh;
+    padding: 10px 12px;
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid #0b1220;
+  }
+
+  .railHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .brandMark {
+    min-height: 30px;
+  }
+
+  .mobileNavContext {
+    display: block;
+    margin-top: 1px;
+    color: #aab7c8;
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .mobileMenuButton {
+    display: inline-flex;
+    flex: 0 0 auto;
+    border-color: #334155;
+    background: #1f2937;
+    color: #f8fafc;
+  }
+
+  .mobileMenuButton:hover {
+    border-color: #93c5fd;
+  }
+
+  .mobileNavPanel {
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: max-height 0.18s ease, opacity 0.18s ease, margin-top 0.18s ease;
+  }
+
+  .mobileNavPanel .navList {
+    visibility: hidden;
+  }
+
+  .rail.mobileNavOpen .mobileNavPanel {
+    max-height: min(70vh, 560px);
+    margin-top: 10px;
+    overflow: auto;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .rail.mobileNavOpen .mobileNavPanel .navList {
+    visibility: visible;
   }
 
   .navList {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding-top: 8px;
+    border-top: 1px solid #263244;
+  }
+
+  .navGroup {
+    margin-top: 7px;
+    grid-column: 1 / -1;
   }
 
   .filterBar,

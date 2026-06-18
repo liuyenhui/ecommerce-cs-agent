@@ -14,6 +14,7 @@ import {
   ListFilter,
   Loader2,
   LogOut,
+  Menu,
   PackagePlus,
   PlayCircle,
   RefreshCw,
@@ -106,9 +107,15 @@ function App() {
   const [customerSession, setCustomerSession] = React.useState<JsonRecord | null>(null);
   const [systemSession, setSystemSession] = React.useState<JsonRecord | null>(null);
   const [toast, setToast] = React.useState<ToastState>(null);
+  const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
 
   const customerAuthed = Boolean(customerSession);
   const systemAuthed = Boolean(systemSession);
+  const activeNavLabel = workspace === "customer"
+    ? labelForTab(customerTabs, customerTab)
+    : labelForTab(systemTabs, systemTab);
+  const workspaceLabel = workspace === "customer" ? "客户后台" : "系统后台";
+  const mobileNavId = "admin-mobile-navigation";
 
   async function refreshSession(target: Workspace) {
     if (target === "customer") {
@@ -135,20 +142,48 @@ function App() {
     void refreshSession(workspace).catch(() => undefined);
   }, [workspace]);
 
+  React.useEffect(() => {
+    if (!mobileNavOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileNavOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mobileNavOpen]);
+
   return (
     <main className="appShell">
-      <aside className="rail">
-        <div className="brandMark">
-          <ShieldCheck size={22} />
-          <span>Ecommerce CS Agent</span>
+      <aside className={`rail ${mobileNavOpen ? "mobileNavOpen" : ""}`}>
+        <div className="railHeader">
+          <div>
+            <div className="brandMark">
+              <ShieldCheck size={22} />
+              <span>Ecommerce CS Agent</span>
+            </div>
+            <p className="mobileNavContext">{workspaceLabel} / {activeNavLabel}</p>
+          </div>
+          <button
+            type="button"
+            className="mobileMenuButton"
+            aria-expanded={mobileNavOpen}
+            aria-controls={mobileNavId}
+            aria-label={mobileNavOpen ? "收起后台导航" : "展开后台导航"}
+            onClick={() => setMobileNavOpen((open) => !open)}
+          >
+            <Menu size={18} />
+            菜单
+          </button>
         </div>
-        <Navigation
-          workspace={workspace}
-          customerTab={customerTab}
-          systemTab={systemTab}
-          setCustomerTab={setCustomerTab}
-          setSystemTab={setSystemTab}
-        />
+        <div id={mobileNavId} className="mobileNavPanel">
+          <Navigation
+            workspace={workspace}
+            customerTab={customerTab}
+            systemTab={systemTab}
+            setCustomerTab={setCustomerTab}
+            setSystemTab={setSystemTab}
+            onNavigate={() => setMobileNavOpen(false)}
+          />
+        </div>
       </aside>
 
       <section className="mainPane">
@@ -193,13 +228,22 @@ function Navigation(props: {
   systemTab: SystemTab;
   setCustomerTab: (tab: CustomerTab) => void;
   setSystemTab: (tab: SystemTab) => void;
+  onNavigate?: () => void;
 }) {
   if (props.workspace === "customer") {
     return (
       <nav className="navList" aria-label="客户后台导航">
         <span className="navGroup">客户运营</span>
         {customerTabs.map((tab) => (
-          <button key={tab.key} className={props.customerTab === tab.key ? "active" : ""} onClick={() => props.setCustomerTab(tab.key)}>
+          <button
+            key={tab.key}
+            type="button"
+            className={props.customerTab === tab.key ? "active" : ""}
+            onClick={() => {
+              props.setCustomerTab(tab.key);
+              props.onNavigate?.();
+            }}
+          >
             {tab.icon}{tab.label}
           </button>
         ))}
@@ -214,7 +258,15 @@ function Navigation(props: {
         <React.Fragment key={group}>
           <span className="navGroup">{group}</span>
           {systemTabs.filter((tab) => tab.group === group).map((tab) => (
-            <button key={tab.key} className={props.systemTab === tab.key ? "active" : ""} onClick={() => props.setSystemTab(tab.key)}>
+            <button
+              key={tab.key}
+              type="button"
+              className={props.systemTab === tab.key ? "active" : ""}
+              onClick={() => {
+                props.setSystemTab(tab.key);
+                props.onNavigate?.();
+              }}
+            >
               {tab.icon}{tab.label}
             </button>
           ))}
@@ -960,6 +1012,10 @@ function firstId(value: unknown, fallback: string) {
 
 function toneFor(value: string): "ok" | "warn" | "bad" | "info" | "" {
   return statusTone[value.toLowerCase()] || "";
+}
+
+function labelForTab<T extends string>(tabs: Array<{ key: T; label: string }>, active: T) {
+  return tabs.find((tab) => tab.key === active)?.label || "";
 }
 
 function buildQuery(filters: Record<string, string>) {
