@@ -90,6 +90,9 @@ def test_helm_templates_include_api_admin_and_migration_job() -> None:
     assert "python\", \"-m\", \"ecommerce_cs_agent.db.cli\", \"migrate" in (
         chart_dir / "templates/migration-job.yaml"
     ).read_text(encoding="utf-8")
+    assert 'replace "+" "_"' in (chart_dir / "templates/_helpers.tpl").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_ci_runs_with_pgvector_postgres_service() -> None:
