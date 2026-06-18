@@ -4,6 +4,10 @@
 
 ## 最近文档更新
 
+### 2026-06-19
+
+- 新增 [Admin Web UI/UX 审计与整改拆分](admin-ui-ux-audit.md)：基于 Chrome live 登录检查 customer/system Admin 的桌面与移动页面，记录 P0/P1/P2 UI/UX 问题，并拆分为可分发给开发线程的整改 prompts。
+
 ### 2026-06-18
 
 - 实现客户后台 / 系统后台拆站基础：Admin Web 按 Host 固定 customer / system 模式，不再提供站内后台类型切换；客户 host 只刷新 `/v1/admin/auth/me`，系统 host 只刷新 `/v1/system-admin/auth/me`。
