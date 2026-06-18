@@ -3658,7 +3658,31 @@ components:
         evidence:
           type: array
           items:
-            type: string
+            $ref: "#/components/schemas/EvidenceRef"
+
+    EvidenceRef:
+      type: object
+      required: [source_type]
+      properties:
+        knowledge_entry_id:
+          type:
+            - string
+            - "null"
+        product_id:
+          type:
+            - string
+            - "null"
+        scope:
+          type:
+            - string
+            - "null"
+        source_type:
+          type: string
+          enum: [approved_knowledge, context_snapshot, rule]
+        chunk_index:
+          type:
+            - integer
+            - "null"
 
     AutoReply:
       type: object
