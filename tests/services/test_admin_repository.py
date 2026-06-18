@@ -2,12 +2,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from ecommerce_cs_agent.services.admin import PostgresAdminRepository
+import pytest
+
+from ecommerce_cs_agent.core.config import Settings
+from ecommerce_cs_agent.services.admin import PostgresAdminRepository, admin_repository_for
+from ecommerce_cs_agent.services.embeddings import DeterministicEmbeddingProvider
+from ecommerce_cs_agent.services.object_storage import (
+    FilesystemObjectStorage,
+    ObjectStorageError,
+    ObjectStorageUnavailable,
+    ObjectStorageValidationError,
+)
 
 
 def test_postgres_admin_repository_dual_writes_product_to_canonical_and_compat_tables() -> None:
     connection = _FakeConnection()
-    repository = PostgresAdminRepository("postgresql://example")
+    repository = PostgresAdminRepository("postgresql://example", object_storage=_TrackingObjectStorage())
     repository._connect = lambda _url: connection
 
     product = repository.upsert_product(
@@ -54,8 +64,113 @@ def test_postgres_admin_repository_accepting_candidate_creates_knowledge_entry_a
     assert candidate["review_status"] == "accepted"
     assert "INSERT INTO product_knowledge_candidate" in executed_sql
     assert "INSERT INTO knowledge_entry" in executed_sql
+    assert "INSERT INTO knowledge_embedding" in executed_sql
     assert "INSERT INTO app_knowledge_candidate" in executed_sql
     assert "INSERT INTO admin_audit_log" in executed_sql
+
+
+def test_postgres_admin_repository_review_reuses_existing_candidate_tenant_and_product() -> None:
+    connection = _FakeConnection(
+        fetch_rows=[
+            [("org-real", "store-real", "product-real", "原候选内容。")],
+        ]
+    )
+    repository = PostgresAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    candidate = repository.review_knowledge_candidate(
+        "candidate-001",
+        {"action": "approve", "reviewed_content": "审核后内容。", "product_id": "product-wrong"},
+        actor_id="admin-001",
+    )
+
+    flattened_params = [item for _sql, params in connection.executed for item in params]
+    assert candidate["organization_id"] == "org-real"
+    assert candidate["store_id"] == "store-real"
+    assert candidate["product_id"] == "product-real"
+    assert "product-wrong" not in flattened_params
+    assert "org-001" not in flattened_params
+    assert "store-001" not in flattened_params
+
+
+def test_in_memory_repository_review_reuses_existing_candidate_context() -> None:
+    repository = admin_repository_for(Settings(environment="test", object_storage_backend="memory"))
+    product = repository.upsert_product(
+        {
+            "organization_id": "org-real",
+            "store_id": "store-real",
+            "external_product_id": "sku-real",
+            "title": "真实商品",
+        },
+        actor_id="admin-001",
+    )
+    asset = repository.create_asset(
+        {
+            "organization_id": "org-real",
+            "store_id": "store-real",
+            "product_id": product["product_id"],
+            "asset_type": "manual",
+            "file_ref": "object://bucket/manual.pdf",
+            "file_hash": "sha256:abc",
+            "version": "v1",
+        },
+        actor_id="admin-001",
+    )
+    markdown = repository.create_asset_markdown(
+        asset["asset_id"],
+        {"markdown_text": "材质为棉。", "conversion_status": "converted"},
+        actor_id="admin-001",
+    )
+
+    candidate = repository.review_knowledge_candidate(
+        markdown["candidate_ids"][0],
+        {"action": "approve", "reviewed_content": "审核后内容。", "product_id": "product-wrong"},
+        actor_id="admin-001",
+    )
+
+    assert candidate["organization_id"] == "org-real"
+    assert candidate["store_id"] == "store-real"
+    assert candidate["product_id"] == product["product_id"]
+
+
+def test_postgres_admin_repository_rejecting_candidate_does_not_create_embedding() -> None:
+    connection = _FakeConnection()
+    repository = PostgresAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    candidate = repository.review_knowledge_candidate(
+        "candidate-001",
+        {
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "product_id": "product-001",
+            "candidate_text": "未确认内容。",
+            "accepted": False,
+        },
+        actor_id="admin-001",
+    )
+
+    executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    assert candidate["review_status"] == "rejected"
+    assert "INSERT INTO product_knowledge_candidate" in executed_sql
+    assert "INSERT INTO knowledge_entry" not in executed_sql
+    assert "INSERT INTO knowledge_embedding" not in executed_sql
+
+
+def test_postgres_admin_repository_rejecting_candidate_disables_existing_knowledge_entry() -> None:
+    connection = _FakeConnection(fetch_rows=[[("org-real", "store-real", "product-real", "原候选内容。")]])
+    repository = PostgresAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    repository.review_knowledge_candidate(
+        "candidate-001",
+        {"action": "reject", "reason": "obsolete"},
+        actor_id="admin-001",
+    )
+
+    executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    assert "UPDATE knowledge_entry" in executed_sql
+    assert "status = 'disabled'" in executed_sql
 
 
 def test_postgres_admin_repository_persists_assets_markdown_candidates_and_price_snapshots() -> None:
@@ -99,10 +214,157 @@ def test_postgres_admin_repository_persists_assets_markdown_candidates_and_price
     assert markdown["candidate_ids"][0].startswith("candidate-")
     assert price["price_snapshot_id"].startswith("price-")
     assert "INSERT INTO product_asset" in executed_sql
+    assert "object_hash" in executed_sql
+    assert "mime_type" in executed_sql
+    assert "size_bytes" in executed_sql
+    assert "storage_status" in executed_sql
     assert "INSERT INTO product_asset_markdown" in executed_sql
     assert "INSERT INTO product_knowledge_candidate" in executed_sql
     assert "INSERT INTO product_price_snapshot" in executed_sql
     assert "SELECT org.external_organization_id, st.external_store_id" in executed_sql
+
+
+def test_postgres_admin_repository_redacts_inline_content_from_asset_audit() -> None:
+    connection = _FakeConnection()
+    repository = PostgresAdminRepository("postgresql://example", object_storage=_TrackingObjectStorage())
+    repository._connect = lambda _url: connection
+
+    repository.create_asset(
+        {
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "product_id": "product-001",
+            "asset_type": "manual",
+            "file_ref": "object://bucket/manual.pdf",
+            "file_hash": "sha256:abc",
+            "version": "v1",
+            "content_base64": "bWFudWFs",
+        },
+        actor_id="admin-001",
+    )
+
+    flattened_params = [item for _sql, params in connection.executed for item in params]
+    assert "bWFudWFs" not in flattened_params
+    assert any(
+        getattr(item, "obj", {}).get("content_base64") == "<redacted>"
+        for item in flattened_params
+        if hasattr(item, "obj")
+    )
+
+
+def test_postgres_admin_repository_surfaces_object_storage_failures_before_db_write() -> None:
+    connection = _FakeConnection()
+    repository = PostgresAdminRepository("postgresql://example", object_storage=_FailingObjectStorage())
+    repository._connect = lambda _url: connection
+
+    with pytest.raises(ObjectStorageError):
+        repository.create_asset(
+            {
+                "organization_id": "org-001",
+                "store_id": "store-001",
+                "product_id": "product-001",
+                "asset_type": "manual",
+                "file_ref": "object://bucket/manual.pdf",
+                "file_hash": "sha256:abc",
+                "version": "v1",
+            },
+            actor_id="admin-001",
+        )
+
+    assert connection.executed == []
+
+
+def test_postgres_admin_repository_removes_stored_object_when_db_write_fails() -> None:
+    connection = _FailingConnection()
+    storage = _TrackingObjectStorage()
+    repository = PostgresAdminRepository("postgresql://example", object_storage=storage)
+    repository._connect = lambda _url: connection
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        repository.create_asset(
+            {
+                "organization_id": "org-001",
+                "store_id": "store-001",
+                "product_id": "product-001",
+                "asset_type": "manual",
+                "file_ref": "object://bucket/manual.pdf",
+                "file_hash": "sha256:abc",
+                "version": "v1",
+                "content_base64": "bWFudWFs",
+            },
+            actor_id="admin-001",
+        )
+
+    assert storage.deleted == ["object://bucket/manual.pdf"]
+
+
+def test_deterministic_embedding_provider_is_stable_and_pgvector_compatible() -> None:
+    provider = DeterministicEmbeddingProvider(dimensions=8)
+
+    first = provider.embed("材质为棉。")
+    second = provider.embed("材质为棉。")
+
+    assert first.model == "deterministic-hash-v1"
+    assert first.vector == second.vector
+    assert first.to_pgvector().startswith("[")
+    assert first.to_pgvector().endswith("]")
+
+
+def test_admin_repository_for_honors_filesystem_storage_without_database(tmp_path) -> None:
+    repository = admin_repository_for(
+        Settings(environment="test", object_storage_backend="filesystem", object_storage_root=str(tmp_path))
+    )
+
+    asset = repository.create_asset(
+        {
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "product_id": "product-001",
+            "asset_type": "manual",
+            "file_ref": "manuals/manual.txt",
+            "content_base64": "bWFudWFs",
+            "version": "v1",
+        },
+        actor_id="admin-001",
+    )
+
+    assert asset["storage_status"] == "stored"
+    assert (tmp_path / "manuals" / "manual.txt").read_text() == "manual"
+
+
+def test_postgres_repository_recalls_only_approved_knowledge_entries() -> None:
+    repository = PostgresAdminRepository("postgresql://example")
+    connection = _FakeConnection(
+        fetch_rows=[
+            [
+                (
+                    "knowledge-001",
+                    "product-001",
+                    "product",
+                    "材质为棉。",
+                    "deterministic-hash-v1",
+                    0,
+                )
+            ]
+        ]
+    )
+    repository._connect = lambda _url: connection
+
+    entries = repository.recall_knowledge("org-001", "store-001", "材质", limit=3)
+
+    executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    assert entries == [
+        {
+            "knowledge_entry_id": "knowledge-001",
+            "product_id": "product-001",
+            "scope": "product",
+            "content": "材质为棉。",
+            "embedding_model": "deterministic-hash-v1",
+            "chunk_index": 0,
+        }
+    ]
+    assert "entry.status = 'approved'" in executed_sql
+    assert "candidate.review_status = 'accepted'" in executed_sql
 
 
 def test_postgres_admin_repository_reads_canonical_audit_before_compat_audit() -> None:
@@ -204,3 +466,35 @@ class _FakeCursor:
         if self.connection.fetch_rows:
             return self.connection.fetch_rows.pop(0)
         return []
+
+
+class _FailingObjectStorage:
+    def put_or_reference(self, *, asset_id: str, payload: dict[str, Any]) -> object:
+        raise ObjectStorageUnavailable("object storage unavailable")
+
+
+class _TrackingObjectStorage:
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+
+    def put_or_reference(self, *, asset_id: str, payload: dict[str, Any]) -> object:
+        from ecommerce_cs_agent.services.object_storage import StoredObject
+
+        return StoredObject(
+            object_key=str(payload["file_ref"]),
+            object_hash=str(payload["file_hash"]),
+            mime_type="text/plain",
+            size_bytes=6,
+            storage_status="stored",
+        )
+
+    def delete(self, object_key: str) -> None:
+        self.deleted.append(object_key)
+
+
+class _FailingConnection:
+    def __enter__(self) -> "_FailingConnection":
+        raise RuntimeError("database unavailable")
+
+    def __exit__(self, *_exc: object) -> None:
+        return None

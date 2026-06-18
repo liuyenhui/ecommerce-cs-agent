@@ -16,6 +16,7 @@ from ecommerce_cs_agent.core.config import Settings, load_settings
 from ecommerce_cs_agent.services.admin import admin_repository_for
 from ecommerce_cs_agent.services.admin_auth import admin_auth_service_for, system_admin_auth_service_for
 from ecommerce_cs_agent.services.decision import DecisionService
+from ecommerce_cs_agent.services.object_storage import ObjectStorageUnavailable, ObjectStorageValidationError
 from ecommerce_cs_agent.services.system_admin import system_admin_repository_for
 
 
@@ -231,12 +232,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/v1/product-content/assets")
     async def create_product_asset(request: Request, _principal: Principal = Depends(admin_principal)) -> JSONResponse:
         payload = await request.json()
-        asset = admin_data.create_asset(payload, _principal.user_id or "admin-001")
+        try:
+            asset = admin_data.create_asset(payload, _principal.user_id or "admin-001")
+        except ObjectStorageValidationError as exc:
+            raise api_error(422, "object_storage_error", str(exc)) from exc
+        except ObjectStorageUnavailable as exc:
+            raise api_error(503, "object_storage_unavailable", "object storage is unavailable") from exc
         return JSONResponse(status_code=201, content={
             "asset_id": asset["asset_id"],
             "product_id": asset["product_id"],
             "asset_type": asset["asset_type"],
             "review_status": asset["review_status"],
+            "object_key": asset.get("file_ref"),
+            "object_hash": asset.get("file_hash"),
+            "mime_type": asset.get("mime_type"),
+            "size_bytes": asset.get("size_bytes"),
+            "storage_status": asset.get("storage_status"),
         })
 
     @app.post("/v1/product-content/assets/{asset_id}/markdown")

@@ -264,6 +264,21 @@ def test_system_admin_ops_migration_contains_background_task_and_audit_indexes()
         assert snippet in sql
 
 
+def test_product_knowledge_storage_migration_contains_asset_metadata_indexes() -> None:
+    sql = Path("migrations/007_product_knowledge_storage.sql").read_text(encoding="utf-8").lower()
+
+    for snippet in [
+        "alter table product_asset add column if not exists object_hash",
+        "alter table product_asset add column if not exists mime_type",
+        "alter table product_asset add column if not exists size_bytes",
+        "alter table product_asset add column if not exists storage_status",
+        "idx_product_asset_storage_status_created",
+        "idx_product_knowledge_candidate_review_status",
+    ]:
+        assert snippet in sql
+    assert "idx_knowledge_embedding_entry_chunk" not in sql
+
+
 def test_psycopg_connection_retries_transient_connect_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = migrations.PsycopgMigrationConnection.__new__(migrations.PsycopgMigrationConnection)
     connection._database_url = "postgresql://example"

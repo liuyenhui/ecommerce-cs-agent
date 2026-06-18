@@ -8,6 +8,13 @@ from typing import Any, Protocol
 from psycopg.types.json import Jsonb
 
 from ecommerce_cs_agent.core.config import Settings
+from ecommerce_cs_agent.services.embeddings import DeterministicEmbeddingProvider
+from ecommerce_cs_agent.services.object_storage import (
+    FilesystemObjectStorage,
+    InMemoryObjectStorage,
+    ObjectStorage,
+    ReferenceObjectStorage,
+)
 
 
 class AdminRepository(Protocol):
@@ -32,6 +39,9 @@ class AdminRepository(Protocol):
     def product_health(self, product_id: str) -> dict[str, Any]:
         raise NotImplementedError
 
+    def recall_knowledge(self, organization_id: str, store_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
     def system_health(self) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -40,37 +50,75 @@ class AdminRepository(Protocol):
 
 
 class InMemoryAdminRepository:
-    def __init__(self) -> None:
+    def __init__(self, object_storage: ObjectStorage | None = None, embedding_provider: DeterministicEmbeddingProvider | None = None) -> None:
         self.products: dict[str, dict[str, Any]] = {}
         self.assets: dict[str, dict[str, Any]] = {}
         self.markdowns: dict[str, dict[str, Any]] = {}
         self.price_snapshots: dict[str, dict[str, Any]] = {}
         self.knowledge_candidates: dict[str, dict[str, Any]] = {}
+        self.knowledge_entries: dict[str, dict[str, Any]] = {}
+        self.knowledge_embeddings: dict[str, dict[str, Any]] = {}
         self.audit_logs: list[dict[str, Any]] = []
+        self._object_storage = object_storage or InMemoryObjectStorage()
+        self._embedding_provider = embedding_provider or DeterministicEmbeddingProvider()
 
     def upsert_product(self, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
         product = _product_from_payload(payload)
         self.products[product["product_id"]] = product
-        self._audit("admin", product["organization_id"], product["store_id"], actor_id, "product.upsert", "product", product["product_id"], payload)
+        self._audit("admin", product["organization_id"], product["store_id"], actor_id, "product.upsert", "product", product["product_id"], _safe_diff_summary(payload))
         return product
 
     def review_knowledge_candidate(self, candidate_id: str, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
         accepted = payload.get("accepted")
         if accepted is None:
             accepted = payload.get("action", "approve") == "approve"
+        existing_candidate = self.knowledge_candidates.get(candidate_id)
+        candidate_text = str(
+            payload.get(
+                "reviewed_content",
+                payload.get("candidate_text", existing_candidate.get("candidate_text", "") if existing_candidate else ""),
+            )
+        )
+        knowledge_entry_id = f"knowledge-{candidate_id}" if accepted else None
+        organization_id = (
+            existing_candidate.get("organization_id")
+            if existing_candidate
+            else payload.get("organization_id", "org-001")
+        )
+        store_id = existing_candidate.get("store_id") if existing_candidate else payload.get("store_id", "store-001")
+        product_id = existing_candidate.get("product_id") if existing_candidate else payload.get("product_id")
         candidate = {
             "candidate_id": candidate_id,
-            "organization_id": payload.get("organization_id", "org-001"),
-            "store_id": payload.get("store_id", "store-001"),
-            "product_id": payload.get("product_id"),
-            "candidate_text": payload.get("reviewed_content", payload.get("candidate_text", "")),
+            "organization_id": organization_id,
+            "store_id": store_id,
+            "product_id": product_id,
+            "candidate_text": candidate_text,
             "review_status": "accepted" if accepted else "rejected",
             "source_payload": payload,
             "reviewed_at": _now(),
-            "knowledge_entry_id": f"knowledge-{candidate_id}" if accepted else None,
+            "knowledge_entry_id": knowledge_entry_id,
         }
         self.knowledge_candidates[candidate_id] = candidate
-        self._audit("admin", candidate["organization_id"], candidate["store_id"], actor_id, "knowledge.review", "knowledge_candidate", candidate_id, payload)
+        if knowledge_entry_id:
+            embedding = self._embedding_provider.embed(candidate_text)
+            self.knowledge_entries[knowledge_entry_id] = {
+                "knowledge_entry_id": knowledge_entry_id,
+                "candidate_id": candidate_id,
+                "content": candidate_text,
+                "status": "approved",
+            }
+            self.knowledge_embeddings[knowledge_entry_id] = {
+                "knowledge_entry_id": knowledge_entry_id,
+                "embedding_model": embedding.model,
+                "chunk_text": candidate_text,
+                "chunk_index": 0,
+            }
+        elif existing_candidate and existing_candidate.get("knowledge_entry_id"):
+            entry_id = str(existing_candidate["knowledge_entry_id"])
+            if entry_id in self.knowledge_entries:
+                self.knowledge_entries[entry_id]["status"] = "disabled"
+            self.knowledge_embeddings.pop(entry_id, None)
+        self._audit("admin", candidate["organization_id"], candidate["store_id"], actor_id, "knowledge.review", "knowledge_candidate", candidate_id, _safe_diff_summary(payload))
         return candidate
 
     def create_asset(self, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
@@ -78,20 +126,24 @@ class InMemoryAdminRepository:
         organization_id = product["organization_id"] if product else str(payload.get("organization_id", "org-001"))
         store_id = product["store_id"] if product else str(payload.get("store_id", "store-001"))
         asset_id = f"asset-{_stable_product_suffix(organization_id, store_id, str(payload.get('file_hash', payload.get('file_ref', 'asset'))))}"
+        stored = self._object_storage.put_or_reference(asset_id=asset_id, payload=payload)
         asset = {
             "asset_id": asset_id,
             "product_id": str(payload.get("product_id")),
             "organization_id": organization_id,
             "store_id": store_id,
             "asset_type": str(payload.get("asset_type", "other")),
-            "file_ref": str(payload.get("file_ref", "")),
-            "file_hash": str(payload.get("file_hash", "")),
+            "file_ref": stored.object_key,
+            "file_hash": stored.object_hash,
             "version": str(payload.get("version", "v1")),
             "review_status": "pending",
+            "mime_type": stored.mime_type,
+            "size_bytes": stored.size_bytes,
+            "storage_status": stored.storage_status,
             "metadata": payload.get("metadata", {}),
         }
         self.assets[asset_id] = asset
-        self._audit("admin", organization_id, store_id, actor_id, "product_asset.create", "product_asset", asset_id, payload)
+        self._audit("admin", organization_id, store_id, actor_id, "product_asset.create", "product_asset", asset_id, _safe_diff_summary(payload))
         return asset
 
     def create_asset_markdown(self, asset_id: str, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
@@ -118,7 +170,7 @@ class InMemoryAdminRepository:
             "source_payload": payload,
             "reviewed_at": None,
         }
-        self._audit("admin", asset["organization_id"], asset["store_id"], actor_id, "product_asset.markdown.create", "product_asset_markdown", markdown_id, payload)
+        self._audit("admin", asset["organization_id"], asset["store_id"], actor_id, "product_asset.markdown.create", "product_asset_markdown", markdown_id, _safe_diff_summary(payload))
         return markdown
 
     def create_price_snapshot(self, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
@@ -136,7 +188,7 @@ class InMemoryAdminRepository:
             "currency": payload.get("currency", "CNY"),
         }
         self.price_snapshots[snapshot_id] = snapshot
-        self._audit("admin", organization_id, store_id, actor_id, "price_snapshot.create", "product_price_snapshot", snapshot_id, payload)
+        self._audit("admin", organization_id, store_id, actor_id, "price_snapshot.create", "product_price_snapshot", snapshot_id, _safe_diff_summary(payload))
         return snapshot
 
     def list_audit_logs(self, scope: str) -> list[dict[str, Any]]:
@@ -153,6 +205,31 @@ class InMemoryAdminRepository:
                 {"name": "active_price_snapshot", "status": "pass" if has_active_price else "warning"},
             ],
         }
+
+    def recall_knowledge(self, organization_id: str, store_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        query_text = query.lower()
+        entries: list[dict[str, Any]] = []
+        for entry_id, entry in self.knowledge_entries.items():
+            candidate = self.knowledge_candidates.get(str(entry.get("candidate_id")))
+            if not candidate or candidate.get("review_status") != "accepted":
+                continue
+            if candidate.get("organization_id") != organization_id or candidate.get("store_id") != store_id:
+                continue
+            content = str(entry.get("content", ""))
+            if query_text and query_text not in content.lower():
+                continue
+            embedding = self.knowledge_embeddings.get(entry_id, {})
+            entries.append(
+                {
+                    "knowledge_entry_id": entry_id,
+                    "product_id": candidate.get("product_id"),
+                    "scope": "product",
+                    "content": content,
+                    "embedding_model": embedding.get("embedding_model"),
+                    "chunk_index": embedding.get("chunk_index", 0),
+                }
+            )
+        return entries[:limit]
 
     def system_health(self) -> dict[str, Any]:
         return _system_health("degraded", "in-memory repository")
@@ -179,11 +256,18 @@ class InMemoryAdminRepository:
 
 
 class PostgresAdminRepository:
-    def __init__(self, database_url: str) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        object_storage: ObjectStorage | None = None,
+        embedding_provider: DeterministicEmbeddingProvider | None = None,
+    ) -> None:
         import psycopg
 
         self._connect = psycopg.connect
         self._database_url = database_url
+        self._object_storage = object_storage or ReferenceObjectStorage()
+        self._embedding_provider = embedding_provider or DeterministicEmbeddingProvider()
 
     def upsert_product(self, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
         product = _product_from_payload(payload)
@@ -257,13 +341,23 @@ class PostgresAdminRepository:
                 return saved
 
     def review_knowledge_candidate(self, candidate_id: str, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
-        status = "accepted" if payload.get("accepted", True) else "rejected"
+        accepted = payload.get("accepted")
+        if accepted is None:
+            accepted = payload.get("action", "approve") == "approve"
+        status = "accepted" if accepted else "rejected"
         organization_id = str(payload.get("organization_id", "org-001"))
         store_id = str(payload.get("store_id", "store-001"))
         product_id = payload.get("product_id")
-        candidate_text = str(payload.get("candidate_text", ""))
+        candidate_text = str(payload.get("reviewed_content", payload.get("candidate_text", "")))
         with self._connect(self._database_url) as conn:
             with conn.cursor() as cur:
+                existing_candidate = self._get_candidate_context(cur, candidate_id)
+                if existing_candidate:
+                    organization_id = existing_candidate["organization_id"]
+                    store_id = existing_candidate["store_id"]
+                    product_id = existing_candidate["product_id"]
+                    if not candidate_text:
+                        candidate_text = existing_candidate["candidate_text"]
                 self._upsert_tenant_store(cur, organization_id, store_id, str(payload.get("platform", "pdd")))
                 cur.execute(
                     """
@@ -326,6 +420,7 @@ class PostgresAdminRepository:
                             metadata = EXCLUDED.metadata,
                             status = 'approved',
                             updated_at = now()
+                        RETURNING id::text
                         """,
                         (
                             organization_id,
@@ -337,8 +432,56 @@ class PostgresAdminRepository:
                             str(payload.get("title", "")),
                             candidate_text,
                             str(payload.get("source_type", "admin")),
-                            Jsonb(payload),
+                            Jsonb(_safe_diff_summary(payload)),
                         ),
+                    )
+                    entry_row = cur.fetchone()
+                    knowledge_entry_id = str(entry_row[0]) if entry_row else f"knowledge-{candidate_id}"
+                    embedding = self._embedding_provider.embed(candidate_text)
+                    cur.execute(
+                        """
+                        INSERT INTO knowledge_embedding (
+                            organization_id, store_id, knowledge_entry_id,
+                            embedding, embedding_model, chunk_text, chunk_index
+                        )
+                        VALUES (
+                            (SELECT id FROM organization WHERE external_organization_id = %s),
+                            (SELECT st.id FROM store st JOIN organization org ON org.id = st.organization_id
+                              WHERE org.external_organization_id = %s AND st.external_store_id = %s),
+                            (SELECT id FROM knowledge_entry WHERE id::text = %s),
+                            %s::vector,
+                            %s,
+                            %s,
+                            0
+                        )
+                        ON CONFLICT (knowledge_entry_id, chunk_index)
+                        DO UPDATE SET
+                            embedding = EXCLUDED.embedding,
+                            embedding_model = EXCLUDED.embedding_model,
+                            chunk_text = EXCLUDED.chunk_text,
+                            created_at = now()
+                        """,
+                        (
+                            organization_id,
+                            organization_id,
+                            store_id,
+                            knowledge_entry_id,
+                            embedding.to_pgvector(),
+                            embedding.model,
+                            candidate_text,
+                        ),
+                    )
+                else:
+                    knowledge_entry_id = None
+                    cur.execute(
+                        """
+                        UPDATE knowledge_entry
+                        SET status = 'disabled', updated_at = now()
+                        WHERE source_product_candidate_id = (
+                            SELECT id FROM product_knowledge_candidate WHERE public_candidate_id = %s
+                        )
+                        """,
+                        (candidate_id,),
                     )
                 cur.execute(
                     """
@@ -361,7 +504,7 @@ class PostgresAdminRepository:
                         product_id,
                         candidate_text,
                         status,
-                        Jsonb(payload),
+                        Jsonb(_safe_diff_summary(payload)),
                     ),
                 )
                 row = cur.fetchone()
@@ -375,8 +518,10 @@ class PostgresAdminRepository:
                     "source_payload": payload,
                     "reviewed_at": _now(),
                 }
-                self._canonical_audit(cur, candidate["organization_id"], candidate["store_id"], actor_id, "knowledge.review", "knowledge_candidate", candidate_id, payload)
-                self._audit(cur, "admin", candidate["organization_id"], candidate["store_id"], actor_id, "knowledge.review", "knowledge_candidate", candidate_id, payload)
+                candidate["knowledge_entry_id"] = knowledge_entry_id
+                safe_payload = _safe_diff_summary(payload)
+                self._canonical_audit(cur, candidate["organization_id"], candidate["store_id"], actor_id, "knowledge.review", "knowledge_candidate", candidate_id, safe_payload)
+                self._audit(cur, "admin", candidate["organization_id"], candidate["store_id"], actor_id, "knowledge.review", "knowledge_candidate", candidate_id, safe_payload)
                 return candidate
 
     def create_asset(self, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
@@ -384,54 +529,87 @@ class PostgresAdminRepository:
         organization_id = str(payload.get("organization_id", "org-001"))
         store_id = str(payload.get("store_id", "store-001"))
         asset_id = f"asset-{_stable_product_suffix(organization_id, store_id, str(payload.get('file_hash', payload.get('file_ref', 'asset'))))}"
+        stored = self._object_storage.put_or_reference(asset_id=asset_id, payload=payload)
         asset = {
             "asset_id": asset_id,
             "product_id": product_id,
             "organization_id": organization_id,
             "store_id": store_id,
             "asset_type": str(payload.get("asset_type", "other")),
-            "file_ref": str(payload.get("file_ref", "")),
-            "file_hash": str(payload.get("file_hash", "")),
+            "file_ref": stored.object_key,
+            "file_hash": stored.object_hash,
             "version": str(payload.get("version", "v1")),
             "review_status": "pending",
+            "mime_type": stored.mime_type,
+            "size_bytes": stored.size_bytes,
+            "storage_status": stored.storage_status,
             "metadata": payload.get("metadata", {}),
         }
-        with self._connect(self._database_url) as conn:
-            with conn.cursor() as cur:
-                self._upsert_tenant_store(cur, organization_id, store_id, str(payload.get("platform", "pdd")))
-                cur.execute(
-                    """
-                    INSERT INTO product_asset (
-                        public_asset_id, organization_id, store_id, product_id,
-                        asset_type, object_key, source_url, metadata
+        try:
+            with self._connect(self._database_url) as conn:
+                with conn.cursor() as cur:
+                    self._upsert_tenant_store(cur, organization_id, store_id, str(payload.get("platform", "pdd")))
+                    cur.execute(
+                        """
+                        INSERT INTO product_asset (
+                            public_asset_id, organization_id, store_id, product_id,
+                            asset_type, object_key, source_url, object_hash, mime_type, size_bytes,
+                            storage_status, metadata
+                        )
+                        VALUES (
+                            %s,
+                            (SELECT id FROM organization WHERE external_organization_id = %s),
+                            (SELECT st.id FROM store st JOIN organization org ON org.id = st.organization_id
+                              WHERE org.external_organization_id = %s AND st.external_store_id = %s),
+                            (SELECT id FROM product WHERE public_product_id = %s),
+                            %s,
+                            %s,
+                            %s,
+                            %s,
+                            %s,
+                            %s,
+                            %s,
+                            %s
+                        )
+                        ON CONFLICT (public_asset_id) WHERE public_asset_id IS NOT NULL
+                        DO UPDATE SET
+                            object_key = EXCLUDED.object_key,
+                            object_hash = EXCLUDED.object_hash,
+                            mime_type = EXCLUDED.mime_type,
+                            size_bytes = EXCLUDED.size_bytes,
+                            storage_status = EXCLUDED.storage_status,
+                            metadata = EXCLUDED.metadata
+                        """,
+                        (
+                            asset_id,
+                            organization_id,
+                            organization_id,
+                            store_id,
+                            product_id,
+                            asset["asset_type"],
+                            asset["file_ref"],
+                            payload.get("source_url"),
+                            asset["file_hash"],
+                            asset["mime_type"],
+                            asset["size_bytes"],
+                            asset["storage_status"],
+                            Jsonb({**asset["metadata"], "file_hash": asset["file_hash"], "version": asset["version"]}),
+                        ),
                     )
-                    VALUES (
-                        %s,
-                        (SELECT id FROM organization WHERE external_organization_id = %s),
-                        (SELECT st.id FROM store st JOIN organization org ON org.id = st.organization_id
-                          WHERE org.external_organization_id = %s AND st.external_store_id = %s),
-                        (SELECT id FROM product WHERE public_product_id = %s),
-                        %s,
-                        %s,
-                        %s,
-                        %s
-                    )
-                    ON CONFLICT (public_asset_id) WHERE public_asset_id IS NOT NULL
-                    DO UPDATE SET metadata = EXCLUDED.metadata
-                    """,
-                    (
-                        asset_id,
-                        organization_id,
+                    self._canonical_audit(
+                        cur,
                         organization_id,
                         store_id,
-                        product_id,
-                        asset["asset_type"],
-                        asset["file_ref"],
-                        payload.get("source_url"),
-                        Jsonb({**asset["metadata"], "file_hash": asset["file_hash"], "version": asset["version"]}),
-                    ),
-                )
-                self._canonical_audit(cur, organization_id, store_id, actor_id, "product_asset.create", "product_asset", asset_id, payload)
+                        actor_id,
+                        "product_asset.create",
+                        "product_asset",
+                        asset_id,
+                        _safe_diff_summary(payload),
+                    )
+        except Exception:
+            if asset["storage_status"] == "stored":
+                self._object_storage.delete(asset["file_ref"])
+            raise
         return asset
 
     def create_asset_markdown(self, asset_id: str, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
@@ -504,7 +682,7 @@ class PostgresAdminRepository:
                         "product_asset.markdown.create",
                         "product_asset_markdown",
                         markdown_id,
-                        payload,
+                        _safe_diff_summary(payload),
                     )
         return markdown
 
@@ -556,7 +734,7 @@ class PostgresAdminRepository:
                         payload.get("source", "admin"),
                     ),
                 )
-                self._canonical_audit(cur, organization_id, store_id, actor_id, "price_snapshot.create", "product_price_snapshot", snapshot_id, payload)
+                self._canonical_audit(cur, organization_id, store_id, actor_id, "price_snapshot.create", "product_price_snapshot", snapshot_id, _safe_diff_summary(payload))
         return snapshot
 
     def list_audit_logs(self, scope: str) -> list[dict[str, Any]]:
@@ -623,6 +801,43 @@ class PostgresAdminRepository:
             ],
         }
 
+    def recall_knowledge(self, organization_id: str, store_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT entry.id::text, product.public_product_id, entry.scope, entry.content,
+                           embedding.embedding_model, embedding.chunk_index
+                    FROM knowledge_entry entry
+                    JOIN organization org ON org.id = entry.organization_id
+                    JOIN store st ON st.id = entry.store_id
+                    LEFT JOIN product product ON product.id = entry.product_id
+                    LEFT JOIN product_knowledge_candidate candidate
+                      ON candidate.id = entry.source_product_candidate_id
+                    LEFT JOIN knowledge_embedding embedding
+                      ON embedding.knowledge_entry_id = entry.id AND embedding.chunk_index = 0
+                    WHERE org.external_organization_id = %s
+                      AND st.external_store_id = %s
+                      AND entry.status = 'approved'
+                      AND candidate.review_status = 'accepted'
+                      AND (%s = '' OR entry.content ILIKE '%%' || %s || '%%')
+                    ORDER BY entry.updated_at DESC
+                    LIMIT %s
+                    """,
+                    (organization_id, store_id, query, query, limit),
+                )
+                return [
+                    {
+                        "knowledge_entry_id": str(row[0]),
+                        "product_id": row[1],
+                        "scope": row[2],
+                        "content": row[3],
+                        "embedding_model": row[4],
+                        "chunk_index": row[5],
+                    }
+                    for row in cur.fetchall()
+                ]
+
     def system_health(self) -> dict[str, Any]:
         with self._connect(self._database_url) as conn:
             with conn.cursor() as cur:
@@ -662,6 +877,29 @@ class PostgresAdminRepository:
             """,
             (organization_id, store_id, platform, store_id, Jsonb({"external_store_id": store_id})),
         )
+
+    def _get_candidate_context(self, cur: Any, candidate_id: str) -> dict[str, Any] | None:
+        cur.execute(
+            """
+            SELECT org.external_organization_id, st.external_store_id,
+                   product.public_product_id, candidate.candidate_text
+            FROM product_knowledge_candidate candidate
+            JOIN organization org ON org.id = candidate.organization_id
+            JOIN store st ON st.id = candidate.store_id
+            LEFT JOIN product product ON product.id = candidate.product_id
+            WHERE candidate.public_candidate_id = %s
+            """,
+            (candidate_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "organization_id": str(row[0]),
+            "store_id": str(row[1]),
+            "product_id": str(row[2]) if row[2] is not None else None,
+            "candidate_text": str(row[3] or ""),
+        }
 
     def _canonical_audit(
         self,
@@ -737,9 +975,20 @@ class PostgresAdminRepository:
 
 
 def admin_repository_for(settings: Settings) -> AdminRepository:
+    object_storage = _object_storage_for(settings)
+    embedding_provider = DeterministicEmbeddingProvider()
     if settings.database_url and settings.environment.lower() not in {"test"}:
-        return PostgresAdminRepository(settings.database_url)
-    return InMemoryAdminRepository()
+        return PostgresAdminRepository(settings.database_url, object_storage=object_storage, embedding_provider=embedding_provider)
+    return InMemoryAdminRepository(object_storage=object_storage, embedding_provider=embedding_provider)
+
+
+def _object_storage_for(settings: Settings) -> ObjectStorage:
+    backend = getattr(settings, "object_storage_backend", "reference").lower()
+    if backend == "filesystem":
+        return FilesystemObjectStorage(getattr(settings, "object_storage_root", ".object-storage"))
+    if backend == "memory":
+        return InMemoryObjectStorage()
+    return ReferenceObjectStorage()
 
 
 def _product_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -760,6 +1009,17 @@ def _product_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "attributes": payload.get("attributes", {}),
         "sku_ids": payload.get("sku_ids", []),
     }
+
+
+def _safe_diff_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    redacted_keys = {"content_base64", "content", "raw_payload", "authorization", "cookie"}
+    summary: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key.lower() in redacted_keys:
+            summary[key] = "<redacted>"
+        else:
+            summary[key] = value
+    return summary
 
 
 def _stable_product_suffix(organization_id: str, store_id: str, external_product_id: str) -> str:
