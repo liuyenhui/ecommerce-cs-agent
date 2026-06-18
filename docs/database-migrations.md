@@ -18,7 +18,7 @@
 | PostgreSQL | `16.14` |
 | Database | `cs_agent` |
 | Extensions | `pgcrypto`、`vector` 已启用 |
-| Migration | `001_initial.sql` 已写入 `schema_migration` |
+| Migration | dev 执行状态以 `schema_migration` 为准；应用仓库当前声明 `001_initial.sql` 到 `006_system_admin_ops.sql` |
 
 dev 环境已经具备第一版迁移的基础能力。后续不得直接手工改线上表结构；所有 schema 演进都必须通过可追踪的 migration 文件进入。
 
@@ -85,6 +85,17 @@ CREATE EXTENSION IF NOT EXISTS vector;
 ## 5. 第一版核心表批次
 
 第一版 migration 应覆盖客服 Agent 闭环所需的核心表。具体字段仍以系统架构的数据模型为准，迁移文件负责把该模型落为可执行 SQL。
+
+当前迁移批次：
+
+| 文件 | 目的 |
+| --- | --- |
+| `001_initial.sql` | 初始规范表、`pgcrypto`、`vector`、租户/店铺、决策、知识、审计核心结构。 |
+| `002_v1_runtime_alignment.sql` | 第一版运行时快速表和 legacy 兼容表。 |
+| `003_canonical_runtime_alignment.sql` | 外部组织/店铺映射、规范决策/知识/商品表兼容列和索引。 |
+| `004_admin_auth_runtime.sql` | 客户 Admin membership、invitation、session 扩展。 |
+| `005_legacy_runtime_defaults.sql` | dev 旧 schema 的必需默认值和兼容列。 |
+| `006_system_admin_ops.sql` | 系统后台运维任务表、任务查询/重试索引和系统审计查询索引。 |
 
 | 批次 | 代表表 |
 | --- | --- |
