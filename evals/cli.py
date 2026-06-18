@@ -3,8 +3,9 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 
-from .runner import LiveAgentClient, MockAgentClient, QuickLiveSuite, format_result
+from .runner import LiveAgentClient, MockAgentClient, QuickLiveSuite, format_result, load_cases, run_cases
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -12,7 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run_suite = subparsers.add_parser("run-suite", help="Run an evaluation suite.")
-    run_suite.add_argument("--suite", choices=["quick"], required=True)
+    run_suite.add_argument("--suite", choices=["quick", "redline"], required=True)
     run_suite.add_argument("--target", choices=["mock", "live"], required=True)
     run_suite.add_argument("--target-url")
     run_suite.add_argument("--timeout", type=float, default=10.0)
@@ -32,6 +33,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_suite(args: argparse.Namespace) -> int:
+    if args.suite == "redline":
+        return run_redline_suite(args)
+
     if args.target == "mock":
         client = MockAgentClient()
     else:
@@ -54,6 +58,39 @@ def run_suite(args: argparse.Namespace) -> int:
     summary = f"quick suite {'PASS' if passed else 'FAIL'} target={args.target}"
     if args.target == "live":
         summary = f"{summary} url={(args.target_url or os.environ.get('TARGET_BASE_URL', '')).rstrip('/')}"
+    print(summary)
+    return 0 if passed else 1
+
+
+def run_redline_suite(args: argparse.Namespace) -> int:
+    target_url = args.target_url or os.environ.get("TARGET_BASE_URL")
+    if args.target == "live" and not target_url:
+        print("live target requires --target-url or TARGET_BASE_URL", file=sys.stderr)
+        return 2
+
+    cases = [
+        case
+        for case in load_cases(Path("evals/cases/regression"), suite="quick")
+        if case.is_redline
+    ]
+    if not cases:
+        print("redline suite has no matching cases", file=sys.stderr)
+        return 1
+    run = run_cases(
+        cases=cases,
+        suite="redline",
+        target=args.target,
+        target_url=target_url,
+        auth_token=os.environ.get("AGENT_API_TOKEN"),
+    )
+    for result in run.results:
+        prefix = "PASS" if result.passed else "FAIL"
+        details = ",".join(result.failure_types) if result.failure_types else "ok"
+        print(f"{prefix} {result.case_id} {details}")
+    passed = run.summary["total"] > 0 and run.summary["passed"] == run.summary["total"] and run.summary["blocked"] == 0
+    summary = f"redline suite {'PASS' if passed else 'FAIL'} target={args.target}"
+    if args.target == "live":
+        summary = f"{summary} url={(target_url or '').rstrip('/')}"
     print(summary)
     return 0 if passed else 1
 

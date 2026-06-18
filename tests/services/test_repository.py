@@ -196,6 +196,19 @@ def test_postgres_repository_dual_writes_canonical_runtime_tables_and_compat_sta
     assert "INSERT INTO action_result" in executed_sql
     assert "INSERT INTO human_reply" in executed_sql
     assert "INSERT INTO app_decision_state" in executed_sql
+    checkpoint = [item for item in connection.executed if "INSERT INTO decision_graph_checkpoint" in item[0]][0]
+    assert "thread_id" in checkpoint[0]
+    assert "graph_version" in checkpoint[0]
+    assert "node_name" in checkpoint[0]
+    assert "decision_status" in checkpoint[0]
+    assert "state_json" in checkpoint[0]
+    assert checkpoint[1][3:7] == (
+        "decision-001",
+        "decision-001",
+        "reply-decision-graph-v1",
+        "persist_trace",
+    )
+    assert checkpoint[1][7] == "action_request"
 
 
 class _FakeConnection:

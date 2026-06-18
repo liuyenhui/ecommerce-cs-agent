@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import re
 import uuid
 from typing import Any
 
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.decision_types import DecisionState
+from ecommerce_cs_agent.services.llm import DeterministicReplyProvider, ReplyProvider
 from ecommerce_cs_agent.services.repository import (
     DecisionRepository,
     InMemoryDecisionRepository,
@@ -16,14 +18,20 @@ from ecommerce_cs_agent.services.repository import (
 
 HIGH_RISK_KEYWORDS = ("退款", "赔偿", "投诉", "平台介入", "处罚", "refund", "complaint")
 SHIPPING_KEYWORDS = ("发货", "物流", "快递", "什么时候到", "ship", "shipping", "delivery")
-PRODUCT_KEYWORDS = ("材质", "尺寸", "颜色", "规格", "参数", "material", "size")
+PRODUCT_KEYWORDS = ("商品", "产品", "材质", "尺寸", "颜色", "规格", "参数", "material", "size")
 ACTION_KEYWORDS = ("改备注", "备注", "改地址", "修改地址", "收货地址", "update note", "change address")
 
 
 class DecisionService:
-    def __init__(self, settings: Settings, repository: DecisionRepository | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        repository: DecisionRepository | None = None,
+        reply_provider: ReplyProvider | None = None,
+    ):
         self.settings = settings
         self.repository = repository or _repository_for(settings)
+        self.reply_provider = reply_provider or DeterministicReplyProvider()
 
     def create_reply_decision(self, payload: dict[str, Any]) -> dict[str, Any]:
         organization_id, store_id, request_id = _request_key(payload)
@@ -53,6 +61,7 @@ class DecisionService:
                     "context_refill",
                     "上下文回填",
                     outputs_ref=[f"context:{context_type}:{payload.get('context_request_id')}"],
+                    thread_id=decision_id,
                 ),
             }
         organization_id, store_id, request_id = _request_key(state.request)
@@ -88,6 +97,7 @@ class DecisionService:
                     "context_refill",
                     "上下文回填",
                     outputs_ref=[f"context:{context_type}:{context_request_id}"],
+                    thread_id=decision_id,
                 ),
             }
             state.context_refills[key] = {**accepted, "_request_payload": comparable}
@@ -124,6 +134,7 @@ class DecisionService:
                     "action_result",
                     "动作结果回传",
                     outputs_ref=[f"action_result:{action_id}"],
+                    thread_id=decision_id,
                 ),
             }
             self._save_state(organization_id, store_id, request_id, decision_id, state)
@@ -181,20 +192,25 @@ class DecisionService:
             "confidence": response.get("confidence"),
             "risk_level": response.get("risk_level"),
             "sections": {
+                "ingest": {"status": "completed"},
                 "normalization": {"status": "completed"},
                 "retrieval": {"status": "completed"},
                 "generation": {"status": "completed"},
                 "risk_and_policy": {"status": "completed"},
                 "persistence": {"status": "completed"},
+                "feedback": {"status": "completed" if state.feedback else "pending"},
             },
             "trace": response.get("trace"),
         }
 
     def _build_response(self, decision_id: str, payload: dict[str, Any], content: str) -> dict[str, Any]:
         lowered = content.lower()
+        organization_id, store_id, _request_id = _request_key(payload)
+        matched_knowledge = self.repository.recall_knowledge(organization_id, store_id, _knowledge_query(content), limit=5)
         risk_flags = ["refund_or_complaint"] if any(word in lowered or word in content for word in HIGH_RISK_KEYWORDS) else []
-        missing_context = self._missing_context(payload, lowered, content)
+        missing_context = self._missing_context(payload, lowered, content, has_product_knowledge=bool(matched_knowledge))
         action_requests: list[dict[str, Any]] = []
+        evidence = [_knowledge_evidence(item) for item in matched_knowledge]
 
         if risk_flags:
             action = "handoff"
@@ -226,8 +242,8 @@ class DecisionService:
             candidates = [
                 {
                     "suggestion_id": f"suggestion-{decision_id[-8:]}",
-                    "reply_text": "我先帮您核对信息，请以订单和商品详情页的最新状态为准。",
-                    "evidence": [],
+                    "reply_text": self.reply_provider.generate_candidate(message=content, knowledge=matched_knowledge),
+                    "evidence": evidence,
                     "confidence": 0.68,
                 }
             ]
@@ -257,11 +273,12 @@ class DecisionService:
                 inputs_ref=[f"message:{payload.get('message', {}).get('external_message_id', '')}"],
                 outputs_ref=[f"decision:{decision_id}"],
                 rule_hits=risk_flags,
+                matched_knowledge=matched_knowledge,
                 graph=True,
             ),
         }
 
-    def _missing_context(self, payload: dict[str, Any], lowered: str, content: str) -> list[str]:
+    def _missing_context(self, payload: dict[str, Any], lowered: str, content: str, *, has_product_knowledge: bool = False) -> list[str]:
         context = payload.get("context") or {}
         missing: list[str] = []
         asks_shipping = any(word in lowered or word in content for word in SHIPPING_KEYWORDS)
@@ -271,7 +288,7 @@ class DecisionService:
             if not context.get("logistics"):
                 missing.append("logistics")
         asks_product = any(word in lowered or word in content for word in PRODUCT_KEYWORDS)
-        if asks_product and not context.get("products"):
+        if asks_product and not context.get("products") and not has_product_knowledge:
             missing.append("products")
         return missing
 
@@ -296,11 +313,13 @@ class DecisionService:
     def _action_request(self, decision_id: str, payload: dict[str, Any], content: str) -> dict[str, Any]:
         action_type = "change_shipping_address" if "地址" in content else "update-note"
         return {
+            "type": "action_request",
             "action_id": f"action-{decision_id[-8:]}",
             "action_type": action_type,
             "idempotency_key": f"{payload.get('organization_id')}:{payload.get('store_id')}:{payload.get('request_id')}:{action_type}",
             "payload": {"instruction": content},
             "target": {"store_id": payload.get("store_id")},
+            "confidence": 0.66,
             "risk_level": "medium",
             "requires_human_confirm": True,
             "reason": "用户请求执行外部业务动作，需外部系统确认并回传结果。",
@@ -320,18 +339,26 @@ class DecisionService:
         inputs_ref: list[str] | None = None,
         outputs_ref: list[str] | None = None,
         rule_hits: list[str] | None = None,
+        matched_knowledge: list[dict[str, Any]] | None = None,
         graph: bool = False,
+        thread_id: str | None = None,
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        inferred_thread_id = thread_id or _thread_id_from_refs(outputs_ref)
         if graph:
             steps = []
+            knowledge_outputs = [f"knowledge:{item.get('knowledge_entry_id')}" for item in matched_knowledge or []]
             graph_steps = [
                 ("normalize", inputs_ref or [], ["normalized_request"]),
-                ("retrieve_context", ["normalized_request"], ["context_candidates"]),
-                ("classify_intent", ["normalized_request", "context_candidates"], outputs_ref or ["intent"]),
+                ("retrieve_context", ["normalized_request"], ["context_candidates", *knowledge_outputs]),
+                ("classify_intent", ["normalized_request", "context_candidates", *knowledge_outputs], outputs_ref or ["intent"]),
                 ("risk_policy", ["intent"], ["risk_policy_result"]),
                 ("generate_candidate", ["risk_policy_result"], outputs_ref or ["candidate"]),
-                ("persist_trace", outputs_ref or ["decision"], [f"checkpoint:{self.settings.graph_version}"]),
+                (
+                    "persist_trace",
+                    outputs_ref or ["decision"],
+                    [f"checkpoint:{inferred_thread_id or 'unknown'}:{self.settings.graph_version}"],
+                ),
             ]
             for item_step_id, item_inputs, item_outputs in graph_steps:
                 steps.append(
@@ -347,17 +374,19 @@ class DecisionService:
                     }
                 )
             return {
-                "matched_knowledge_ids": [],
+                "matched_knowledge_ids": [str(item.get("knowledge_entry_id")) for item in matched_knowledge or []],
                 "rule_hits": rule_hits or [],
                 "graph_version": self.settings.graph_version,
-                "model_version": self.settings.model_version,
+                "thread_id": inferred_thread_id,
+                "model_version": self.reply_provider.model_version,
                 "steps": steps,
             }
         return {
             "matched_knowledge_ids": [],
             "rule_hits": rule_hits or [],
             "graph_version": self.settings.graph_version,
-            "model_version": self.settings.model_version,
+            "thread_id": inferred_thread_id,
+            "model_version": self.reply_provider.model_version,
             "steps": [
                 {
                     "step_id": step_id,
@@ -403,6 +432,39 @@ def _request_key(payload: dict[str, Any]) -> tuple[str, str, str]:
         str(payload.get("store_id", "")),
         str(payload.get("request_id", "")),
     )
+
+
+def _knowledge_evidence(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "knowledge_entry_id": item.get("knowledge_entry_id"),
+        "product_id": item.get("product_id"),
+        "scope": item.get("scope"),
+        "source_type": "approved_knowledge",
+        "chunk_index": item.get("chunk_index", 0),
+    }
+
+
+def _knowledge_query(content: str) -> str:
+    normalized = content.lower()
+    terms: list[str] = []
+    for keyword in (*PRODUCT_KEYWORDS, *SHIPPING_KEYWORDS, *ACTION_KEYWORDS):
+        if keyword in normalized or keyword in content:
+            terms.append(keyword)
+    terms.extend(re.findall(r"[a-zA-Z0-9][a-zA-Z0-9_-]{1,31}", normalized))
+    seen: set[str] = set()
+    unique_terms = []
+    for term in terms:
+        if term not in seen:
+            seen.add(term)
+            unique_terms.append(term)
+    return " ".join(unique_terms)
+
+
+def _thread_id_from_refs(outputs_ref: list[str] | None) -> str | None:
+    for item in outputs_ref or []:
+        if item.startswith("decision:"):
+            return item.split(":", 1)[1]
+    return None
 
 
 def _repository_for(settings: Settings) -> DecisionRepository:

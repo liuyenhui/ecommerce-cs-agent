@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Protocol
 
 from psycopg.types.json import Jsonb
@@ -21,6 +22,9 @@ class DecisionRepository(Protocol):
         store_id: str | None = None,
         limit: int = 50,
     ) -> list[DecisionState]:
+        raise NotImplementedError
+
+    def recall_knowledge(self, organization_id: str, store_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
         raise NotImplementedError
 
     def save_state(
@@ -58,6 +62,9 @@ class InMemoryDecisionRepository:
         if store_id:
             states = [item for item in states if str(item.request.get("store_id")) == store_id]
         return states[-limit:][::-1]
+
+    def recall_knowledge(self, organization_id: str, store_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        return []
 
     def save_state(
         self,
@@ -157,6 +164,57 @@ class PostgresDecisionRepository:
             tuple(params),
         )
         return [_state_from_payload(row[0]) for row in rows]
+
+    def recall_knowledge(self, organization_id: str, store_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        terms = _search_terms(query)
+        rows = self._fetch_all(
+            """
+            SELECT entry.id::text, product.public_product_id, entry.scope, entry.content,
+                   embedding.embedding_model, embedding.chunk_index
+            FROM knowledge_entry entry
+            JOIN organization org ON org.id = entry.organization_id
+            JOIN store st ON st.id = entry.store_id AND st.organization_id = org.id
+            LEFT JOIN product product
+              ON product.id = entry.product_id
+             AND product.organization_id = entry.organization_id
+             AND product.store_id = entry.store_id
+            JOIN product_knowledge_candidate candidate
+              ON candidate.id = entry.source_product_candidate_id
+             AND candidate.organization_id = entry.organization_id
+             AND candidate.store_id = entry.store_id
+            LEFT JOIN knowledge_embedding embedding
+              ON embedding.knowledge_entry_id = entry.id
+             AND embedding.organization_id = entry.organization_id
+             AND embedding.store_id = entry.store_id
+             AND embedding.chunk_index = 0
+            WHERE org.external_organization_id = %s
+              AND st.external_store_id = %s
+              AND entry.status = 'approved'
+              AND candidate.review_status = 'accepted'
+              AND (
+                %s::text[] = ARRAY[]::text[]
+                OR EXISTS (
+                  SELECT 1
+                  FROM unnest(%s::text[]) AS term
+                  WHERE entry.content ILIKE '%%' || term || '%%'
+                )
+              )
+            ORDER BY entry.updated_at DESC
+            LIMIT %s
+            """,
+            (organization_id, store_id, terms, terms, limit),
+        )
+        return [
+            {
+                "knowledge_entry_id": str(row[0]),
+                "product_id": row[1],
+                "scope": row[2],
+                "content": row[3],
+                "embedding_model": row[4],
+                "chunk_index": row[5],
+            }
+            for row in rows
+        ]
 
     def save_state(
         self,
@@ -480,23 +538,51 @@ class PostgresDecisionRepository:
         decision_id: str,
         state_payload: dict[str, Any],
     ) -> None:
+        trace = state_payload.get("response", {}).get("trace") or {}
+        graph_version = str(trace.get("graph_version") or "reply-decision-graph-v1")
+        node_name = "persist_trace"
+        decision_status = str(state_payload.get("response", {}).get("decision_status") or "completed")
         cur.execute(
             """
             INSERT INTO decision_graph_checkpoint (
-                organization_id, store_id, decision_id, checkpoint_key, state
+                organization_id, store_id, decision_id, thread_id, graph_version, node_name,
+                decision_status, checkpoint_key, state, state_json
             )
             VALUES (
                 (SELECT id FROM organization WHERE external_organization_id = %s),
                 (SELECT st.id FROM store st JOIN organization org ON org.id = st.organization_id
                   WHERE org.external_organization_id = %s AND st.external_store_id = %s),
                 %s,
+                %s,
+                %s,
+                %s,
+                %s,
                 'latest',
+                %s,
                 %s
             )
             ON CONFLICT (decision_id, checkpoint_key)
-            DO UPDATE SET state = EXCLUDED.state, created_at = now()
+            DO UPDATE SET
+                thread_id = EXCLUDED.thread_id,
+                graph_version = EXCLUDED.graph_version,
+                node_name = EXCLUDED.node_name,
+                decision_status = EXCLUDED.decision_status,
+                state = EXCLUDED.state,
+                state_json = EXCLUDED.state_json,
+                created_at = now()
             """,
-            (organization_id, organization_id, store_id, decision_id, Jsonb(state_payload)),
+            (
+                organization_id,
+                organization_id,
+                store_id,
+                decision_id,
+                decision_id,
+                graph_version,
+                node_name,
+                decision_status,
+                Jsonb(state_payload),
+                Jsonb(state_payload),
+            ),
         )
 
     def _upsert_context_snapshots(
@@ -717,3 +803,14 @@ def _tuple_keyed(payload: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any
 
 def _string_keyed(payload: dict[tuple[str, str], dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {f"{left}\u001f{right}": value for (left, right), value in payload.items()}
+
+
+def _search_terms(query: str) -> list[str]:
+    terms = [term for term in re.split(r"\s+", query.strip()) if term]
+    seen: set[str] = set()
+    unique_terms: list[str] = []
+    for term in terms:
+        if term not in seen:
+            seen.add(term)
+            unique_terms.append(term)
+    return unique_terms[:12]
