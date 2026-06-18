@@ -127,6 +127,25 @@ def test_publish_workflow_generates_sbom_and_scans_images() -> None:
         assert snippet in publish
 
 
+def test_deploy_workflow_archives_dev_release_gate_report() -> None:
+    workflow = Path(".github/workflows/deploy-dev.yml").read_text(encoding="utf-8")
+
+    for snippet in [
+        "Verify Dev Release Gate",
+        "HEAD_SHA_INPUT: ${{ inputs.head_sha }}",
+        "WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}",
+        "head_sha=\"$HEAD_SHA_INPUT\"",
+        "Initialize release gate report",
+        "python scripts/run_dev_release_gate.py",
+        "--image-tag \"${{ needs.update-gitops.outputs.image_tag }}\"",
+        "actions/upload-artifact@v4",
+        "dev-release-gate-${{ needs.update-gitops.outputs.image_tag }}",
+    ]:
+        assert snippet in workflow
+    assert 'head_sha="${{ inputs.head_sha }}"' not in workflow
+    assert workflow.count("KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG }}") == 1
+
+
 def test_k8s_security_check_script_is_available() -> None:
     script = Path("scripts/check_k8s_security.py").read_text(encoding="utf-8")
 

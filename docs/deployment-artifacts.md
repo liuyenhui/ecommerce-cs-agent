@@ -65,7 +65,7 @@ Secret 只以引用形式跨文档和配置流转。
 - OpenAPI 和评测结果。
 - 需要新增或变更的环境变量 key。
 - 数据库迁移版本。
-- 健康检查和 live eval 结果。
+- 健康检查和 live eval 结果；dev 环境由 `scripts/run_dev_release_gate.py` 生成 `reports/release-gate/dev-release-gate.md`，GitHub Actions 上传为 `dev-release-gate-<image_tag>` artifact。
 
 GitOps / Flux 仓库应维护：
 
@@ -97,6 +97,17 @@ TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com \
 - API/Admin `/health` 状态。
 - live eval pass/fail 和 `decision_id` 摘要。
 - 若失败，引用 [Runbook](runbook.md) 中的排查分支。
+
+应用仓库提供统一验收入口：
+
+```bash
+python scripts/run_dev_release_gate.py \
+  --commit-sha <commit-sha> \
+  --image-tag <image-tag> \
+  --gitops-commit <gitops-commit>
+```
+
+该脚本只通过 GitOps / Flux 资源等待目标状态，不使用 `kubectl set image` 或手工 Helm upgrade。`AGENT_API_TOKEN` 优先从环境变量读取；若未提供，则从 Kubernetes Secret `ecommerce-cs-agent-runtime` 读取后只传给 eval 子进程，报告会脱敏。
 
 ## 6. 排查归属
 
