@@ -78,6 +78,9 @@ jobs:
             -n ecommerce-cs-agent-dev \
             -f deploy/helm/ecommerce-cs-agent/values-dev.yaml
 
+      - name: K8s security render check
+        run: python scripts/check_k8s_security.py
+
       - name: Git whitespace check
         run: git diff --check
 
