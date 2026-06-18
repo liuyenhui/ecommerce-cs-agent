@@ -61,6 +61,19 @@ textarea {
   padding: 8px 10px;
 }
 
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+input[aria-invalid="true"] {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 1px #dc2626;
+}
+
 textarea {
   min-height: 106px;
   resize: vertical;
@@ -246,6 +259,21 @@ pre {
   border-radius: 6px;
   background: #ffffff;
   padding: 22px;
+}
+
+.formError {
+  border: 1px solid #f0a6a6;
+  border-radius: 4px;
+  background: #fff1f1;
+  color: #991b1b;
+  padding: 9px 10px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.loginSubmit {
+  min-width: 104px;
+  justify-self: start;
 }
 
 .workGrid {

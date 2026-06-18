@@ -253,23 +253,46 @@ function TopBar({ workspace, session, onRefresh, onLogout }: { workspace: Worksp
 }
 
 function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLoggedIn: (session: JsonRecord) => void; setToast: (toast: ToastState) => void }) {
-  const [email, setEmail] = React.useState(target === "customer" ? "admin@example.test" : "system-admin@example.test");
+  const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
-  const [organizationId, setOrganizationId] = React.useState("org-001");
+  const [organizationId, setOrganizationId] = React.useState("");
   const [loading, setLoading] = React.useState(false);
+  const [formError, setFormError] = React.useState("");
+  const [fieldErrors, setFieldErrors] = React.useState<Partial<Record<"email" | "password" | "organizationId", boolean>>>({});
+  const errorId = `${target}-login-error`;
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    const nextFieldErrors = {
+      email: !email.trim(),
+      password: !password,
+      organizationId: target === "customer" && !organizationId.trim()
+    };
+    if (nextFieldErrors.email || nextFieldErrors.password || nextFieldErrors.organizationId) {
+      setFieldErrors(nextFieldErrors);
+      const missingLabels = [
+        nextFieldErrors.email ? "邮箱" : "",
+        nextFieldErrors.password ? "密码" : "",
+        nextFieldErrors.organizationId ? "组织 ID" : ""
+      ].filter(Boolean);
+      setFormError(`请填写${formatList(missingLabels)}`);
+      return;
+    }
+
+    setFieldErrors({});
+    setFormError("");
     setLoading(true);
     try {
       const path = target === "customer" ? "/v1/admin/auth/login" : "/v1/system-admin/auth/login";
-      const body = target === "customer" ? { email, password, organization_id: organizationId } : { email, password };
+      const body = target === "customer" ? { email: email.trim(), password, organization_id: organizationId.trim() } : { email: email.trim(), password };
       await requestJson(path, { method: "POST", body: JSON.stringify(body) });
       const session = await requestJson(target === "customer" ? "/v1/admin/auth/me" : "/v1/system-admin/auth/me");
       onLoggedIn(session);
       setToast({ tone: "success", text: "登录成功" });
     } catch (error) {
-      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      setFormError(message);
+      setToast({ tone: "error", text: message });
     } finally {
       setLoading(false);
     }
@@ -277,24 +300,47 @@ function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLog
 
   return (
     <section className="loginSurface">
-      <form className="loginPanel" onSubmit={submit}>
+      <form className="loginPanel" onSubmit={submit} noValidate aria-busy={loading}>
         <KeyRound size={24} />
         <h2>{target === "customer" ? "客户后台登录" : "系统后台登录"}</h2>
+        {formError ? <p className="formError" id={errorId} role="alert">{formError}</p> : null}
         <label>
           邮箱
-          <input value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" />
+          <input
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            autoComplete="username"
+            inputMode="email"
+            placeholder="name@example.com"
+            aria-invalid={fieldErrors.email ? "true" : "false"}
+            aria-describedby={fieldErrors.email ? errorId : undefined}
+          />
         </label>
         <label>
           密码
-          <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" />
+          <input
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            type="password"
+            autoComplete="current-password"
+            aria-invalid={fieldErrors.password ? "true" : "false"}
+            aria-describedby={fieldErrors.password ? errorId : undefined}
+          />
         </label>
         {target === "customer" ? (
           <label>
             组织 ID
-            <input value={organizationId} onChange={(event) => setOrganizationId(event.target.value)} />
+            <input
+              value={organizationId}
+              onChange={(event) => setOrganizationId(event.target.value)}
+              autoComplete="off"
+              placeholder="输入当前组织 ID"
+              aria-invalid={fieldErrors.organizationId ? "true" : "false"}
+              aria-describedby={fieldErrors.organizationId ? errorId : undefined}
+            />
           </label>
         ) : null}
-        <button className="primaryButton" type="submit" disabled={loading}>
+        <button className="primaryButton loginSubmit" type="submit" disabled={loading} aria-busy={loading}>
           {loading ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
           登录
         </button>
@@ -956,6 +1002,11 @@ function readRecord(source: unknown, key: string): JsonRecord {
 function firstId(value: unknown, fallback: string) {
   const first = arrayFrom(value)[0];
   return String(first?.id || first?.organization_id || first?.store_id || fallback);
+}
+
+function formatList(items: string[]) {
+  if (items.length <= 1) return items[0] || "";
+  return `${items.slice(0, -1).join("、")}和${items[items.length - 1]}`;
 }
 
 function toneFor(value: string): "ok" | "warn" | "bad" | "info" | "" {
