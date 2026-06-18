@@ -12,6 +12,7 @@ from psycopg.types.json import Jsonb
 from ecommerce_cs_agent.api.auth import Principal
 from ecommerce_cs_agent.api.errors import api_error
 from ecommerce_cs_agent.core.config import Settings
+from ecommerce_cs_agent.core.passwords import password_matches
 
 
 @dataclass
@@ -1024,11 +1025,7 @@ def _admin_audit_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
 
 
 def _password_matches(email: Any, password: Any, expected_email: str, stored_hash: str) -> bool:
-    if email != expected_email or not isinstance(password, str):
-        return False
-    if stored_hash.startswith("plain:"):
-        return password == stored_hash.removeprefix("plain:")
-    return False
+    return password_matches(email, password, expected_email, stored_hash)
 
 
 def _parse_cookie(cookie: str | None) -> dict[str, str]:
