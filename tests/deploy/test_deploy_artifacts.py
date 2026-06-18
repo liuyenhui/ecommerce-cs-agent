@@ -115,6 +115,8 @@ def test_helm_templates_include_api_admin_and_migration_job() -> None:
     assert "python\", \"-m\", \"ecommerce_cs_agent.db.cli\", \"migrate" in (
         chart_dir / "templates/migration-job.yaml"
     ).read_text(encoding="utf-8")
+    assert 'acme.cert-manager.io/http01-edit-in-place: "true"' in admin_ingress
+    assert ".Values.api.ingress.host" in admin_ingress
     assert ".Values.admin.customer.host" in admin_ingress
     assert ".Values.admin.system.host" in admin_ingress
     assert admin_ingress.count("- host:") == 2

@@ -7,11 +7,13 @@ metadata:
     {{- include "ecommerce-cs-agent.labels" . | nindent 4 }}
     app.kubernetes.io/component: admin
   annotations:
+    acme.cert-manager.io/http01-edit-in-place: "true"
     cert-manager.io/cluster-issuer: letsencrypt-http01
 spec:
   ingressClassName: traefik
   tls:
     - hosts:
+        - {{ .Values.api.ingress.host }}
         - {{ .Values.admin.customer.host }}
         - {{ .Values.admin.system.host }}
       secretName: {{ .Values.admin.ingress.tlsSecretName }}
