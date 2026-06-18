@@ -106,9 +106,12 @@ function App() {
   const [customerSession, setCustomerSession] = React.useState<JsonRecord | null>(null);
   const [systemSession, setSystemSession] = React.useState<JsonRecord | null>(null);
   const [toast, setToast] = React.useState<ToastState>(null);
+  const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
 
   const customerAuthed = Boolean(customerSession);
   const systemAuthed = Boolean(systemSession);
+  const activeSession = workspace === "customer" ? customerSession : systemSession;
+  const isAuthenticated = Boolean(activeSession);
 
   async function refreshSession(target: Workspace) {
     if (target === "customer") {
@@ -135,28 +138,43 @@ function App() {
     void refreshSession(workspace).catch(() => undefined);
   }, [workspace]);
 
+  React.useEffect(() => {
+    if (!mobileNavOpen) return undefined;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileNavOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mobileNavOpen]);
+
   return (
-    <main className="appShell">
-      <aside className="rail">
-        <div className="brandMark">
-          <ShieldCheck size={22} />
-          <span>Ecommerce CS Agent</span>
-        </div>
-        <Navigation
-          workspace={workspace}
-          customerTab={customerTab}
-          systemTab={systemTab}
-          setCustomerTab={setCustomerTab}
-          setSystemTab={setSystemTab}
-        />
-      </aside>
+    <main className={`appShell ${isAuthenticated ? "isAuthed" : "isGuest"} ${mobileNavOpen ? "navOpen" : ""}`}>
+      {isAuthenticated ? (
+        <aside className="rail">
+          <div className="brandMark">
+            <ShieldCheck size={22} />
+            <span>Ecommerce CS Agent</span>
+          </div>
+          <Navigation
+            workspace={workspace}
+            customerTab={customerTab}
+            systemTab={systemTab}
+            setCustomerTab={setCustomerTab}
+            setSystemTab={setSystemTab}
+            onNavigate={() => setMobileNavOpen(false)}
+          />
+        </aside>
+      ) : null}
+      {isAuthenticated ? <button className="navBackdrop" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} /> : null}
 
       <section className="mainPane">
         <TopBar
           workspace={workspace}
-          session={workspace === "customer" ? customerSession : systemSession}
+          session={activeSession}
           onRefresh={() => refreshSession(workspace).then(() => setToast({ tone: "success", text: "会话已刷新" })).catch((error) => setToast({ tone: "error", text: error.message }))}
           onLogout={() => logout(workspace)}
+          onToggleNav={() => setMobileNavOpen((open) => !open)}
+          navOpen={mobileNavOpen}
         />
 
         {workspace === "customer" ? (
@@ -193,14 +211,18 @@ function Navigation(props: {
   systemTab: SystemTab;
   setCustomerTab: (tab: CustomerTab) => void;
   setSystemTab: (tab: SystemTab) => void;
+  onNavigate?: () => void;
 }) {
   if (props.workspace === "customer") {
     return (
       <nav className="navList" aria-label="客户后台导航">
         <span className="navGroup">客户运营</span>
         {customerTabs.map((tab) => (
-          <button key={tab.key} className={props.customerTab === tab.key ? "active" : ""} onClick={() => props.setCustomerTab(tab.key)}>
-            {tab.icon}{tab.label}
+          <button key={tab.key} className={props.customerTab === tab.key ? "active" : ""} onClick={() => {
+            props.setCustomerTab(tab.key);
+            props.onNavigate?.();
+          }}>
+            {tab.icon}<span>{tab.label}</span>
           </button>
         ))}
       </nav>
@@ -214,8 +236,11 @@ function Navigation(props: {
         <React.Fragment key={group}>
           <span className="navGroup">{group}</span>
           {systemTabs.filter((tab) => tab.group === group).map((tab) => (
-            <button key={tab.key} className={props.systemTab === tab.key ? "active" : ""} onClick={() => props.setSystemTab(tab.key)}>
-              {tab.icon}{tab.label}
+            <button key={tab.key} className={props.systemTab === tab.key ? "active" : ""} onClick={() => {
+              props.setSystemTab(tab.key);
+              props.onNavigate?.();
+            }}>
+              {tab.icon}<span>{tab.label}</span>
             </button>
           ))}
         </React.Fragment>
@@ -224,30 +249,42 @@ function Navigation(props: {
   );
 }
 
-function TopBar({ workspace, session, onRefresh, onLogout }: { workspace: Workspace; session: JsonRecord | null; onRefresh: () => void; onLogout: () => void }) {
+function TopBar({ workspace, session, onRefresh, onLogout, onToggleNav, navOpen }: {
+  workspace: Workspace;
+  session: JsonRecord | null;
+  onRefresh: () => void;
+  onLogout: () => void;
+  onToggleNav: () => void;
+  navOpen: boolean;
+}) {
   const user = readRecord(session, "user") || {};
   const title = workspace === "customer" ? "客户资料与知识运营" : "平台运维与发布治理";
   const subtitle = workspace === "customer" ? "组织、店铺、商品资料、知识审核和审计" : "租户开通、决策追踪、任务、健康和安全审计";
   return (
     <header className="topBar">
-      <div>
-        <p className="eyebrow">{workspace === "customer" ? "CUSTOMER ADMIN" : "SYSTEM ADMIN"}</p>
-        <h1>{title}</h1>
-        <p>{subtitle}</p>
-      </div>
-      <div className="topActions">
-        <button className="iconButton" onClick={onRefresh} title="刷新">
-          <RefreshCw size={16} />刷新
-        </button>
+      <div className="topTitle">
         {session ? (
-          <>
-            <span className="userBadge">{String(user.display_name || user.email || "已登录")}</span>
-            <button className="iconButton" onClick={onLogout} title="退出登录">
-              <LogOut size={16} />退出
-            </button>
-          </>
+          <button className="mobileNavButton" type="button" onClick={onToggleNav} aria-label={navOpen ? "关闭后台导航" : "打开后台导航"} aria-expanded={navOpen}>
+            <ListFilter size={17} />
+          </button>
         ) : null}
+        <div>
+          <p className="eyebrow">{workspace === "customer" ? "CUSTOMER ADMIN" : "SYSTEM ADMIN"}</p>
+          <h1>{title}</h1>
+          <p>{subtitle}</p>
+        </div>
       </div>
+      {session ? (
+        <div className="topActions">
+          <button className="iconButton" onClick={onRefresh} title="刷新">
+            <RefreshCw size={16} />刷新
+          </button>
+          <span className="userBadge">{String(user.display_name || user.email || "已登录")}</span>
+          <button className="iconButton" onClick={onLogout} title="退出登录">
+            <LogOut size={16} />退出
+          </button>
+        </div>
+      ) : null}
     </header>
   );
 }
