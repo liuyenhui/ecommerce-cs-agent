@@ -59,7 +59,7 @@ def test_postgres_admin_repository_accepting_candidate_creates_knowledge_entry_a
 
 
 def test_postgres_admin_repository_persists_assets_markdown_candidates_and_price_snapshots() -> None:
-    connection = _FakeConnection()
+    connection = _FakeConnection(fetch_rows=[[("org-001", "store-001")]])
     repository = PostgresAdminRepository("postgresql://example")
     repository._connect = lambda _url: connection
 
@@ -102,6 +102,7 @@ def test_postgres_admin_repository_persists_assets_markdown_candidates_and_price
     assert "INSERT INTO product_asset_markdown" in executed_sql
     assert "INSERT INTO product_knowledge_candidate" in executed_sql
     assert "INSERT INTO product_price_snapshot" in executed_sql
+    assert "SELECT org.external_organization_id, st.external_store_id" in executed_sql
 
 
 def test_postgres_admin_repository_reads_canonical_audit_before_compat_audit() -> None:
@@ -132,6 +133,36 @@ def test_postgres_admin_repository_reads_canonical_audit_before_compat_audit() -
     assert logs[0]["scope"] == "admin"
     assert logs[0]["actor_id"] == "admin-001"
     assert "FROM admin_audit_log" in connection.executed[0][0]
+
+
+def test_postgres_admin_repository_product_health_reads_canonical_product_before_compat() -> None:
+    connection = _FakeConnection(fetch_rows=[[(True, True)]])
+    repository = PostgresAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    health = repository.product_health("product-001")
+
+    assert health["status"] == "healthy"
+    assert health["checks"] == [
+        {"name": "product_exists", "status": "pass"},
+        {"name": "price_snapshot_exists", "status": "pass"},
+    ]
+    assert "FROM product WHERE public_product_id" in connection.executed[0][0]
+    assert not any("FROM app_product" in sql for sql, _params in connection.executed)
+
+
+def test_postgres_admin_repository_product_health_falls_back_to_compat_product() -> None:
+    connection = _FakeConnection(fetch_rows=[[(False, False)], [(1,)]])
+    repository = PostgresAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    health = repository.product_health("product-legacy")
+
+    assert health["status"] == "healthy"
+    assert health["checks"][0] == {"name": "product_exists", "status": "pass"}
+    assert health["checks"][1] == {"name": "price_snapshot_exists", "status": "warning"}
+    assert "FROM product WHERE public_product_id" in connection.executed[0][0]
+    assert "FROM app_product" in connection.executed[1][0]
 
 
 class _FakeConnection:
