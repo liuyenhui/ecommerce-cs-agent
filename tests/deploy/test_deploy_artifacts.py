@@ -18,11 +18,16 @@ def test_api_and_admin_dockerfiles_exist() -> None:
 def test_admin_web_is_vite_react_app() -> None:
     package = yaml.safe_load(Path("admin-web/package.json").read_text(encoding="utf-8"))
     app = Path("admin-web/src/main.tsx").read_text(encoding="utf-8")
+    nginx = Path("admin-web/nginx.conf").read_text(encoding="utf-8")
 
     assert package["scripts"]["build"] == "vite build"
     assert "客户后台" in app
     assert "系统后台" in app
     assert "fetch(" in app
+    assert "/v1/admin/auth/login" in app
+    assert "/v1/system-admin/message-traces" in app
+    assert "password: \"admin-password\"" not in app
+    assert "proxy_pass http://ecommerce-cs-agent-api:8000" in nginx
 
 
 def test_helm_values_define_dev_runtime_contract() -> None:
