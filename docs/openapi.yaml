@@ -2,13 +2,14 @@ openapi: 3.1.0
 info:
   title: 电商客服 Agent API 契约
   version: 0.1.0
-  summary: 第一版外部决策、补上下文、人工反馈和客户 Admin 核心接口。
+  summary: 第一版外部决策、补上下文、人工反馈、客户 Admin 和系统 Admin 核心接口。
   description: |
     本契约从 `docs/http-api-design.md`、`docs/customer-admin-design.md` 和 `docs/system-admin-design.md` 抽出，覆盖第一版主链路、客户 Admin、系统 Admin 和商品资料核心接口。
     外部系统通过 `/v1/reply-decisions` 创建决策，按 `context_requests[]` 回填商品、订单、物流、规则上下文，并通过 `actions/results` 回传外部动作结果。
     `decision_id` 是外部 API 主键，同时映射内部 LangGraph `thread_id`；`graph_version` 必须写入 trace 和 checkpoint，便于旧决策回放。
 
     鉴权域必须隔离：外部系统 API token 只能调用外部决策接口，客户 Admin session 只能调用 `/v1/admin/*` 和客户可见追踪接口，系统 Admin session 只能调用 `/v1/system-admin/*`。三类凭据不能混用。
+    客户 Admin Web 与系统 Admin Web 必须使用不同站点、登录页、Cookie / session 名和路由守卫；客户后台 session 建议命名为 `agent_admin_session`，系统后台 session 建议命名为 `agent_system_admin_session`。
 servers:
   - url: https://api.example.com
     description: 生产或 dev 环境 API 域名占位，实际部署以环境配置为准。
@@ -24,7 +25,7 @@ tags:
   - name: Webhooks
     description: 后续外部系统订阅决策、知识和反馈事件的回调契约。
   - name: Admin Auth
-    description: 客户 Admin 自有登录态，不接受外部系统 API Key 直接调用。
+    description: 客户 Admin 自有登录态，只服务客户后台站点，不接受外部系统 API Key 或系统 Admin session 直接调用。
   - name: Admin Context
     description: 客户 Admin 组织和店铺上下文。
   - name: Admin Connectors
@@ -34,7 +35,7 @@ tags:
   - name: Product Content
     description: 商品资料、素材、Markdown 审稿稿件、知识候选审核和价格快照维护。
   - name: System Admin
-    description: 系统后台字段级契约，覆盖租户、店铺、readiness、排障、任务、审计和健康。
+    description: 系统后台字段级契约，覆盖租户、店铺、readiness、排障、任务、审计和健康；使用系统后台独立 session。
 
 paths:
   /v1/reply-decisions:
@@ -494,7 +495,7 @@ paths:
       tags: [Admin Auth]
       operationId: adminLogin
       summary: 客户 Admin 登录
-      description: Agent 自有客户 Admin 登录。成功后建立 HttpOnly Cookie 或等价安全 session；session 状态必须保存在数据库、Redis 或等价外部存储。
+      description: Agent 自有客户 Admin 登录。成功后建立客户后台专用 HttpOnly Cookie 或等价安全 session，建议 Cookie 名为 `agent_admin_session`；session 状态必须保存在数据库、Redis 或等价外部存储。系统 Admin session 和外部系统 API token 不能调用客户 Admin API。
       security: []
       requestBody:
         required: true
@@ -507,7 +508,7 @@ paths:
           description: 登录成功并返回当前用户摘要。
           headers:
             Set-Cookie:
-              description: HttpOnly session cookie，文档不记录实际值。
+              description: HttpOnly 客户后台 session cookie，建议名为 `agent_admin_session`；文档不记录实际值。
               schema:
                 type: string
           content:
@@ -1190,7 +1191,7 @@ paths:
       tags: [System Admin]
       operationId: systemAdminLogin
       summary: 系统 Admin 登录
-      description: 系统后台独立登录入口。客户 Admin session 和外部系统 API token 不能调用系统后台接口。
+      description: 系统后台独立登录入口。成功后建立系统后台专用 HttpOnly Cookie 或等价安全 session，建议 Cookie 名为 `agent_system_admin_session`。客户 Admin session 和外部系统 API token 不能调用系统后台接口。
       security: []
       requestBody:
         required: true
@@ -1203,7 +1204,7 @@ paths:
           description: 登录成功并建立系统 Admin session。
           headers:
             Set-Cookie:
-              description: HttpOnly 系统后台 session cookie，文档不记录实际值。
+              description: HttpOnly 系统后台 session cookie，建议名为 `agent_system_admin_session`；文档不记录实际值。
               schema:
                 type: string
           content:

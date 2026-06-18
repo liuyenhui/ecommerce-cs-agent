@@ -35,6 +35,7 @@
 ## 项目文档
 
 - [Session Transcript](docs/session-transcript.md)
+- [Development Handoff](docs/development-handoff.md)
 - [Technical Options](docs/technical-options.md)
 - [HTTP API Design](docs/http-api-design.md)
 - [OpenAPI Contract](docs/openapi.yaml)

@@ -41,6 +41,7 @@
 | --- | --- |
 | `https://api.ecommerce-cs-agent-dev.fcihome.com/health` | `200`，返回 `{"status":"ok","service":"ecommerce-cs-agent-api","environment":"development"}` |
 | `https://admin.ecommerce-cs-agent-dev.fcihome.com/health` | `200`，返回 `ok` |
+| `https://system-admin.ecommerce-cs-agent-dev.fcihome.com/health` | `2026-06-18` DNS 已解析到 `47.113.204.168`；当前 HTTPS 到达 Traefik default cert，`/health` 返回 `404`，待发布新 Ingress/TLS 后复验 |
 | `cs-agent-dev-tls` | `READY=True` |
 | live quick eval | 本地 `evals.cli` 已恢复；未传 `AGENT_API_TOKEN` 时只能安全验证 `/health`，完整 quick eval 需从 Secret 读取 token 后执行 |
 
@@ -49,9 +50,11 @@
 | 用途 | 域名 | 当前状态 |
 | --- | --- | --- |
 | Agent API | `api.ecommerce-cs-agent-dev.fcihome.com` | DNS -> `47.113.204.168`，HTTPS 可访问，Ingress 已创建 |
-| Admin Web | `admin.ecommerce-cs-agent-dev.fcihome.com` | DNS -> `47.113.204.168`，HTTPS 可访问，Ingress 已创建 |
+| Customer Admin Web | `admin.ecommerce-cs-agent-dev.fcihome.com` | DNS -> `47.113.204.168`，HTTPS 可访问，Ingress 已创建；只承载公开宣传页、客户登录页和客户后台 |
+| System Admin Web | `system-admin.ecommerce-cs-agent-dev.fcihome.com` | DNS -> `47.113.204.168`；应用 chart / Admin Web 已按此 host 实现拆站，当前线上仍需发布 Ingress/TLS 后完成 HTTPS 和 `/health` 验证 |
+| System Admin Web alias | `ops-admin.ecommerce-cs-agent-dev.fcihome.com` | 可选别名；只有在 DNS / 证书策略需要时启用 |
 
-FRP 日志已确认 `cs-agent-dev-http` 三个 Host 注册成功。TLS 证书 SAN 已包含 API/Admin/root dev 域名，HTTPS 校验通过。
+FRP 日志已确认 `cs-agent-dev-http` API/Admin/root 三个 Host 注册成功。TLS 证书 SAN 已包含 API/Admin/root dev 域名，HTTPS 校验通过。`system-admin.ecommerce-cs-agent-dev.fcihome.com` 的 DNS 已生效，但当前线上证书仍是 Traefik default cert；发布新 Helm/GitOps 目标状态后，需要确认 Ingress host、`cs-agent-dev-tls` SAN、system Admin `/health` 和登录页均已独立可访问。
 
 ## PostgreSQL
 
@@ -244,7 +247,7 @@ Live 评测建议使用：
 AGENT_API_TOKEN=<from-secret> python -m evals.cli run-suite --suite quick --target live --target-url "$TARGET_BASE_URL"
 ```
 
-`evals.cli` 的 quick suite 会先检查 `GET /health`，再按契约发送最小 `POST /v1/reply-decisions` 请求，并输出 pass/fail、HTTP 状态、`decision_id`、`action` 和 `decision_status` 摘要。命令从环境变量读取 `AGENT_API_TOKEN` 并发送 `Authorization: Bearer <token>`，输出不会打印 token、secret 或完整 Authorization header。部署切换到阿里云镜像源后的当前验证已覆盖 Helm release、API/Admin 镜像、imagePullSecrets、TLS 和公网 health。
+`evals.cli` 的 quick suite 会先检查 `GET /health`，再按契约发送最小 `POST /v1/reply-decisions` 请求，并输出 pass/fail、HTTP 状态、`decision_id`、`action` 和 `decision_status` 摘要。命令从环境变量读取 `AGENT_API_TOKEN` 并发送 `Authorization: Bearer <token>`，输出不会打印 token、secret 或完整 Authorization header。拆站发布验收必须分别记录 API、Customer Admin 和 System Admin health，不能用单个 Admin health 代替。
 
 鉴权建议：
 
@@ -272,8 +275,11 @@ KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl get nodes
 KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev get pods,svc,ingress,secrets
 curl -fsS https://api.ecommerce-cs-agent-dev.fcihome.com/health
 curl -fsS https://admin.ecommerce-cs-agent-dev.fcihome.com/health
+curl -fsS https://system-admin.ecommerce-cs-agent-dev.fcihome.com/health
 TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com AGENT_API_TOKEN=<from-secret> python -m evals.cli run-suite --suite quick --target live --target-url "$TARGET_BASE_URL"
 ```
+
+系统后台拆站完成前，第三条 health 命令是发布目标检查项；不能把 DNS 解析成功、Traefik default cert、或 `admin.ecommerce-cs-agent-dev.fcihome.com` 上的系统后台 tab 当作验收通过。
 
 ## 应用镜像与 Helm
 
@@ -311,3 +317,5 @@ helm upgrade --install ecommerce-cs-agent deploy/helm/ecommerce-cs-agent \
   --set api.image.tag=<tag> \
   --set admin.image.tag=<tag>
 ```
+
+拆分系统后台站点时，Helm values 还必须显式表达 customer Admin host 和 system Admin host。两个 host 可以暂时复用同一 Admin 镜像，但 Ingress、前端路由守卫、Cookie / session 名和 API 鉴权域必须拆开。

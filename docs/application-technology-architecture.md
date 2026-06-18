@@ -35,7 +35,8 @@ Agent 输出的是 `auto_reply`、`candidate`、`handoff`、`context_request`、
 | --- | --- | --- |
 | 公开宣传页 | 产品介绍、后台能力预览、登录入口 | `/` 公开访问，点击登录进入 `/login` |
 | 客服前台 | 展示买家消息、Agent 候选、风险原因、追踪结果 | 外部客服系统已有工作台承载 |
-| 运营后台 | 客户登录、组织/店铺切换、上传商品说明书、照片、视频，维护商品/SKU 资料，审核 Markdown 知识片段，配置规则和动作能力 | 第一版必备 Admin 模块，详见 [Customer Admin Design](customer-admin-design.md) |
+| 客户运营后台 | 客户登录、组织/店铺切换、上传商品说明书、照片、视频，维护商品/SKU 资料，审核 Markdown 知识片段，配置规则和动作能力 | 第一版必备客户 Admin 模块，dev 域名为 `admin.ecommerce-cs-agent-dev.fcihome.com`，详见 [Customer Admin Design](customer-admin-design.md) |
+| 系统管理后台 | 平台运营、技术支持、系统管理员和安全审计查看跨租户 readiness、trace、任务、发布、审计和健康 | 第一版必备系统 Admin 模块，目标 dev 域名为 `system-admin.ecommerce-cs-agent-dev.fcihome.com`，详见 [System Admin Design](system-admin-design.md) |
 | Admin UI 视觉 | 宣传页、登录页、后台 shell、表格、表单、审核队列和配置界面的视觉规则 | Notion 主导宣传页 + IBM / Carbon 企业后台规则 + Ant Design 组件能力层；不照抄外部品牌 |
 | Agent API 服务 | 提供回复决策、反馈、消息追踪、动作请求等 API | 独立 FastAPI 服务 |
 | Agent 领域服务 | 上下文构建、意图识别、风险识别、RAG、生成、评分、规则闸门 | Python 服务内部模块 |
@@ -97,8 +98,10 @@ PostgreSQL 16+
 | 接口 / 协议 | 用途 |
 | --- | --- |
 | `GET /` | 公开宣传页，展示客服 Agent 产品能力、后台预览和登录按钮。 |
-| `GET /login` | Agent 自有 Admin 登录页，登录成功后进入 `/admin`。 |
-| `GET /admin` | 受保护后台 shell，未登录访问时重定向到 `/login`。 |
+| `GET https://admin.ecommerce-cs-agent-dev.fcihome.com/login` | 客户 Admin 登录页，登录成功后进入客户后台 `/admin`。 |
+| `GET https://admin.ecommerce-cs-agent-dev.fcihome.com/admin` | 受保护客户后台 shell，未登录访问时重定向到客户后台 `/login`。 |
+| `GET https://system-admin.ecommerce-cs-agent-dev.fcihome.com/login` | 系统 Admin 登录页，使用系统后台专用 session。 |
+| `GET https://system-admin.ecommerce-cs-agent-dev.fcihome.com/` | 受保护系统后台 shell，未登录访问时重定向到系统后台 `/login`。 |
 | `POST /v1/reply-decisions` | 外部客服系统提交买家消息、最小会话和可选已有上下文，Agent 返回候选、自动回复决策、补上下文请求、动作请求或转人工。 |
 | `POST /v1/reply-decisions/{decision_id}/contexts/products` | 按 `context_requests[type=products]` 回填商品快照或商品引用。 |
 | `POST /v1/reply-decisions/{decision_id}/contexts/orders` | 按 `context_requests[type=orders]` 回填订单快照。 |
@@ -111,7 +114,7 @@ PostgreSQL 16+
 | `GET /v1/tasks/{task_id}` | 后续轮询查询异步任务状态。 |
 | Webhook 回调 | 后续异步决策完成、动作执行结果、失败重试通知。 |
 
-公开页面路由不属于外部系统接入协议。外部系统 API 鉴权建议使用 API Key 或 Bearer Token；Admin 登录使用 Agent 自有 session。主请求必须带 `request_id`；补上下文和动作结果必须带 `context_request_id` / `action_id` 与 `idempotency_key`，避免外部系统重试导致重复决策、重复回填或重复动作。
+公开页面路由不属于外部系统接入协议。外部系统 API 鉴权建议使用 API Key 或 Bearer Token；客户 Admin 登录使用 `agent_admin_session`，系统 Admin 登录使用 `agent_system_admin_session`，两者不能互认。主请求必须带 `request_id`；补上下文和动作结果必须带 `context_request_id` / `action_id` 与 `idempotency_key`，避免外部系统重试导致重复决策、重复回填或重复动作。
 
 ## 6. AI 架构与模型访问
 
@@ -256,7 +259,8 @@ Agent 服务按无状态容器部署，适合 k8s 横向扩缩容。
 
 | 部署对象 | 建议 |
 | --- | --- |
-| Public / Admin Web | 可与 Agent API 同域部署或独立静态资源部署；登录态使用 HttpOnly Cookie，服务端 session 落外部存储以保持 k8s 无状态。 |
+| Public / Customer Admin Web | `admin.ecommerce-cs-agent-dev.fcihome.com` 承载公开宣传页、客户登录页和客户后台；客户 session 使用独立 HttpOnly Cookie，服务端 session 落外部存储以保持 k8s 无状态。 |
+| System Admin Web | `system-admin.ecommerce-cs-agent-dev.fcihome.com` 承载系统后台登录页和系统后台 shell；系统 session 使用独立 HttpOnly Cookie，不与客户后台互认。 |
 | Agent API | Docker 容器，k8s Deployment，多副本无状态。 |
 | PostgreSQL | 独立有状态服务，使用 PVC 或云数据库，安装 `pgcrypto` 和 `vector` 扩展。 |
 | 对象存储 | MinIO 或云对象存储，用于 JSONL 归档和导出。 |
@@ -267,7 +271,8 @@ Agent 服务按无状态容器部署，适合 k8s 横向扩缩容。
 无状态原则：
 
 - API 容器不保存本地业务状态。
-- Admin Web/API 不依赖单机内存保存登录状态；session、刷新令牌和审计写入数据库、Redis 或等价外部存储。
+- 客户 Admin Web、系统 Admin Web 和 Admin API 不依赖单机内存保存登录状态；session、刷新令牌和审计写入数据库、Redis 或等价外部存储。
+- 客户后台和系统后台使用不同登录页、Cookie / session 名、路由守卫和 API 鉴权域；客户后台 UI 不展示系统后台入口。
 - 所有商品资料元数据、价格快照、会话、决策、反馈、规则、知识写入 PostgreSQL。
 - 商品原始文件、原始归档和训练导出写入对象存储。
 - 幂等依赖数据库唯一约束和外部 `request_id`，不依赖单实例内存。
@@ -278,7 +283,8 @@ Agent 服务按无状态容器部署，适合 k8s 横向扩缩容。
 
 - 外部系统同步提交最小问答请求，商品、订单、物流、规则作为可选上下文或按 `context_requests[]` 并行回填。
 - 内部 Decision Orchestrator 采用 LangGraph 设计，支撑补上下文等待恢复、动作结果恢复、人工介入、节点级 trace 和后续扩展。
-- 客户先通过公开宣传页了解产品并点击登录，登录成功后进入 Agent 自有 `/admin` 后台。
+- 客户先通过 `admin.ecommerce-cs-agent-dev.fcihome.com` 公开宣传页了解产品并点击登录，登录成功后进入客户后台 `/admin`。
+- 平台内部人员通过 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 登录独立系统后台，不复用客户后台登录页或 session。
 - 客户通过 Admin 后台登录后维护商品资料、知识审核、规则、动作能力和审计查询，说明书先转 Markdown 并按知识片段审核。
 - Agent 返回候选回复、自动回复决策、转人工原因。
 - 动作类需求先补必要订单或物流上下文，再返回 `action_request`；外部系统执行后调用 `actions/results`。

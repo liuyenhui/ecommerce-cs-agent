@@ -1442,7 +1442,7 @@
     const technologyArchitecture = {
       title: '应用技术架构',
       summary: '用 HTML 图表集中展示技术栈、数据库、协议、AI/RAG、前后台分层、部署原则和接入边界。',
-      description: '这张图用于实施、客户沟通和交付说明。它不改变总体架构流程，只把已有系统边界和技术选型集中展示；公开宣传页、客户后台登录、权限、设置、审核和 UI 视觉基准见独立文档。',
+      description: '这张图用于实施、客户沟通和交付说明。它不改变总体架构流程，只把已有系统边界和技术选型集中展示；公开宣传页、客户后台登录、系统后台登录、权限、设置、审核和 UI 视觉基准见独立文档。',
       layers: [
         {
           title: '前台 / 后台 / Agent 分层',
@@ -1450,7 +1450,8 @@
             ['公开宣传页', '客服 Agent 自有公开入口，展示产品能力、后台预览和登录按钮，不读取租户业务数据。'],
             ['外部客服前台', '平台消息接入、客服工作台、人工确认和真实发送动作仍由外部客服系统负责。'],
             ['Agent API 服务', 'Python 3.12 + FastAPI + Pydantic v2，提供候选回复、决策、转人工和上下文请求。'],
-            ['Admin / 运营后台', '第一版必备模块，负责客户登录、组织/店铺切换、商品资料上传、Markdown 审稿、知识片段审核、规则配置、动作能力配置和审计查询。'],
+            ['客户 Admin 后台', '第一版必备模块，运行在 admin.ecommerce-cs-agent-dev.fcihome.com，负责客户登录、组织/店铺切换、商品资料上传、Markdown 审稿、知识片段审核、规则配置、动作能力配置和审计查询。'],
+            ['系统 Admin 后台', '第一版平台内部模块，运行在 system-admin.ecommerce-cs-agent-dev.fcihome.com，负责租户开通、readiness、决策排障、任务、发布、审计和健康检查。'],
             ['宣传页 / Admin UI 视觉基准', '宣传页由 Notion 主导：黑白中性基调、大留白、AI Agent 叙事、产品预览和黑色主 CTA；Admin 仍采用 IBM / Carbon 企业后台结构，Ant Design 只作为组件能力层。']
           ]
         },
@@ -1476,7 +1477,8 @@
       flow: [
         ['公开宣传页', '产品介绍 / 登录入口'],
         ['外部客服系统', '平台接入 / 工作台 / 真实发送'],
-        ['客户 Admin 后台', '登录 / 设置 / 资料 / 审核'],
+        ['客户 Admin 后台', 'admin host / 客户登录 / 资料审核'],
+        ['系统 Admin 后台', 'system-admin host / readiness / 排障 / 审计'],
         ['HTTP API', 'HTTP/JSON / OpenAPI / API Key'],
         ['Agent 领域服务', 'LangGraph / Context / Retrieval / Policy Gate'],
         ['AI + RAG', 'Provider Adapter / Structured Output / pgvector'],
@@ -1489,18 +1491,20 @@
         ['数据库', 'PostgreSQL 16+ / JSONB / pgvector', '业务主库、商品资料、价格快照、上下文快照、LangGraph checkpoint、决策 trace、知识库和向量召回统一落库。'],
         ['ORM / 迁移', 'SQLAlchemy + Alembic', '管理表结构、索引、JSONB 字段和后续版本迁移。'],
         ['接入协议', 'HTTP/JSON / Webhook / Polling', '第一版同步决策，后续支持异步事件、任务查询和回调。'],
-        ['公开页面', 'GET /, GET /login, GET /admin', '宣传页公开访问，登录页建立 Agent 自有 Admin session，/admin 未登录重定向到 /login。'],
-        ['Admin 后台', '客户登录 / RBAC / Admin API', '第一版支持组织和店铺上下文、商品资料维护、知识审核、规则配置、动作能力配置和审计查询。'],
+        ['客户后台页面', 'admin host: GET /, /login, /admin', '宣传页公开访问，客户登录页建立 agent_admin_session，/admin 未登录重定向到客户后台 /login。'],
+        ['系统后台页面', 'system-admin host: GET /login, /', '系统登录页建立 agent_system_admin_session，系统后台 shell 只调用 /v1/system-admin/*。'],
+        ['Admin 后台', '客户登录 / 系统登录 / RBAC / Admin API', '第一版客户后台和系统后台按 host、登录页、Cookie、路由守卫和 API 鉴权域隔离。'],
         ['Admin UI 视觉', 'Notion 宣传页 + IBM / Carbon 后台规则', '宣传页使用黑色主 CTA 和 AI Agent 叙事；Admin 保持密集表格、队列、表单和 hairline，Ant Design 提供组件能力。'],
         ['AI 访问', 'Provider Adapter / OpenAI-compatible LLM', '隔离模型供应商，统一 prompt 版本、模型版本和结构化输出。'],
         ['RAG', 'product_knowledge_candidate + knowledge_entry + knowledge_embedding', '商品说明书先转 Markdown 审稿，再按知识片段审核；只对审核通过知识做 embedding。'],
         ['部署', 'Docker / k8s Stateless Service', '服务无状态扩缩容，持久化、归档和对象数据放到外部存储。']
       ],
       boundaries: [
-        '公开宣传页和登录入口属于 Agent 自身，不属于外部系统或 ERP。',
+        '公开宣传页和客户后台登录入口属于 Agent 自身，不属于外部系统或 ERP。',
         'Agent 不直接登录电商平台，不直接发送买家消息。',
         '外部客服系统负责平台接入、客服工作台、真实发送和动作执行。',
         '客户 Admin 后台属于 Agent 自身，负责长期资料和配置维护，后台写入 PostgreSQL 或对象存储，Admin 服务自身保持无状态。',
+        '系统 Admin 后台属于平台内部入口，使用独立 host、登录页、Cookie、路由守卫和 /v1/system-admin/* 鉴权域；不得伪装客户用户调用客户 Admin API。',
         'Agent 只输出 candidate、auto_reply、handoff、context_request 或 action_request。',
         '人工最终回复和商品资料 Markdown 都不会自动进入知识库，必须经过知识片段候选和 Admin 审核。',
         '价格回答以外部系统当前有效价格快照为权威，ERP、平台或其他业务系统都只是来源示例。',
@@ -1509,7 +1513,7 @@
       principles: [
         '第一版优先同步 HTTP 接入，外部系统提交最小问答请求，缺商品、订单、物流或规则时按类型回填。',
         '内部 Decision Orchestrator 采用 LangGraph 状态图设计，decision_id 映射 graph thread_id，checkpoint 必须落外部存储。',
-        '公开宣传页只作为产品介绍和登录入口，/admin 登录状态由 Agent 自有 session 校验。',
+        '公开宣传页只作为产品介绍和登录入口；客户后台 /admin 由 agent_admin_session 校验，系统后台由 agent_system_admin_session 校验。',
         '宣传页由 Notion 主导：黑白中性基调、大留白、AI Agent 叙事、产品能力模块、可信背书、产品预览和黑色主 CTA；Admin 不做 Notion 化，仍按 IBM / Carbon 企业后台规则设计。',
         '所有决策都记录 decision_id、trace、模型版本、规则命中和上下文引用。',
         '高风险场景由规则闸门优先拦截，模型置信度不能覆盖 P0 风险规则。',
@@ -2166,10 +2170,11 @@
     const viewDetails = {
       overview: {
         title: '总体架构',
-        summary: '展示公开宣传页、外部客服系统、独立 Agent 服务、商品资料中心、数据与知识层、LLM 和后续 Connector 的边界关系。',
-        description: '公开宣传页和客户 Admin 后台属于 Agent 自身，负责产品介绍、登录入口和长期资料配置维护。外部客服系统负责平台消息和实际发送。Agent 服务通过 LangGraph 编排理解、检索、生成、评分、补上下文等待、动作结果恢复和规则闸门。商品资料中心负责客户手工维护说明书、照片、SKU 和资料审核。第一版由外部系统提交最小问答请求，并按 context_requests[] 回填商品、订单、物流或规则；后续再让 Connector 主动查外部系统。',
+        summary: '展示公开宣传页、客户 Admin、系统 Admin、外部客服系统、独立 Agent 服务、商品资料中心、数据与知识层、LLM 和后续 Connector 的边界关系。',
+        description: '公开宣传页和客户 Admin 后台属于 Agent 自身，负责产品介绍、登录入口和长期资料配置维护；系统 Admin 后台属于平台内部入口，负责跨租户 readiness、排障、任务、审计和健康检查。两个后台按 host、登录页、Cookie/session、路由守卫和 API 鉴权域隔离。外部客服系统负责平台消息和实际发送。Agent 服务通过 LangGraph 编排理解、检索、生成、评分、补上下文等待、动作结果恢复和规则闸门。商品资料中心负责客户手工维护说明书、照片、SKU 和资料审核。第一版由外部系统提交最小问答请求，并按 context_requests[] 回填商品、订单、物流或规则；后续再让 Connector 主动查外部系统。',
         points: [
           '公开宣传页只展示产品能力和登录入口，不展示租户业务数据。',
+          '客户后台站点不展示系统后台入口；系统后台站点不复用客户后台登录页或 session。',
           '外部客服系统仍然是平台消息和发送动作的所有者。',
           'Agent 不绕过外部系统直接发消息，只输出 auto_reply、candidate 或 handoff。',
           'LangGraph 只作为内部 Decision Orchestrator，不改变外部 HTTP API。',
@@ -2521,7 +2526,8 @@
           { key: 'buyer', text: '买家', sub: '咨询商品 / 订单 / 售后', kind: 'external' },
           { key: 'platform', text: '电商平台', sub: '拼多多 / 淘宝 / 京东 / 抖音', kind: 'external' },
           { key: 'cs', text: '外部客服系统', sub: '消息接收 / 工作台 / 实际发送', kind: 'external' },
-          { key: 'admin', text: 'Admin / 运营后台', sub: '商品资料 / 片段审核 / 资料体检', kind: 'external' },
+          { key: 'admin', text: '客户 Admin', sub: '商品资料 / 片段审核 / 资料体检', kind: 'external' },
+          { key: 'systemAdmin', text: '系统 Admin', sub: 'readiness / 排障 / 审计', kind: 'external' },
           { key: 'api', text: 'HTTP API', sub: '/v1/reply-decisions\n/contexts/*\n/v1/feedback/human-replies', kind: 'service' },
           { key: 'auth', text: '鉴权与租户识别', sub: 'API Key / Bearer Token', kind: 'service' },
           { key: 'normalize', text: '上下文标准化', sub: '平台字段映射 / JSONB raw', kind: 'service' },
@@ -2541,6 +2547,7 @@
           ['buyer', 'platform', '咨询'],
           ['platform', 'cs', '平台消息'],
           ['admin', 'productContent', '维护资料'],
+          ['systemAdmin', 'api', '系统治理'],
           ['cs', 'api', '同步最小问答请求'],
           ['api', 'auth', '鉴权'],
           ['auth', 'normalize', '校验'],

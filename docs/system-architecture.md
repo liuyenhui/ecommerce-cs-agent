@@ -2,15 +2,17 @@
 
 本文件描述电商客服 Agent 独立系统的整体架构、应用组件、技术栈、数据流、数据模型和决策机制。它基于当前已确认的方向：
 
-交互式 HTML 版本见 [System Architecture HTML](system-architecture.html)。客户可登录后台的详细设计见 [Customer Admin Design](customer-admin-design.md)。
+交互式 HTML 版本见 [System Architecture HTML](system-architecture.html)。客户可登录后台的详细设计见 [Customer Admin Design](customer-admin-design.md)，系统后台设计见 [System Admin Design](system-admin-design.md)。
 
 - 系统独立部署，对外提供标准 HTTP API。
 - 任一外部客服、ERP、订单、仓储或平台接入系统都可以通过标准 API 单独接入；ERP 只是外部系统的一种示例，不是默认上游或必需组件。
 - 第一版同步优先：外部系统调用 `POST /v1/reply-decisions` 获取候选回复或自动回复决策。
 - 第一版请求只要求最小问答字段：消息、会话、租户、店铺、平台和模式；商品、订单、物流、规则按需可选传入或通过 typed context refill 补齐。
 - 内部决策编排采用 LangGraph 设计：用 StateGraph 表达意图识别、缺上下文判断、RAG、生成、规则闸门、动作等待和人工介入；对外 API 不暴露 LangGraph 概念。
-- 第一版提供 Agent 自有公开宣传页 `/`、登录页 `/login` 和受保护后台 `/admin`；宣传页只作为产品介绍和登录入口，不承载租户业务数据。
+- 第一版提供 Agent 自有客户后台站点 `admin.ecommerce-cs-agent-dev.fcihome.com`，承载公开宣传页 `/`、客户登录页 `/login` 和受保护客户后台 `/admin`；宣传页只作为产品介绍和登录入口，不承载租户业务数据。
+- 第一版提供独立系统后台站点 `system-admin.ecommerce-cs-agent-dev.fcihome.com`，承载系统管理员登录、跨租户 readiness、决策排障、任务、审计和健康检查；`ops-admin.ecommerce-cs-agent-dev.fcihome.com` 仅作为可选别名。
 - 第一版包含 Agent 自有客户 Admin 后台，用于登录、组织/店铺切换、商品资料维护、知识审核、规则配置、动作能力配置和审计查询，不由外部系统承载。
+- 客户后台和系统后台使用不同登录页、Cookie / session 名、路由守卫和 API 鉴权域；客户后台 UI 不展示系统后台入口，系统后台不得伪装客户用户调用客户 Admin API。
 - 公开宣传页 UI 由 Notion 主导：黑白中性基调、大留白、AI Agent 叙事、产品预览和黑色主 CTA；Admin Web UI 仍采用 IBM / Carbon 企业后台结构，Ant Design 只是组件能力层，不是视觉风格来源。
 - 后续预留 Connector、异步事件、回调、规则灰度和学习评估闭环。
 
@@ -47,8 +49,9 @@ flowchart LR
   end
 
   Buyer --> Platform --> ExternalCS
-  Landing["公开宣传页\n产品介绍 / 登录入口"] --> Admin["Admin / 运营后台\n客户登录 / 设置 / 资料 / 审核"]
-  Admin --> ProductContent
+  Landing["公开宣传页\n产品介绍 / 登录入口"] --> CustomerAdmin["客户 Admin\n客户登录 / 设置 / 资料 / 审核"]
+  SystemAdmin["系统 Admin\n租户开通 / readiness / 排障 / 审计"] --> API
+  CustomerAdmin --> ProductContent
   ExternalCS -- "同步最小问答请求" --> API
   ExternalCS -- "按 context_requests 并行回填" --> ContextRefill
   API --> Auth --> Normalize --> Decision
@@ -86,7 +89,8 @@ flowchart LR
 核心边界：
 
 - 外部客服系统仍然是平台消息和实际发送动作的所有者。
-- 公开宣传页和 Admin 后台属于 Agent 自身；未登录访问 `/admin` 必须回到 `/login`。
+- 公开宣传页和客户 Admin 后台属于 Agent 自身；未登录访问客户后台 `/admin` 必须回到客户后台 `/login`。
+- 系统 Admin 后台属于平台内部运维入口，必须和客户 Admin 拆成不同站点、登录页、Cookie / session、路由守卫和 API 鉴权域。
 - Agent 服务只输出决策建议，不直接绕过外部系统给买家发消息。
 - 第一版不要求 Agent 主动登录或读取各平台后台，避免认证和合规复杂度。
 - 自动回复必须由规则闸门放行，模型生成内容本身不能直接代表可发送。
@@ -449,12 +453,12 @@ sequenceDiagram
 
 ## 7. 商品资料与知识审核流
 
-客户销售的商品会持续变化，说明书、产品照片、SKU 规格和价格不能只作为聊天上下文临时传入。第一版应建立公开宣传页、客户 Admin 后台和商品资料中心，由客户从宣传页登录进入后台后维护资料、知识审核、规则和动作能力；Agent 只使用结构化资料、审核通过知识和当前有效价格快照。后台登录、权限、设置项和审计设计见 [Customer Admin Design](customer-admin-design.md)。
+客户销售的商品会持续变化，说明书、产品照片、SKU 规格和价格不能只作为聊天上下文临时传入。第一版应建立公开宣传页、客户 Admin 后台和商品资料中心，由客户从 `admin.ecommerce-cs-agent-dev.fcihome.com` 登录进入后台后维护资料、知识审核、规则和动作能力；Agent 只使用结构化资料、审核通过知识和当前有效价格快照。系统后台另在 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 提供跨租户治理和排障，不出现在客户后台导航中。后台登录、权限、设置项和审计设计见 [Customer Admin Design](customer-admin-design.md) 和 [System Admin Design](system-admin-design.md)。
 
 ```mermaid
 sequenceDiagram
   autonumber
-  participant Admin as Admin / 运营后台
+  participant Admin as 客户 Admin
   participant Asset as Product Content Center
   participant LLM as LLM Provider
   participant Review as 知识片段审核
