@@ -18,7 +18,7 @@ def test_product_asset_markdown_price_snapshot_and_review_flow_are_persisted() -
     cookie = _admin_cookie(client)
     headers = {"Cookie": cookie}
 
-    product = client.post(
+    product_response = client.post(
         "/v1/product-content/products",
         headers=headers,
         json={
@@ -27,7 +27,8 @@ def test_product_asset_markdown_price_snapshot_and_review_flow_are_persisted() -
             "external_product_id": "sku-stage3",
             "title": "阶段三商品",
         },
-    ).json()
+    )
+    product = product_response.json()
     asset = client.post(
         "/v1/product-content/assets",
         headers=headers,
@@ -69,6 +70,7 @@ def test_product_asset_markdown_price_snapshot_and_review_flow_are_persisted() -
     )
     health = client.get(f"/v1/product-content/products/{product['product_id']}/health", headers=headers)
 
+    assert product_response.status_code == 201
     assert asset.status_code == 201
     assert asset.json()["asset_id"].startswith("asset-")
     assert asset.json()["review_status"] == "pending"

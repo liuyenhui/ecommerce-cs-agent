@@ -71,7 +71,7 @@ def test_product_content_upsert_writes_audit_and_health():
     )
     audit = client.get("/v1/admin/audit-logs", headers=headers)
 
-    assert product.status_code == 200
+    assert product.status_code == 201
     assert product.json()["product_id"].startswith("product-")
     assert health.status_code == 200
     assert health.json()["status"] == "healthy"
@@ -104,8 +104,8 @@ def test_product_content_ids_are_tenant_scoped():
         },
     )
 
-    assert first.status_code == 200
-    assert second.status_code == 200
+    assert first.status_code == 201
+    assert second.status_code == 201
     assert first.json()["product_id"] != second.json()["product_id"]
 
 
