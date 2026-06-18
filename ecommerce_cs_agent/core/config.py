@@ -18,6 +18,8 @@ class Settings:
     system_admin_initial_email: str = "system-admin@example.test"
     system_admin_initial_password_hash: str = "plain:system-admin-password"
     database_url: str | None = None
+    object_storage_backend: str = "reference"
+    object_storage_root: str = ".object-storage"
 
 
 def load_settings() -> Settings:
@@ -59,6 +61,8 @@ def load_settings() -> Settings:
             default="plain:system-admin-password",
         ),
         database_url=os.environ.get("DATABASE_URL"),
+        object_storage_backend=os.environ.get("OBJECT_STORAGE_BACKEND", "reference"),
+        object_storage_root=os.environ.get("OBJECT_STORAGE_ROOT", ".object-storage"),
     )
 
 

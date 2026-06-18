@@ -142,6 +142,14 @@ class OpenApiContractTest(unittest.TestCase):
 
         self.assertEqual(failures, [], "\n".join(failures))
 
+    def test_product_asset_declares_object_storage_unavailable_response(self):
+        responses = self.document["paths"]["/v1/product-content/assets"]["post"]["responses"]
+
+        self.assertEqual(
+            responses["503"]["$ref"],
+            "#/components/responses/ObjectStorageUnavailable",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

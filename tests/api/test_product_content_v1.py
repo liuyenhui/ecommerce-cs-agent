@@ -72,6 +72,9 @@ def test_product_asset_markdown_price_snapshot_and_review_flow_are_persisted() -
     assert asset.status_code == 201
     assert asset.json()["asset_id"].startswith("asset-")
     assert asset.json()["review_status"] == "pending"
+    assert asset.json()["object_key"] == "object://bucket/manual.pdf"
+    assert asset.json()["object_hash"] == "sha256:abc"
+    assert asset.json()["storage_status"] == "referenced"
     assert markdown.status_code == 201
     assert markdown.json()["conversion_status"] == "converted"
     assert markdown.json()["candidate_ids"][0].startswith("candidate-")
@@ -81,3 +84,65 @@ def test_product_asset_markdown_price_snapshot_and_review_flow_are_persisted() -
     assert review.json()["knowledge_entry_id"].startswith("knowledge-")
     assert health.status_code == 200
     assert health.json()["status"] == "healthy"
+
+
+def test_product_asset_storage_unavailable_returns_503_contract_error() -> None:
+    client = TestClient(create_app())
+    cookie = _admin_cookie(client)
+    headers = {"Cookie": cookie}
+
+    product = client.post(
+        "/v1/product-content/products",
+        headers=headers,
+        json={
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "external_product_id": "sku-storage-failure",
+            "title": "存储失败商品",
+        },
+    ).json()
+    response = client.post(
+        "/v1/product-content/assets",
+        headers=headers,
+        json={
+            "product_id": product["product_id"],
+            "asset_type": "manual",
+            "file_ref": "fail://bucket/manual.pdf",
+            "file_hash": "sha256:abc",
+            "version": "v1",
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "object_storage_unavailable"
+
+
+def test_product_asset_invalid_inline_content_returns_422_contract_error() -> None:
+    client = TestClient(create_app())
+    cookie = _admin_cookie(client)
+    headers = {"Cookie": cookie}
+
+    product = client.post(
+        "/v1/product-content/products",
+        headers=headers,
+        json={
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "external_product_id": "sku-invalid-content",
+            "title": "非法内容商品",
+        },
+    ).json()
+    response = client.post(
+        "/v1/product-content/assets",
+        headers=headers,
+        json={
+            "product_id": product["product_id"],
+            "asset_type": "manual",
+            "file_ref": "object://bucket/manual.pdf",
+            "content_base64": "not-base64",
+            "version": "v1",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "object_storage_error"

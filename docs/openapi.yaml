@@ -1051,6 +1051,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ObjectStorageUnavailable"
 
   /v1/product-content/assets/{asset_id}/markdown:
     post:
@@ -1819,6 +1821,12 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
     ValidationError:
       description: 字段校验失败。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ObjectStorageUnavailable:
+      description: 对象存储暂不可用；服务端不得回显底层凭据、临时 URL 或完整文件内容。
       content:
         application/json:
           schema:
@@ -3286,6 +3294,17 @@ components:
           description: 对象存储或归档引用，不应包含临时密钥。
         file_hash:
           type: string
+        mime_type:
+          type: string
+          default: application/octet-stream
+        size_bytes:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+        content_base64:
+          type: string
+          description: 可选的本地/测试上传内容；生产建议先上传到对象存储后传 `file_ref`，不要包含临时密钥。
         version:
           type: string
         allow_customer_quote:
@@ -3307,6 +3326,20 @@ components:
         review_status:
           type: string
           enum: [pending, approved, rejected, needs_review]
+        object_key:
+          type: string
+          description: 对象存储 key 或外部归档引用，不包含临时密钥。
+        object_hash:
+          type: string
+        mime_type:
+          type: string
+        size_bytes:
+          type:
+            - integer
+            - "null"
+        storage_status:
+          type: string
+          enum: [referenced, stored, failed]
 
     ProductAssetMarkdownRequest:
       type: object
@@ -4063,6 +4096,8 @@ components:
             - rate_limited
             - idempotency_conflict
             - validation_error
+            - object_storage_error
+            - object_storage_unavailable
             - missing_context
             - action_result_required
             - policy_blocked
