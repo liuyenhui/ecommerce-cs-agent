@@ -106,10 +106,14 @@ def test_postgres_decision_repository_recalls_only_approved_accepted_knowledge()
     assert entries[0]["knowledge_entry_id"] == "knowledge-001"
     assert "entry.status = 'approved'" in executed_sql
     assert "candidate.review_status = 'accepted'" in executed_sql
+    assert "st.id::text = entry.store_id::text" in executed_sql
     assert "st.organization_id = org.id" in executed_sql
     assert "product.organization_id = entry.organization_id" in executed_sql
+    assert "product.store_id::text = entry.store_id::text" in executed_sql
     assert "candidate.organization_id = entry.organization_id" in executed_sql
+    assert "candidate.store_id::text = entry.store_id::text" in executed_sql
     assert "embedding.organization_id = entry.organization_id" in executed_sql
+    assert "embedding.store_id::text = entry.store_id::text" in executed_sql
     assert connection.executed[0][1] == ("org-001", "store-001", ["商品", "材质"], ["商品", "材质"], 3)
 
 
