@@ -24,7 +24,7 @@
 | API / Admin image build | 已在 `.github/workflows/publish-images.yml` 中构建。 |
 | GHCR + 阿里云 Registry 推送 | 已在 `Publish Images` 中推送；阿里云凭据来自 GitHub Secrets。 |
 | GitOps image tag 更新 | 已由 `.github/workflows/deploy-dev.yml` 写入 `liuyenhui/fhg-gitops-repo` dev values。 |
-| K8s rollout 与 health / live eval | 由发布执行者在 Flux 同步后做上线验收并记录证据。 |
+| K8s rollout 与 health / live eval | 已由 `.github/workflows/deploy-dev.yml` 的 `Verify Dev Release Gate` job 执行并上传 `dev-release-gate-<image_tag>` artifact；本地也可用 `scripts/run_dev_release_gate.py` 复跑。 |
 
 第一阶段仍不要把 build、test、push、deploy 的完成状态和 CodeQL 混在一起。CodeQL 只覆盖 SAST；应用构建、镜像发布、GitOps 更新和发布后验证保持独立 workflow 与独立证据。
 
@@ -51,7 +51,7 @@ PR
 | --- | --- | --- |
 | `pr-checks` | `pull_request` | Markdown / OpenAPI、unit / contract / integration、eval CLI unit tests、Helm lint / template、K8s 安全渲染检查。 |
 | `Publish Images` | `push` 到 `main`、`workflow_dispatch`、`codex/publish-*` | 构建 API / Admin 镜像，推送 GHCR 和阿里云 Registry。 |
-| `Deploy Dev GitOps` | `Publish Images` 成功后或 `workflow_dispatch` | 更新 GitOps image tag / values，由 Flux 同步到 K8s；rollout、health 和 live eval 由发布执行者验证。 |
+| `Deploy Dev GitOps` | `Publish Images` 成功后或 `workflow_dispatch` | 更新 GitOps image tag / values，由 Flux 同步到 K8s；等待 rollout，执行 API/Admin `/health` 和 quick live eval，并归档 release gate 报告。 |
 
 PR 阶段原则上不推送正式镜像、不改 GitOps 目标状态；main / release 阶段才发布镜像和触发部署。
 
@@ -83,7 +83,7 @@ GHCR 默认优先使用 GitHub Actions 内置 `GITHUB_TOKEN` 和 workflow `packa
 - `GITOPS_TOKEN`
 - `KUBECONFIG`
 
-`KUBECONFIG` 只作为后续需要时的备选方案，不作为默认部署方式。默认路径通过 GitOps repo 的 tag / values 变更驱动 Flux。
+`KUBECONFIG` 只用于发布后自动验收 job 读取 Flux / HelmRelease / Deployment 状态、触发 reconcile 和从 Kubernetes Secret 读取 `AGENT_API_TOKEN`；不用于 `kubectl set image`、`kubectl apply` 或绕过 GitOps 修改目标状态。默认部署路径仍通过 GitOps repo 的 tag / values 变更驱动 Flux。
 
 ## 4. PR Checks
 
@@ -121,7 +121,7 @@ OpenAPI 校验工具可后续选择 Redocly、Spectral 或等价 CLI；关键是
 | GitOps tag 更新 | 更新 GitOps repo 或本仓库约定的 values/tag 文件，由 Flux 负责同步。 |
 | K8s 配置安全 | `scripts/check_k8s_security.py` 在 PR checks 和 `Publish Images` verify job 中阻断缺少安全上下文、资源限制、探针或使用 latest tag 的 chart。 |
 | 部署后验证 | 等待 K8s rollout 完成，执行 `/health` 和 quick live eval。 |
-| 发布记录 | 记录镜像 tag、Git SHA、OpenAPI 版本、eval 报告和部署环境。 |
+| 发布记录 | `scripts/run_dev_release_gate.py` 记录镜像 tag、Git SHA、GitOps commit、Flux / HelmRelease / Deployment 状态、migration 版本、API/Admin health 和 quick live eval 摘要，并由 `Deploy Dev GitOps` 上传 artifact。 |
 
 依赖漏洞扫描和更细的 license policy 仍可继续补强；镜像 SBOM、provenance、CRITICAL 漏洞扫描和 Helm/K8s 安全渲染检查已经进入发布门禁。
 
@@ -149,7 +149,7 @@ OpenAPI 校验工具可后续选择 Redocly、Spectral 或等价 CLI；关键是
 | 第一阶段 | quick live eval：部署后调用 dev API `/health`，再用 `evals.cli` 对 live target 跑 quick suite。 |
 | 后续阶段 | 盲测核心集、红线 suite、固定回归集、基线对比和失败分类报告。 |
 
-quick live eval 需要从 Secret 注入 `TARGET_BASE_URL` 和 `AGENT_API_TOKEN`，不能把 token 写入仓库或文档。红线 suite 一票否决，至少覆盖跨租户泄露、无依据报价、越权动作、绕过人工确认、高风险自动回复和 trace 缺失。
+quick live eval 需要从 Secret 注入 `TARGET_BASE_URL` 和 `AGENT_API_TOKEN`，不能把 token 写入仓库或文档。`Deploy Dev GitOps` 会优先从 Kubernetes Secret `ecommerce-cs-agent-runtime` 读取 `AGENT_API_TOKEN` 并只传给 eval 子进程；报告和日志会脱敏。红线 suite 一票否决，至少覆盖跨租户泄露、无依据报价、越权动作、绕过人工确认、高风险自动回复和 trace 缺失。
 
 建议发布前最终检查顺序：
 
@@ -194,9 +194,8 @@ PR required checks passed
 - GHCR 和阿里云 Registry 双推送 workflow。
 - image tag 命名、发布记录和回滚策略。
 - GitOps tag / values 更新方式。
-- Flux sync、K8s rollout、`/health` 和 quick live eval 的自动化验证。
-- release gate 报告归档位置和失败分类格式。
-- 依赖漏洞扫描、license policy、部署后验证报告归档自动化。
+- release gate 失败分类、趋势汇总和通知。
+- 依赖 license policy 和更细粒度漏洞例外审批。
 - 部署失败通知和回滚通知。
 - Branch Protection required checks 配置。
 
@@ -227,12 +226,11 @@ PR required checks passed
 - workflow 更新 tag / values。
 - Flux 同步 dev 环境。
 - 等待 K8s rollout 完成。
-- 执行 API/Admin `/health`。
+- 执行 API/Admin `/health`，归档 `dev-release-gate-<image_tag>` artifact。
 
 ### 10.4 第四阶段：上线可判定
 
-- 接入 quick live eval。
-- 固化 release gate 报告。
+- 扩展 quick live eval 报告字段和失败分类。
 - 增加盲测核心集和红线 suite。
 - 失败用例沉淀为回归集。
 - 根据稳定性再补依赖漏洞扫描、Helm/K8s 安全扫描、license policy 和更细粒度的漏洞例外审批。
