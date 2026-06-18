@@ -51,7 +51,7 @@ PR
 | --- | --- | --- |
 | `pr-checks` | `pull_request` | Markdown / OpenAPI、unit / contract / integration、eval CLI unit tests、Helm lint / template、K8s 安全渲染检查。 |
 | `Publish Images` | `push` 到 `main`、`workflow_dispatch`、`codex/publish-*` | 构建 API / Admin 镜像，推送 GHCR 和阿里云 Registry。 |
-| `Deploy Dev GitOps` | `Publish Images` 成功后或 `workflow_dispatch` | 更新 GitOps image tag / values，由 Flux 同步到 K8s；等待 rollout，执行 API/Admin `/health` 和 quick live eval，并归档 release gate 报告。 |
+| `Deploy Dev GitOps` | `Publish Images` 成功后或 `workflow_dispatch` | 更新 GitOps image tag / values，由 Flux 同步到 K8s；等待 rollout，执行 API、Customer Admin、System Admin `/health` 和 quick live eval，并归档 release gate 报告。 |
 
 PR 阶段原则上不推送正式镜像、不改 GitOps 目标状态；main / release 阶段才发布镜像和触发部署。
 
@@ -228,7 +228,7 @@ PR required checks passed
 - workflow 更新 tag / values。
 - Flux 同步 dev 环境。
 - 等待 K8s rollout 完成。
-- 执行 API/Admin `/health`，归档 `dev-release-gate-<image_tag>` artifact。
+- 执行 API、Customer Admin、System Admin `/health`，归档 `dev-release-gate-<image_tag>` artifact。
 
 ### 10.4 第四阶段：上线可判定
 

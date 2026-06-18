@@ -12,10 +12,21 @@ spec:
   ingressClassName: traefik
   tls:
     - hosts:
-        - {{ .Values.admin.ingress.host }}
+        - {{ .Values.admin.customer.host }}
+        - {{ .Values.admin.system.host }}
       secretName: {{ .Values.admin.ingress.tlsSecretName }}
   rules:
-    - host: {{ .Values.admin.ingress.host }}
+    - host: {{ .Values.admin.customer.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "ecommerce-cs-agent.name" . }}-admin
+                port:
+                  name: http
+    - host: {{ .Values.admin.system.host }}
       http:
         paths:
           - path: /

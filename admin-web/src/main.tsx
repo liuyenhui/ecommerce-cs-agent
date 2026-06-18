@@ -54,6 +54,15 @@ const systemTabs: Array<{ key: SystemTab; label: string; group: string; icon: Re
   { key: "health", label: "系统健康", group: "发布安全", icon: <HeartPulse size={17} /> }
 ];
 
+const CUSTOMER_ADMIN_HOST = "admin.ecommerce-cs-agent-dev.fcihome.com";
+const SYSTEM_ADMIN_HOST = "system-admin.ecommerce-cs-agent-dev.fcihome.com";
+
+export function detectWorkspaceFromLocation(location: Pick<Location, "hostname" | "pathname">): Workspace {
+  if (location.hostname === SYSTEM_ADMIN_HOST || location.hostname.startsWith("system-admin.")) return "system";
+  if (location.hostname === CUSTOMER_ADMIN_HOST || location.hostname.startsWith("admin.")) return "customer";
+  return location.pathname.startsWith("/system-admin") ? "system" : "customer";
+}
+
 const statusTone: Record<string, "ok" | "warn" | "bad" | "info"> = {
   active: "ok",
   healthy: "ok",
@@ -91,7 +100,7 @@ async function requestJson<T = JsonRecord>(path: string, options: RequestInit = 
 }
 
 function App() {
-  const [workspace, setWorkspace] = React.useState<Workspace>("customer");
+  const [workspace] = React.useState<Workspace>(() => detectWorkspaceFromLocation(window.location));
   const [customerTab, setCustomerTab] = React.useState<CustomerTab>("overview");
   const [systemTab, setSystemTab] = React.useState<SystemTab>("home");
   const [customerSession, setCustomerSession] = React.useState<JsonRecord | null>(null);
@@ -123,9 +132,8 @@ function App() {
   }
 
   React.useEffect(() => {
-    void refreshSession("customer").catch(() => undefined);
-    void refreshSession("system").catch(() => undefined);
-  }, []);
+    void refreshSession(workspace).catch(() => undefined);
+  }, [workspace]);
 
   return (
     <main className="appShell">
@@ -133,14 +141,6 @@ function App() {
         <div className="brandMark">
           <ShieldCheck size={22} />
           <span>Ecommerce CS Agent</span>
-        </div>
-        <div className="workspaceSwitch" role="tablist" aria-label="后台类型">
-          <button className={workspace === "customer" ? "active" : ""} onClick={() => setWorkspace("customer")}>
-            <Store size={16} />客户后台
-          </button>
-          <button className={workspace === "system" ? "active" : ""} onClick={() => setWorkspace("system")}>
-            <Database size={16} />系统后台
-          </button>
         </div>
         <Navigation
           workspace={workspace}
