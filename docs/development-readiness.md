@@ -5,6 +5,7 @@
 相关来源：
 
 - [README](../README.md)：项目目标、核心设计原则和文档入口。
+- [Development Handoff](development-handoff.md)：最新影响开发定位的文档更新、新会话阅读顺序和交接提示。
 - [HTTP API Design](http-api-design.md)：外部系统接入、补上下文、动作结果、反馈、Admin API 和安全兼容性要求。
 - [OpenAPI Contract](openapi.yaml)：第一版主链路、客户 Admin、系统 Admin 和商品资料接口的机器可读契约。
 - [System Architecture](system-architecture.md)：系统组件、数据流、数据库模型、决策机制和第一版实现边界。
@@ -164,6 +165,7 @@ TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com AGENT_API_TOKEN=<
 ## 5. 进入开发前检查清单
 
 - README 已链接本文件，且 `docs/development-readiness.md` 存在。
+- README 已链接 [Development Handoff](development-handoff.md)，且 `docs/development-handoff.md` 存在。
 - README 已链接 [Development Setup](development-setup.md)、[Implementation Plan](implementation-plan.md)、[Database Migrations](database-migrations.md)、[Testing](testing.md)、[CI/CD](ci-cd.md)、[Deployment Artifacts](deployment-artifacts.md)、[Runbook](runbook.md) 和 [Security Local Files](security-local-files.md)。
 - 第一版实现范围和暂不实现范围已经和产品、后端、前端、部署、测试口径对齐。
 - 本地开发环境、数据库迁移、测试、CI/CD、部署工件和运行排障都有执行型文档入口。

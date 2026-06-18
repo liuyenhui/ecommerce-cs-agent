@@ -22,6 +22,12 @@ Use codegraph for structural questions: what calls what, what would break, where
 If `.codegraph/` is missing or the server says the project is not initialized, ask before running `codegraph init -i`.
 <!-- CODEGRAPH_END -->
 
+## Development Handoff
+
+- Development and documentation sessions must read `docs/development-handoff.md` before planning or editing project docs, contracts, Admin behavior, deployment, testing, or implementation scope.
+- After completing a documentation change that affects implementation scope, API contracts, deployment, testing, Admin boundaries, or security rules, add a short dated entry at the top of `docs/development-handoff.md`.
+- `docs/development-handoff.md` is a routing and change-orientation document, not a new architecture source. Keep architecture truth in the documents named below.
+
 ## Architecture Documents
 
 Keep architecture content in one source file.
