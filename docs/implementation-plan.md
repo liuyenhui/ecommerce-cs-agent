@@ -116,6 +116,8 @@ psql "$DATABASE_URL" -c "select version, applied_at from schema_migration order 
 | 外部 API token | `/v1/reply-decisions`、typed context refill、`actions/results`、人工反馈、按契约允许的 trace 查询 | `/v1/admin/*`、`/v1/system-admin/*` |
 | 客户 Admin session | `/v1/admin/*`、`/v1/product-content/*`、本租户授权店铺的审计和 trace | `/v1/system-admin/*`、其他组织或未授权店铺 |
 | 系统 Admin session | `/v1/system-admin/*`、跨租户 readiness 和排障视图 | 客户业务写入，除非通过明确的代运营接口并写系统审计 |
+| 客户 Admin Web | `admin.ecommerce-cs-agent-dev.fcihome.com`、客户登录页、客户后台路由守卫 | 系统后台入口、系统后台 session、`/v1/system-admin/*` |
+| 系统 Admin Web | `system-admin.ecommerce-cs-agent-dev.fcihome.com`、系统登录页、系统后台路由守卫 | 客户后台入口、客户后台 session、伪装客户用户调用 `/v1/admin/*` |
 
 建议验收命令：
 
@@ -129,6 +131,7 @@ curl -i -b "<customer-admin-cookie>" http://127.0.0.1:8000/v1/system-admin/healt
 
 - 第一条 `curl` 应返回 `401` 或 `403`，不能泄露 Admin 用户信息。
 - 第二条 `curl` 应返回 `401` 或 `403`，不能把客户后台 session 当作系统后台 session。
+- 客户后台页面不展示“系统后台”入口；系统后台页面不复用客户后台登录页、Cookie 或路由守卫。
 - token、session secret、密码 hash、cookie 原文不得出现在日志、trace、API 响应或测试快照中。
 
 ## 4. `reply-decisions` 主链路
@@ -224,6 +227,7 @@ python -m pytest tests/contract/test_customer_admin.py tests/integration/test_cu
 
 - `GET /v1/admin/auth/me` 必须返回前端渲染所需的最小身份上下文。
 - 客户 Admin session 不能访问系统 Admin API。
+- 客户后台 Web 只部署在 `admin.ecommerce-cs-agent-dev.fcihome.com`，不展示系统后台入口或切换按钮。
 - 每个写接口都记录操作者、组织、店铺、对象类型、对象 ID、动作和差异摘要。
 
 ## 7. 系统 Admin
@@ -256,6 +260,8 @@ python -m pytest tests/contract/test_system_admin.py tests/integration/test_syst
 验收口径：
 
 - 系统后台账号、角色和 session 与客户后台完全隔离。
+- 系统后台 Web 部署在 `system-admin.ecommerce-cs-agent-dev.fcihome.com`；`ops-admin.ecommerce-cs-agent-dev.fcihome.com` 只作为可选别名。
+- 系统后台代客户操作必须走系统后台专用接口并记录 `actor_system_user_id`、原因和目标租户，不能伪装客户用户调用 `/v1/admin/*`。
 - 默认返回脱敏 trace；完整 raw payload 只允许高权限排障接口访问，并必须记录审计。
 - readiness 能给出明确阻断项，例如缺资料、知识未审核、价格过期、规则未启用、动作能力异常或 health 失败。
 
@@ -353,6 +359,7 @@ helm template ecommerce-cs-agent deploy/helm/ecommerce-cs-agent -f deploy/helm/e
 KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev get pods,svc,ingress
 curl -fsS https://api.ecommerce-cs-agent-dev.fcihome.com/health
 curl -fsS https://admin.ecommerce-cs-agent-dev.fcihome.com/health
+curl -fsS https://system-admin.ecommerce-cs-agent-dev.fcihome.com/health
 TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com AGENT_API_TOKEN=<from-secret> python -m evals.cli run-suite --suite quick --target live --target-url "$TARGET_BASE_URL"
 ```
 
@@ -361,3 +368,4 @@ TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com AGENT_API_TOKEN=<
 - GitOps 中只记录镜像 tag、Secret key 名称、namespace 和非敏感配置，不提交真实 secret。
 - `readiness` 失败、迁移失败、health 失败或 live eval 失败时，不把该 tag 标记为可发布。
 - 发布记录应能关联 commit、image tag、migration version、OpenAPI version、eval report 和关键 `decision_id` 样例。
+- 不能把同一 Admin Web 站点上的客户 / 系统后台 tab 当作拆站完成；发布验收必须看到 customer Admin host 和 system Admin host 独立 health、登录页和路由守卫。

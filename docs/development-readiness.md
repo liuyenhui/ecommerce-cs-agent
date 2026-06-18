@@ -5,6 +5,7 @@
 相关来源：
 
 - [README](../README.md)：项目目标、核心设计原则和文档入口。
+- [Development Handoff](development-handoff.md)：最新影响开发定位的文档更新、新会话阅读顺序和交接提示。
 - [HTTP API Design](http-api-design.md)：外部系统接入、补上下文、动作结果、反馈、Admin API 和安全兼容性要求。
 - [OpenAPI Contract](openapi.yaml)：第一版主链路、客户 Admin、系统 Admin 和商品资料接口的机器可读契约。
 - [System Architecture](system-architecture.md)：系统组件、数据流、数据库模型、决策机制和第一版实现边界。
@@ -36,8 +37,8 @@
 | 决策编排 | 内部使用 LangGraph StateGraph 或等价状态机表达补上下文等待、动作结果等待、规则闸门、人工介入和节点级 trace。 | [System Architecture](system-architecture.md)、[Application Technology Architecture](application-technology-architecture.md) |
 | 持久化 | PostgreSQL + JSONB + pgvector 保存租户、店铺、商品资料、会话、消息、上下文快照、决策、checkpoint、反馈、知识和向量。 | [System Architecture](system-architecture.md)、[Application Technology Architecture](application-technology-architecture.md) |
 | k8s 无状态 | API 容器、Admin Web/API 不保存本地业务状态；session、checkpoint、审计和业务数据落外部存储。 | [Application Technology Architecture](application-technology-architecture.md)、[Deployment](deployment.md) |
-| 客户 Admin | 提供 Agent 自有 `/`、`/login`、`/admin`，支持登录、组织/店铺切换、商品资料、知识审核、规则、动作能力和审计。 | [Customer Admin Design](customer-admin-design.md)、[HTTP API Design](http-api-design.md) |
-| 系统 Admin | 支持系统管理员登录、租户/店铺开通、配置完成度、决策追踪、任务、模型用量、评测、API 凭据、安全审计和健康检查。 | [System Admin Design](system-admin-design.md) |
+| 客户 Admin | 在 `admin.ecommerce-cs-agent-dev.fcihome.com` 提供 Agent 自有 `/`、`/login`、`/admin`，支持登录、组织/店铺切换、商品资料、知识审核、规则、动作能力和审计；客户后台 UI 不展示系统后台入口。 | [Customer Admin Design](customer-admin-design.md)、[HTTP API Design](http-api-design.md) |
+| 系统 Admin | 在 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 提供独立系统后台，支持系统管理员登录、租户/店铺开通、配置完成度、决策追踪、任务、模型用量、评测、API 凭据、安全审计和健康检查。 | [System Admin Design](system-admin-design.md) |
 | 规则闸门 | 自动回复必须经过规则、风险、上下文完整性和置信度控制；高风险或上下文不足时输出候选或转人工。 | [README](../README.md)、[System Architecture](system-architecture.md) |
 | 测试门禁 | 本地快测覆盖 unit / contract / policy；PR 覆盖接口契约、状态机、权限、幂等、context refill、policy gate 和 Admin 审计关键流。 | [Automated Blind Testing Design](superpowers/specs/2026-06-14-automated-blind-testing-design.md) |
 
@@ -114,6 +115,7 @@ KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl get nodes
 KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev get pods,svc,ingress,secrets
 curl -fsS https://api.ecommerce-cs-agent-dev.fcihome.com/health
 curl -fsS https://admin.ecommerce-cs-agent-dev.fcihome.com/health
+curl -fsS https://system-admin.ecommerce-cs-agent-dev.fcihome.com/health
 TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com AGENT_API_TOKEN=<from-secret> python -m evals.cli run-suite --suite quick --target live --target-url "$TARGET_BASE_URL"
 ```
 
@@ -129,9 +131,11 @@ TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com AGENT_API_TOKEN=<
 
 | API / 路由 | 第一版状态 | 文档覆盖 | 备注 |
 | --- | --- | --- | --- |
-| `GET /` | 必须实现 | 已覆盖 | 公开宣传页和登录入口，不读取租户业务数据。 |
-| `GET /login` | 必须实现 | 已覆盖 | Agent 自有登录页。 |
-| `GET /admin` | 必须实现 | 已覆盖 | 受保护客户后台 shell，未登录回到 `/login`。 |
+| `GET https://admin.ecommerce-cs-agent-dev.fcihome.com/` | 必须实现 | 已覆盖 | 客户后台公开宣传页和登录入口，不读取租户业务数据。 |
+| `GET https://admin.ecommerce-cs-agent-dev.fcihome.com/login` | 必须实现 | 已覆盖 | 客户 Admin 登录页，建立客户后台 session。 |
+| `GET https://admin.ecommerce-cs-agent-dev.fcihome.com/admin` | 必须实现 | 已覆盖 | 受保护客户后台 shell，未登录回到客户后台 `/login`；不得展示系统后台入口。 |
+| `GET https://system-admin.ecommerce-cs-agent-dev.fcihome.com/login` | 必须实现 | 已覆盖 | 系统 Admin 登录页，建立系统后台 session。 |
+| `GET https://system-admin.ecommerce-cs-agent-dev.fcihome.com/` | 必须实现 | 已覆盖 | 受保护系统后台 shell，未登录回到系统后台 `/login`。 |
 | `POST /v1/reply-decisions` | 必须实现 | 已覆盖 | 外部客服系统唯一同步问答入口。 |
 | `POST /v1/reply-decisions/{decision_id}/contexts/products` | 必须实现 | 已覆盖 | 按 `context_requests[type=products]` 回填商品快照或引用。 |
 | `POST /v1/reply-decisions/{decision_id}/contexts/orders` | 必须实现 | 已覆盖 | 回填订单快照。 |
@@ -159,11 +163,14 @@ TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com AGENT_API_TOKEN=<
 - 响应必须包含 `decision_id`，用于反馈、审计、消息追踪和问题排查。
 - 外部系统 API Key / Bearer Token 不能调用客户 Admin API 或系统 Admin API。
 - 客户后台 session 不能调用系统后台 API。
+- 客户后台和系统后台必须使用不同 Web 站点、登录页、Cookie / session 名、路由守卫和 API 鉴权域。
+- 系统后台代客户操作必须走系统后台专用接口并写审计，不能伪装客户用户调用 `/v1/admin/*`。
 - 密钥、token、密码和私钥不返回明文，不写入文档、日志或前端响应。
 
 ## 5. 进入开发前检查清单
 
 - README 已链接本文件，且 `docs/development-readiness.md` 存在。
+- README 已链接 [Development Handoff](development-handoff.md)，且 `docs/development-handoff.md` 存在。
 - README 已链接 [Development Setup](development-setup.md)、[Implementation Plan](implementation-plan.md)、[Database Migrations](database-migrations.md)、[Testing](testing.md)、[CI/CD](ci-cd.md)、[Deployment Artifacts](deployment-artifacts.md)、[Runbook](runbook.md) 和 [Security Local Files](security-local-files.md)。
 - 第一版实现范围和暂不实现范围已经和产品、后端、前端、部署、测试口径对齐。
 - 本地开发环境、数据库迁移、测试、CI/CD、部署工件和运行排障都有执行型文档入口。

@@ -24,21 +24,23 @@
 
 采用“同步优先，异步预留”的设计。
 
-### 公开页面与 Admin 入口
+### 公开页面、客户 Admin 与系统 Admin 入口
 
-公开页面和 Admin 路由是客服 Agent 自有 Web 入口，不属于外部系统 API：
+公开页面和 Admin 路由是客服 Agent 自有 Web 入口，不属于外部系统 API。客户后台和系统后台必须拆成不同 Web 站点、登录页、Cookie / session 名和路由守卫：
 
 ```text
-GET /
-GET /login
-GET /admin
+GET https://admin.ecommerce-cs-agent-dev.fcihome.com/
+GET https://admin.ecommerce-cs-agent-dev.fcihome.com/login
+GET https://admin.ecommerce-cs-agent-dev.fcihome.com/admin
+GET https://system-admin.ecommerce-cs-agent-dev.fcihome.com/login
+GET https://system-admin.ecommerce-cs-agent-dev.fcihome.com/
 ```
 
-- `GET /` 展示宣传页、后台能力预览和登录按钮，不读取或展示租户业务数据。
-- `GET /login` 展示 Agent 自有登录页，登录成功后建立 Admin session 并跳转 `/admin`。
-- `GET /admin` 是受保护后台 shell；未登录访问必须重定向到 `/login`。
-- 已登录用户从 `/` 点击登录按钮时可以直接进入 `/admin`，但后台仍必须调用 `GET /v1/admin/auth/me` 校验用户、组织、店铺和角色。
-- Web 登录态使用 HttpOnly Cookie 或等价安全机制；服务端 session 状态必须保存在数据库、Redis 或等价外部存储，不能依赖单容器内存。
+- `admin.ecommerce-cs-agent-dev.fcihome.com` 只承载公开宣传页、客户 Admin 登录页和客户后台 shell，不展示“系统后台”入口。
+- 客户后台登录成功后建立客户 Admin session，例如 `agent_admin_session`，并跳转 `/admin`；客户后台路由守卫只调用 `GET /v1/admin/auth/me`。
+- `system-admin.ecommerce-cs-agent-dev.fcihome.com` 承载系统 Admin 登录页和系统后台 shell，`ops-admin.ecommerce-cs-agent-dev.fcihome.com` 只作为可选别名。
+- 系统后台登录成功后建立系统 Admin session，例如 `agent_system_admin_session`；系统后台路由守卫只调用 `GET /v1/system-admin/auth/me`。
+- 客户 Admin session、系统 Admin session 和外部系统 API token 互不互认；服务端 session 状态必须保存在数据库、Redis 或等价外部存储，不能依赖单容器内存。
 
 ### 第一版：同步接口
 
@@ -504,7 +506,7 @@ POST /v1/capabilities/action-capabilities
 
 ### Admin 登录、权限和审计
 
-客户后台使用客服 Agent 自有 Admin API 分组承载登录、组织/店铺上下文、用户角色和审计查询，不扩大同步问答接口，也不依赖任何外部系统的登录态、session 或 token。公开路由 `/`、`/login`、`/admin` 只负责页面入口和后台 shell，真实登录状态由以下 API 校验：
+客户后台使用客服 Agent 自有 Admin API 分组承载登录、组织/店铺上下文、用户角色和审计查询，不扩大同步问答接口，也不依赖任何外部系统的登录态、session 或 token。客户后台站点为 `admin.ecommerce-cs-agent-dev.fcihome.com`，公开路由 `/`、`/login`、`/admin` 只负责页面入口和后台 shell，真实登录状态由以下 API 校验：
 
 ```text
 POST /v1/admin/auth/login
@@ -519,7 +521,7 @@ PATCH /v1/admin/users/{user_id}/roles
 GET /v1/admin/audit-logs
 ```
 
-Admin API 必须校验 Agent 自有用户身份、组织、店铺和角色权限。外部系统接入 token 只能调用外部接入 API，不能直接访问 Admin API。所有商品资料、知识审核、规则配置、动作能力配置和店铺设置的写操作都应记录操作者、组织、店铺、对象、动作和时间。未登录访问 `/admin` 必须回到 `/login`，登录成功后如果用户有多个组织或店铺，应先选择上下文再进入后台首页。
+Admin API 必须校验 Agent 自有用户身份、组织、店铺和角色权限。外部系统接入 token 和系统 Admin session 不能直接访问 `/v1/admin/*`。所有商品资料、知识审核、规则配置、动作能力配置和店铺设置的写操作都应记录操作者、组织、店铺、对象、动作和时间。未登录访问客户后台 `/admin` 必须回到客户后台 `/login`，登录成功后如果用户有多个组织或店铺，应先选择上下文再进入后台首页。系统后台如需代客户操作，必须走 `/v1/system-admin/*` 专用接口并写系统审计，不得伪装客户用户调用 `/v1/admin/*`。
 
 ### 商品资料维护
 
@@ -545,6 +547,7 @@ GET /v1/product-content/products/{product_id}/health
 - 返回必须包含 `decision_id`，用于反馈、审计、消息追踪和问题排查。
 - 鉴权第一版可使用 API Key 或 Bearer Token，后续再扩展到租户级密钥、签名和 IP 白名单。
 - 日志中不保存 Cookie、二维码、短信验证码、完整买家敏感身份信息等会话材料。
+- 客户 Admin 和系统 Admin 必须使用不同 Cookie / session 名、不同路由守卫和不同 API 鉴权域；客户后台 UI 不展示系统后台入口。
 - 平台原始字段放入 JSONB 风格的 `raw` 或 `metadata` 字段，标准字段保持稳定。
 - Markdown 审稿稿件和 LLM 生成的模拟问答不能直接作为自动回复知识源，必须经人工片段审核。
 - 价格类回复必须引用外部系统当前有效价格快照；价格缺失、过期或冲突时不能自动报价。

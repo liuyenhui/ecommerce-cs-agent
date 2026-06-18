@@ -27,6 +27,8 @@
 - 不保存明文密钥、平台密码、云凭据、LLM Key、SMTP 密码或客户生产数据导出文件。
 - 不把外部系统用户、ERP 角色或电商平台账号直接视为系统后台权限来源。
 - 系统后台服务必须可 k8s 无状态部署；session、任务状态、审计、配置和发布记录必须使用 PostgreSQL、Redis、对象存储或其他外部持久化能力。
+- 系统后台必须部署为独立 Web 站点，dev 主域名为 `system-admin.ecommerce-cs-agent-dev.fcihome.com`；`ops-admin.ecommerce-cs-agent-dev.fcihome.com` 只作为可选别名。
+- 系统后台不得挂在客户后台侧栏或同一个前端 shell 里；客户后台账号、客户后台 Cookie 和外部系统 token 都不能进入系统后台。
 
 ## 2. 第一版目标
 
@@ -62,6 +64,7 @@
 权限原则：
 
 - 系统后台账号、角色和 session 与客户后台账号隔离。
+- 系统后台登录态使用系统后台专用 HttpOnly Cookie，例如 `agent_system_admin_session`；不得复用客户后台 `agent_admin_session`。
 - 查看跨租户数据必须记录访问审计，尤其是 raw payload、错误详情和消息 trace。
 - 写入客户租户数据必须区分“系统配置修改”和“代客户操作”，并记录业务原因。
 - 高风险操作应至少要求二次确认，后续可扩展为审批流。
@@ -108,6 +111,13 @@
 ### 5.2 全局布局
 
 第一版系统后台采用三栏工作台结构：
+
+站点和路由口径：
+
+- dev 系统后台主站点为 `https://system-admin.ecommerce-cs-agent-dev.fcihome.com`；如 DNS 或证书策略需要，可额外绑定 `https://ops-admin.ecommerce-cs-agent-dev.fcihome.com`。
+- 系统后台登录页为系统后台专用 `/login`，登录成功后进入系统后台 shell；它不复用客户后台 `https://admin.ecommerce-cs-agent-dev.fcihome.com/login`。
+- 系统后台前端路由守卫只调用 `/v1/system-admin/auth/me`；客户后台 session 缺失或存在都不能让系统后台放行。
+- 系统后台如果需要代客户修改配置，必须走系统后台专用代运营接口并写 `actor_system_user_id`、原因、目标租户、目标店铺和差异摘要；不得伪装成客户用户调用 `/v1/admin/*`。
 
 | 区域 | 说明 |
 | --- | --- |
@@ -280,6 +290,7 @@
 
 - 系统后台 API 只接受系统后台 session 或系统管理员专用认证方式。
 - 客户后台 session、外部系统 API Key 和外部系统 Bearer Token 不能调用系统后台 API。
+- 系统后台 UI 只调用 `/v1/system-admin/*` 和明确允许的只读排障接口；不得直接调用 `/v1/admin/*` 伪装客户后台操作。
 - 所有跨租户查询必须带查询范围，不能默认返回全部 raw 数据。
 - 写接口必须记录 `system_user_id`、目标租户、目标店铺、对象、动作、差异摘要、原因和时间。
 - API 返回敏感字段时默认脱敏；密钥、token、密码和私钥永不返回明文。
@@ -385,13 +396,15 @@
 
 第一版系统后台设计成立的最低验收口径：
 
-- 系统管理员可以登录独立系统后台，客户后台账号不能登录系统后台。
+- 系统管理员可以登录 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 独立系统后台；客户后台账号不能登录系统后台。
+- `admin.ecommerce-cs-agent-dev.fcihome.com` 不展示系统后台入口，`system-admin.ecommerce-cs-agent-dev.fcihome.com` 不复用客户后台登录页、Cookie 或路由守卫。
 - 平台运营可以创建组织、店铺和客户后台初始管理员邀请。
 - 系统后台可以查看各店铺资料、知识、规则、动作能力和 API 接入完成度。
 - 技术支持可以按 `decision_id`、请求 ID 或外部消息 ID 查询消息决策摘要。
 - 系统后台可以查看资料解析、知识抽取、embedding、批量导入和评测任务状态。
 - 系统后台可以查看 LLM provider、API、Worker、数据库、对象存储和队列健康状态。
 - 系统后台关键写操作、跨租户查询和敏感数据查看都有审计。
+- 代客户操作必须通过系统后台专用接口记录 `actor_system_user_id`、原因和目标租户，不允许伪装客户用户调用客户 Admin API。
 - API Key、Secret、平台凭证、SMTP 密码、LLM Key 和私钥不以明文出现在数据库、文档、日志或前端响应。
 - 系统后台服务本身无状态，所有持续状态存入外部持久化组件。
 - 系统后台 UI 与 [System Admin UI Prototype](system-admin-ui-prototype.html) 的布局、导航分组、状态表达、操作位置和信息密度保持一致。

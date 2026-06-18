@@ -83,10 +83,13 @@ GitOps / Flux 仓库应维护：
 ```bash
 curl -fsS https://api.ecommerce-cs-agent-dev.fcihome.com/health
 curl -fsS https://admin.ecommerce-cs-agent-dev.fcihome.com/health
+curl -fsS https://system-admin.ecommerce-cs-agent-dev.fcihome.com/health
 TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com \
   AGENT_API_TOKEN=<from-secret> \
   python -m evals.cli run-suite --suite quick --target live --target-url "$TARGET_BASE_URL"
 ```
+
+拆分系统后台站点后，GitOps values 必须同时表达 customer Admin host 和 system Admin host。两个 host 可以复用同一 Admin 镜像，但 Ingress host、登录页、Cookie / session 名、路由守卫和 API 鉴权域必须独立。
 
 `AGENT_API_TOKEN` 从 Kubernetes Secret 或安全的临时环境变量读取，不写入命令历史共享记录、文档或聊天。
 
@@ -107,7 +110,7 @@ python scripts/run_dev_release_gate.py \
   --gitops-commit <gitops-commit>
 ```
 
-该脚本只通过 GitOps / Flux 资源等待目标状态，不使用 `kubectl set image` 或手工 Helm upgrade。`AGENT_API_TOKEN` 优先从环境变量读取；若未提供，则从 Kubernetes Secret `ecommerce-cs-agent-runtime` 读取后只传给 eval 子进程，报告会脱敏。
+该脚本只通过 GitOps / Flux 资源等待目标状态，不使用 `kubectl set image` 或手工 Helm upgrade。`AGENT_API_TOKEN` 优先从环境变量读取；若未提供，则从 Kubernetes Secret `ecommerce-cs-agent-runtime` 读取后只传给 eval 子进程，报告会脱敏。拆站完成后，发布报告必须分别记录 API、Customer Admin 和 System Admin health。
 
 ## 6. 排查归属
 

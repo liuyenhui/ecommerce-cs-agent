@@ -41,6 +41,7 @@
 | --- | --- |
 | `https://api.ecommerce-cs-agent-dev.fcihome.com/health` | `200`，返回 `{"status":"ok","service":"ecommerce-cs-agent-api","environment":"development"}` |
 | `https://admin.ecommerce-cs-agent-dev.fcihome.com/health` | `200`，返回 `ok` |
+| `https://system-admin.ecommerce-cs-agent-dev.fcihome.com/health` | 拆站目标检查项；待 DNS、Ingress、TLS 和 Admin Web 路由拆分后验证 |
 | `cs-agent-dev-tls` | `READY=True` |
 | live quick eval | 本地 `evals.cli` 已恢复；未传 `AGENT_API_TOKEN` 时只能安全验证 `/health`，完整 quick eval 需从 Secret 读取 token 后执行 |
 
@@ -49,9 +50,11 @@
 | 用途 | 域名 | 当前状态 |
 | --- | --- | --- |
 | Agent API | `api.ecommerce-cs-agent-dev.fcihome.com` | DNS -> `47.113.204.168`，HTTPS 可访问，Ingress 已创建 |
-| Admin Web | `admin.ecommerce-cs-agent-dev.fcihome.com` | DNS -> `47.113.204.168`，HTTPS 可访问，Ingress 已创建 |
+| Customer Admin Web | `admin.ecommerce-cs-agent-dev.fcihome.com` | DNS -> `47.113.204.168`，HTTPS 可访问，Ingress 已创建；只承载公开宣传页、客户登录页和客户后台 |
+| System Admin Web | `system-admin.ecommerce-cs-agent-dev.fcihome.com` | 目标 dev 域名；需要补 DNS、TLS SAN、Ingress host、路由守卫和健康检查 |
+| System Admin Web alias | `ops-admin.ecommerce-cs-agent-dev.fcihome.com` | 可选别名；只有在 DNS / 证书策略需要时启用 |
 
-FRP 日志已确认 `cs-agent-dev-http` 三个 Host 注册成功。TLS 证书 SAN 已包含 API/Admin/root dev 域名，HTTPS 校验通过。
+FRP 日志已确认 `cs-agent-dev-http` API/Admin/root 三个 Host 注册成功。TLS 证书 SAN 已包含 API/Admin/root dev 域名，HTTPS 校验通过。系统后台拆站后，需要把 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 加入 DNS、Ingress host 和 TLS SAN，再补充同等校验记录。
 
 ## PostgreSQL
 
@@ -272,8 +275,11 @@ KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl get nodes
 KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev get pods,svc,ingress,secrets
 curl -fsS https://api.ecommerce-cs-agent-dev.fcihome.com/health
 curl -fsS https://admin.ecommerce-cs-agent-dev.fcihome.com/health
+curl -fsS https://system-admin.ecommerce-cs-agent-dev.fcihome.com/health
 TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com AGENT_API_TOKEN=<from-secret> python -m evals.cli run-suite --suite quick --target live --target-url "$TARGET_BASE_URL"
 ```
+
+系统后台拆站完成前，第三条 health 命令是发布目标检查项；不能把 `admin.ecommerce-cs-agent-dev.fcihome.com` 上的系统后台 tab 当作验收通过。
 
 ## 应用镜像与 Helm
 
@@ -311,3 +317,5 @@ helm upgrade --install ecommerce-cs-agent deploy/helm/ecommerce-cs-agent \
   --set api.image.tag=<tag> \
   --set admin.image.tag=<tag>
 ```
+
+拆分系统后台站点时，Helm values 还必须显式表达 customer Admin host 和 system Admin host。两个 host 可以暂时复用同一 Admin 镜像，但 Ingress、前端路由守卫、Cookie / session 名和 API 鉴权域必须拆开。

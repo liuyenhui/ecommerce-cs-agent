@@ -23,6 +23,7 @@
 ```bash
 curl -i https://api.ecommerce-cs-agent-dev.fcihome.com/health
 curl -i https://admin.ecommerce-cs-agent-dev.fcihome.com/health
+curl -i https://system-admin.ecommerce-cs-agent-dev.fcihome.com/health
 ```
 
 常见分支：
@@ -35,6 +36,11 @@ curl -i https://admin.ecommerce-cs-agent-dev.fcihome.com/health
 | 502 / 503 | 检查 Pod readiness、Service selector、容器端口。 |
 | 500 | 查应用日志和运行时环境变量。 |
 | 连接超时 | 检查公网入口、FRP/Traefik、NetworkPolicy 或集群节点状态。 |
+
+Admin 入口排查额外检查：
+
+- `admin.ecommerce-cs-agent-dev.fcihome.com` 只能承载公开宣传页、客户登录页和客户后台；如果左侧导航出现“系统后台”入口，应按路由守卫或构建错误处理。
+- `system-admin.ecommerce-cs-agent-dev.fcihome.com` 必须使用系统后台专用登录页和 `agent_system_admin_session`；如果客户后台 cookie 能进入系统后台，应按高优先级权限隔离缺陷处理。
 
 集群侧检查命令：
 
@@ -76,7 +82,7 @@ TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com \
 | --- | --- | --- |
 | 400 | 请求格式非法或 JSON 无法解析。 | 检查请求体和 `Content-Type`。 |
 | 401 | 缺少认证或认证无效。 | 检查 token/session 注入，不打印明文。 |
-| 403 | 认证有效但权限不足。 | 检查组织、店铺、角色和系统/客户 Admin 鉴权域。 |
+| 403 | 认证有效但权限不足。 | 检查组织、店铺、角色、客户 / 系统 Admin host、Cookie 名和 API 鉴权域。 |
 | 404 | 路由不存在或资源不存在。 | 检查部署版本、OpenAPI path、Ingress path。 |
 | 409 | 幂等冲突、版本冲突或重复动作。 | 检查 `request_id`、`idempotency_key`、资源版本。 |
 | 422 | 字段校验失败或缺少审计原因。 | 对照 OpenAPI schema 和业务错误 code。 |
