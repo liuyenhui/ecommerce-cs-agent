@@ -82,6 +82,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: admin-web/package-lock.json
+
+      - name: Install Admin Web dependencies
+        working-directory: admin-web
+        run: npm ci
+
+      - name: Admin Web type check
+        working-directory: admin-web
+        run: npm test
+
+      - name: Admin Web production build
+        working-directory: admin-web
+        run: npm run build
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
