@@ -15,7 +15,7 @@ from ecommerce_cs_agent.services.admin_auth import (
     admin_auth_service_for,
     system_admin_auth_service_for,
 )
-from ecommerce_cs_agent.services.system_admin import PostgresSystemAdminRepository
+from ecommerce_cs_agent.services.system_admin import InMemorySystemAdminRepository, PostgresSystemAdminRepository, _audit_from_row
 
 
 def test_admin_auth_service_uses_postgres_when_database_url_is_configured() -> None:
@@ -512,6 +512,440 @@ def test_postgres_system_admin_repository_readiness_reads_db_and_returns_all_che
     assert "FROM store st" in executed_sql
     assert "platform_account" in executed_sql
     assert "external_api_token" in executed_sql
+    assert "knowledge.store_id::text = st.id::text" in executed_sql
+
+
+def test_postgres_system_admin_repository_lists_message_traces_with_audit() -> None:
+    connection = _FakeConnection(
+        fetch_rows=[
+            (1,),
+            [
+                (
+                    "decision-001",
+                    "org-001",
+                    "store-001",
+                    "req-001",
+                    "msg-001",
+                    "candidate",
+                    "low",
+                    "completed",
+                    "2026-06-18T00:00:00Z",
+                )
+            ],
+        ]
+    )
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    filters = {
+        "organization_id": "org-001",
+        "store_id": "store-001",
+        "external_message_id": "msg-001",
+        "trace_id": "trace-001",
+        "created_at_from": "2026-06-18T00:00:00Z",
+        "created_at_to": "2026-06-19T00:00:00Z",
+    }
+    traces = repository.list_message_traces(_system_session(role="technical_support"), filters)
+
+    executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    assert traces["items"][0]["decision_id"] == "decision-001"
+    assert traces["items"][0]["request_id"] == "req-001"
+    assert traces["items"][0]["external_message_id"] == "msg-001"
+    assert traces["items"][0]["action"] == "candidate"
+    assert traces["items"][0]["sensitive_access"] is False
+    assert traces["page_info"]["total"] == 1
+    assert "FROM decision_record decision" in executed_sql
+    assert "LEFT JOIN message msg" in executed_sql
+    assert "decision_trace_step step" in executed_sql
+    assert "st.id::text = decision.store_id::text" in executed_sql
+    assert "INSERT INTO system_admin_audit_log" in executed_sql
+    assert "trace-001" in str(connection.executed)
+    assert "2026-06-18T00:00:00Z" in str(connection.executed)
+
+
+def test_postgres_system_admin_repository_restricts_message_trace_access() -> None:
+    repository = PostgresSystemAdminRepository("postgresql://example")
+
+    with pytest.raises(HTTPException) as forbidden:
+        repository.list_message_traces(_system_session(role="release_admin"), {"organization_id": "org-001"})
+    with pytest.raises(HTTPException) as unscoped:
+        repository.list_message_traces(_system_session(role="technical_support"), {})
+
+    assert forbidden.value.status_code == 403
+    assert forbidden.value.detail["error"]["code"] == "forbidden"
+    assert unscoped.value.status_code == 422
+    assert unscoped.value.detail["error"]["code"] == "tenant_scope_required"
+
+
+def test_postgres_system_admin_repository_gets_message_trace_detail_with_audit() -> None:
+    state_payload = {
+        "request": {
+            "request_id": "req-001",
+            "platform": "pdd",
+            "store_id": "forged-store",
+            "conversation": {"external_conversation_id": "forged-conv"},
+            "message": {"external_message_id": "forged-msg", "content": "什么时候发货？"},
+        },
+        "response": {
+            "decision_id": "decision-001",
+            "action": "handoff",
+            "confidence": 0.11,
+            "risk_level": "high",
+            "trace": {"graph_version": "reply-decision-graph-v1", "steps": [{"name": "normalize", "status": "completed"}]},
+        },
+        "feedback": [],
+    }
+    connection = _FakeConnection(
+        fetch_rows=[
+            (
+                "decision-001",
+                "org-001",
+                "store-001",
+                "req-001",
+                "msg-001",
+                "pdd",
+                "conv-001",
+                "candidate",
+                0.82,
+                "low",
+                state_payload,
+                "2026-06-18T00:00:00Z",
+            ),
+            [
+                (
+                    "trace-step-001",
+                    "normalize",
+                    1,
+                    "completed",
+                    {"step_id": "trace-001", "inputs_ref": ["message:msg-001"], "outputs_ref": ["normalized"], "error": None},
+                    "2026-06-18T00:00:00Z",
+                )
+            ],
+            [
+                (
+                    "ctx-001",
+                    "price",
+                    "api",
+                    {"context_request_id": "ctx-001", "price": "99.00"},
+                    "2026-06-18T00:00:00Z",
+                )
+            ],
+            [
+                (
+                    "action-001",
+                    "refund_check",
+                    "requested",
+                    {"action_id": "action-001"},
+                    "succeeded",
+                    {"result": "ok"},
+                    "2026-06-18T00:00:00Z",
+                )
+            ],
+        ]
+    )
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    detail = repository.get_message_trace(_system_session(role="technical_support"), "decision-001", {})
+
+    executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    assert detail is not None
+    assert detail["trace"]["decision_id"] == "decision-001"
+    assert detail["trace"]["external_message_id"] == "msg-001"
+    assert detail["trace"]["store_id"] == "store-001"
+    assert detail["trace"]["conversation_id"] == "conv-001"
+    assert detail["trace"]["action"] == "candidate"
+    assert detail["trace"]["confidence"] == 0.82
+    assert detail["trace"]["risk_level"] == "low"
+    assert detail["trace"]["trace"]["steps"][0]["step_id"] == "trace-001"
+    assert detail["trace"]["sections"]["retrieval"]["context_snapshots"][0]["context_snapshot_id"] == "ctx-001"
+    assert detail["trace"]["sections"]["persistence"]["action_requests"][0]["action_id"] == "action-001"
+    assert "payload" not in detail["trace"]["sections"]["retrieval"]["context_snapshots"][0]
+    assert "request_payload" not in detail["trace"]["sections"]["persistence"]["action_requests"][0]
+    assert "result_payload" not in detail["trace"]["sections"]["persistence"]["action_requests"][0]
+    assert detail["trace"]["trace"]["graph_version"] == "reply-decision-graph-v1"
+    assert detail["audit_log_id"]
+    assert "FROM decision_record decision" in executed_sql
+    assert "decision_graph_checkpoint checkpoint" in executed_sql
+    assert "FROM decision_trace_step step" in executed_sql
+    assert "FROM context_snapshot snapshot" in executed_sql
+    assert "FROM action_request action" in executed_sql
+    assert "INSERT INTO system_admin_audit_log" in executed_sql
+
+
+def test_postgres_system_admin_repository_includes_nested_payloads_only_with_raw_permission() -> None:
+    state_payload = {
+        "request": {
+            "request_id": "req-raw",
+            "platform": "pdd",
+            "store_id": "store-001",
+            "conversation": {"external_conversation_id": "conv-raw"},
+            "message": {"external_message_id": "msg-raw"},
+        },
+        "response": {
+            "decision_id": "decision-raw",
+            "action": "action_request",
+            "confidence": 0.7,
+            "risk_level": "medium",
+            "trace": {"graph_version": "reply-decision-graph-v1", "steps": []},
+        },
+        "feedback": [],
+    }
+    connection = _FakeConnection(
+        fetch_rows=[
+            (
+                "decision-raw",
+                "org-001",
+                "store-001",
+                "req-raw",
+                "msg-raw",
+                "pdd",
+                "conv-raw",
+                "action_request",
+                0.7,
+                "medium",
+                state_payload,
+                "2026-06-18T00:00:00Z",
+            ),
+            [],
+            [("ctx-raw", "order", "api", {"buyer_phone": "redacted"}, "2026-06-18T00:00:00Z")],
+            [("action-raw", "refund_check", "requested", {"buyer_phone": "redacted"}, "failed", {"error": "timeout"}, "2026-06-18T00:00:00Z")],
+        ]
+    )
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    detail = repository.get_message_trace(
+        _system_session(role="super_admin"),
+        "decision-raw",
+        {"include_raw_payload": "true", "reason": "support debug"},
+    )
+
+    assert detail is not None
+    context = detail["trace"]["sections"]["retrieval"]["context_snapshots"][0]
+    action = detail["trace"]["sections"]["persistence"]["action_requests"][0]
+    assert context["payload"] == {"buyer_phone": "redacted"}
+    assert action["request_payload"] == {"buyer_phone": "redacted"}
+    assert action["result_payload"] == {"error": "timeout"}
+    assert detail["raw_payload"]["request_id"] == "req-raw"
+
+
+def test_postgres_system_admin_repository_requires_raw_payload_capability() -> None:
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    connection = _FakeConnection()
+    repository._connect = lambda _url: connection
+
+    with pytest.raises(HTTPException) as exc:
+        repository.get_message_trace(
+            _system_session(role="technical_support"),
+            "decision-001",
+            {"include_raw_payload": "true", "reason": "support debug"},
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail["error"]["code"] == "raw_payload_access_denied"
+
+
+def test_postgres_system_admin_repository_falls_back_to_legacy_app_decision_state_detail() -> None:
+    state_payload = {
+        "request": {
+            "request_id": "req-legacy",
+            "platform": "pdd",
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "conversation": {"external_conversation_id": "conv-legacy"},
+            "message": {"external_message_id": "msg-legacy"},
+        },
+        "response": {
+            "decision_id": "decision-legacy",
+            "action": "candidate",
+            "confidence": 0.71,
+            "risk_level": "low",
+            "trace": {"graph_version": "reply-decision-graph-v1", "steps": []},
+        },
+        "feedback": [],
+    }
+    connection = _FakeConnection(
+        fetch_rows=[
+            None,
+            (
+                "decision-legacy",
+                "org-001",
+                "store-001",
+                "req-legacy",
+                "msg-legacy",
+                "pdd",
+                "conv-legacy",
+                "candidate",
+                0.71,
+                "low",
+                state_payload,
+                "2026-06-18T00:00:00Z",
+            ),
+            [],
+            [],
+            [],
+        ]
+    )
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    detail = repository.get_message_trace(_system_session(role="technical_support"), "decision-legacy", {})
+
+    executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    assert detail is not None
+    assert detail["trace"]["decision_id"] == "decision-legacy"
+    assert detail["trace"]["external_message_id"] == "msg-legacy"
+    assert "FROM app_decision_state legacy" in executed_sql
+    assert "INSERT INTO system_admin_audit_log" in executed_sql
+
+
+def test_postgres_system_admin_repository_requires_reason_for_raw_message_trace_payload() -> None:
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    connection = _FakeConnection()
+    repository._connect = lambda _url: connection
+
+    with pytest.raises(HTTPException) as exc:
+        repository.get_message_trace(_system_session(role="technical_support"), "decision-001", {"include_raw_payload": "true"})
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail["error"]["code"] == "audit_reason_required"
+    assert "INSERT INTO system_admin_audit_log" in "\n".join(sql for sql, _params in connection.executed)
+
+
+def test_postgres_system_admin_repository_denies_raw_message_trace_payload_by_role_with_audit() -> None:
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    connection = _FakeConnection()
+    repository._connect = lambda _url: connection
+
+    with pytest.raises(HTTPException) as exc:
+        repository.get_message_trace(
+            _system_session(role="platform_operator"),
+            "decision-001",
+            {"include_raw_payload": "true", "reason": "debug"},
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail["error"]["code"] == "raw_payload_access_denied"
+    assert "INSERT INTO system_admin_audit_log" in "\n".join(sql for sql, _params in connection.executed)
+
+
+def test_postgres_system_admin_repository_denies_raw_message_trace_list_by_role_with_audit() -> None:
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    connection = _FakeConnection()
+    repository._connect = lambda _url: connection
+
+    with pytest.raises(HTTPException) as exc:
+        repository.list_message_traces(
+            _system_session(role="platform_operator"),
+            {"organization_id": "org-001", "include_raw_payload": "true", "reason": "debug"},
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail["error"]["code"] == "raw_payload_access_denied"
+    audit_payload = connection.executed[0][1][8].obj
+    assert audit_payload["sensitive_access"] is True
+    assert audit_payload["reason"] == "debug"
+
+
+def test_in_memory_system_admin_repository_denies_raw_message_trace_list_by_role_with_audit() -> None:
+    repository = InMemorySystemAdminRepository()
+
+    with pytest.raises(HTTPException) as exc:
+        repository.list_message_traces(
+            _system_session(role="technical_support"),
+            {"organization_id": "org-001", "include_raw_payload": "true", "reason": "debug"},
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail["error"]["code"] == "raw_payload_access_denied"
+    assert repository.audit_logs[0]["action"] == "system_admin.message_trace.raw_payload_denied"
+    assert repository.audit_logs[0]["sensitive_access"] is True
+
+
+def test_postgres_system_admin_repository_system_health_reads_db_and_writes_audit() -> None:
+    connection = _FakeConnection(fetch_rows=[(True, True, 1, 0)])
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    health = repository.system_health(_system_session())
+
+    executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    assert health["status"] == "degraded"
+    assert all("checked_at" in dependency for dependency in health["dependencies"])
+    assert all("message" in dependency for dependency in health["dependencies"])
+    assert all("detail" not in dependency for dependency in health["dependencies"])
+    assert {dependency["name"] for dependency in health["dependencies"]} >= {
+        "api",
+        "postgresql",
+        "pgvector",
+        "queue",
+    }
+    assert "FROM pg_extension" in executed_sql
+    assert "FROM background_task" in executed_sql
+    assert "INSERT INTO system_admin_audit_log" in executed_sql
+
+
+def test_postgres_system_admin_repository_marks_raw_list_audit_sensitive() -> None:
+    connection = _FakeConnection(fetch_rows=[(0,), []])
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    repository.list_message_traces(
+        _system_session(role="super_admin"),
+        {"organization_id": "org-001", "include_raw_payload": "true", "reason": "raw list debug"},
+    )
+
+    audit_payload = connection.executed[0][1][8].obj
+    assert audit_payload["sensitive_access"] is True
+    assert audit_payload["reason"] == "raw list debug"
+
+
+def test_postgres_system_admin_repository_filters_audit_logs_by_sensitive_access() -> None:
+    connection = _FakeConnection(
+        fetch_rows=[
+            (1,),
+            [
+                (
+                    "audit-raw",
+                    "sysadmin-uuid",
+                    "org-001",
+                    "store-001",
+                    "system_admin.message_trace.get",
+                    "decision_record",
+                    "decision-001",
+                    {"reason": "debug", "sensitive_access": True},
+                    "2026-06-18T00:00:00Z",
+                )
+            ],
+        ]
+    )
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    logs = repository.list_audit_logs(_system_session(), {"sensitive_access": "true"})
+
+    executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    assert logs["items"][0]["sensitive_access"] is True
+    assert "COALESCE((audit.diff_summary->>'sensitive_access')::boolean, false) = %s" in executed_sql
+
+
+def test_system_admin_audit_sensitive_access_is_derived_from_diff_summary() -> None:
+    log = _audit_from_row(
+        (
+            "audit-raw",
+            "sysadmin-uuid",
+            "org-001",
+            "store-001",
+            "system_admin.message_trace.raw_payload_denied",
+            "decision_record",
+            "decision-001",
+            {"reason": "debug", "sensitive_access": True},
+            "2026-06-18T00:00:00Z",
+        )
+    )
+
+    assert log["sensitive_access"] is True
 
 
 def test_postgres_system_admin_repository_rejects_non_failed_task_retry_with_409() -> None:

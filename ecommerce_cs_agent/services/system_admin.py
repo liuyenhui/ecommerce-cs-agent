@@ -12,6 +12,10 @@ from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.admin_auth import SystemAdminSession
 
 
+_TRACE_READ_ROLES = {"super_admin", "technical_support", "security_auditor"}
+_RAW_TRACE_CAPABILITY = "trace:raw_payload:read"
+
+
 class SystemAdminRepository(Protocol):
     def list_users(self, session: SystemAdminSession) -> dict[str, Any]:
         raise NotImplementedError
@@ -34,6 +38,12 @@ class SystemAdminRepository(Protocol):
     def store_readiness(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
+    def list_message_traces(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def get_message_trace(self, session: SystemAdminSession, decision_id: str, filters: dict[str, Any]) -> dict[str, Any] | None:
+        raise NotImplementedError
+
     def list_tasks(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -41,6 +51,9 @@ class SystemAdminRepository(Protocol):
         raise NotImplementedError
 
     def list_audit_logs(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def system_health(self, session: SystemAdminSession) -> dict[str, Any]:
         raise NotImplementedError
 
 
@@ -172,6 +185,30 @@ class InMemorySystemAdminRepository:
         ]
         return _page_response(*_slice_page(items, filters))
 
+    def list_message_traces(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
+        self._require_trace_read(session)
+        _require_trace_scope(filters)
+        include_raw_payload = _truthy(filters.get("include_raw_payload"))
+        self._validate_raw_trace_access_with_audit(session, "list", filters, include_raw_payload)
+        audit_filters = dict(filters)
+        if include_raw_payload:
+            audit_filters["sensitive_access"] = True
+        self._audit(session, "system_admin.message_trace.list", "decision_record", "list", audit_filters)
+        return _page_response(*_slice_page([], filters))
+
+    def get_message_trace(self, session: SystemAdminSession, decision_id: str, filters: dict[str, Any]) -> dict[str, Any] | None:
+        include_raw_payload = _truthy(filters.get("include_raw_payload"))
+        self._validate_raw_trace_access_with_audit(session, decision_id, filters, include_raw_payload)
+        self._require_trace_read(session)
+        audit_id = self._audit(
+            session,
+            "system_admin.message_trace.get",
+            "decision_record",
+            decision_id,
+            {"include_raw_payload": include_raw_payload, "reason": filters.get("reason"), "sensitive_access": include_raw_payload},
+        )
+        return None if audit_id else None
+
     def list_tasks(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         self._audit(session, "system_admin.task.list", "background_task", "list", filters)
         items = list(self.tasks.values())
@@ -197,7 +234,15 @@ class InMemorySystemAdminRepository:
 
     def list_audit_logs(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         self._audit(session, "system_admin.audit.list", "system_admin_audit_log", "list", filters)
-        return _page_response(*_slice_page(self.audit_logs, filters))
+        items = self.audit_logs
+        if filters.get("sensitive_access") is not None:
+            expected = _truthy(filters.get("sensitive_access"))
+            items = [item for item in items if bool(item.get("sensitive_access")) is expected]
+        return _page_response(*_slice_page(items, filters))
+
+    def system_health(self, session: SystemAdminSession) -> dict[str, Any]:
+        self._audit(session, "system_admin.health.get", "system_health", "summary", {})
+        return _system_health_response("degraded", [_health_dependency("api", "healthy", "in-memory system admin")])
 
     def _audit(
         self,
@@ -236,6 +281,39 @@ class InMemorySystemAdminRepository:
     def _require_any_role(self, session: SystemAdminSession, roles: set[str]) -> None:
         if session.role not in roles:
             raise api_error(403, "forbidden", "system admin role cannot modify this resource")
+
+    def _require_trace_read(self, session: SystemAdminSession) -> None:
+        if session.role not in _TRACE_READ_ROLES:
+            raise api_error(403, "forbidden", "system admin role cannot read message traces")
+
+    def _validate_raw_trace_access(self, session: SystemAdminSession, include_raw_payload: bool, reason: Any) -> None:
+        if not include_raw_payload:
+            return
+        if not str(reason or "").strip():
+            raise api_error(422, "audit_reason_required", "reason is required when include_raw_payload=true")
+        if not _has_capability(session, _RAW_TRACE_CAPABILITY):
+            raise api_error(403, "raw_payload_access_denied", "system admin role cannot read raw message payload")
+
+    def _validate_raw_trace_access_with_audit(
+        self,
+        session: SystemAdminSession,
+        object_id: str,
+        filters: dict[str, Any],
+        include_raw_payload: bool,
+    ) -> None:
+        if not include_raw_payload:
+            return
+        reason = filters.get("reason")
+        if str(reason or "").strip() and _has_capability(session, _RAW_TRACE_CAPABILITY):
+            return
+        self._audit(
+            session,
+            "system_admin.message_trace.raw_payload_denied",
+            "decision_record",
+            object_id,
+            {"reason": reason, "sensitive_access": True, "role": session.role},
+        )
+        self._validate_raw_trace_access(session, include_raw_payload, reason)
 
 
 class PostgresSystemAdminRepository:
@@ -488,7 +566,7 @@ class PostgresSystemAdminRepository:
                     SELECT org.external_organization_id, st.external_store_id,
                            EXISTS(SELECT 1 FROM product p WHERE p.store_id = st.id) AS has_product,
                            EXISTS(SELECT 1 FROM product_price_snapshot price WHERE price.store_id = st.id) AS has_price,
-                           EXISTS(SELECT 1 FROM knowledge_entry knowledge WHERE knowledge.store_id = st.id AND knowledge.status = 'approved') AS has_knowledge,
+                           EXISTS(SELECT 1 FROM knowledge_entry knowledge WHERE knowledge.store_id::text = st.id::text AND knowledge.status = 'approved') AS has_knowledge,
                            (
                                EXISTS(SELECT 1 FROM platform_account account WHERE account.store_id = st.id AND account.status = 'active')
                                OR EXISTS(SELECT 1 FROM external_api_token token WHERE token.store_id = st.id AND token.status = 'active')
@@ -518,6 +596,248 @@ class PostgresSystemAdminRepository:
                     items = [item for item in items if item["status"] == status]
                     total = len(items)
                 return _page_response(items, page["page"], page["page_size"], total)
+
+    def list_message_traces(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
+        organization_id = filters.get("organization_id")
+        store_id = filters.get("store_id")
+        decision_id = filters.get("decision_id")
+        external_message_id = filters.get("external_message_id")
+        trace_id = filters.get("trace_id")
+        status = filters.get("status")
+        time_from = filters.get("created_at_from") or filters.get("time_from")
+        time_to = filters.get("created_at_to") or filters.get("time_to")
+        page = _pagination(filters)
+        include_raw_payload = _truthy(filters.get("include_raw_payload"))
+        self._validate_raw_trace_access_with_audit(session, "list", filters, include_raw_payload)
+        self._require_trace_read(session)
+        _require_trace_scope(filters)
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                audit_filters = dict(filters)
+                if include_raw_payload:
+                    audit_filters["sensitive_access"] = True
+                self._audit(cur, session, organization_id, store_id, "system_admin.message_trace.list", "decision_record", "list", audit_filters)
+                params = (
+                    organization_id,
+                    organization_id,
+                    store_id,
+                    store_id,
+                    decision_id,
+                    decision_id,
+                    external_message_id,
+                    external_message_id,
+                    trace_id,
+                    trace_id,
+                    trace_id,
+                    trace_id,
+                    status,
+                    status,
+                    time_from,
+                    time_from,
+                    time_to,
+                    time_to,
+                )
+                cur.execute(
+                    """
+                    SELECT count(*)
+                    FROM decision_record decision
+                    JOIN organization org ON org.id::text = decision.organization_id::text
+                    JOIN store st ON st.id::text = decision.store_id::text AND st.organization_id::text = org.id::text
+                    LEFT JOIN message msg ON msg.id::text = decision.message_id::text
+                    WHERE (%s::text IS NULL OR org.external_organization_id = %s)
+                      AND (%s::text IS NULL OR st.external_store_id = %s)
+                      AND (%s::text IS NULL OR decision.decision_id = %s)
+                      AND (%s::text IS NULL OR msg.external_message_id = %s)
+                      AND (%s::text IS NULL OR EXISTS (
+                          SELECT 1
+                          FROM decision_trace_step step
+                          WHERE step.decision_id = decision.decision_id
+                            AND (step.id::text = %s OR step.summary->>'trace_id' = %s OR step.summary->>'step_id' = %s)
+                      ))
+                      AND (%s::text IS NULL OR decision.status = %s)
+                      AND (%s::timestamptz IS NULL OR decision.created_at >= %s::timestamptz)
+                      AND (%s::timestamptz IS NULL OR decision.created_at <= %s::timestamptz)
+                    """,
+                    params,
+                )
+                total = int(cur.fetchone()[0])
+                cur.execute(
+                    """
+                    SELECT decision.decision_id, org.external_organization_id, st.external_store_id,
+                           decision.request_id, msg.external_message_id, decision.decision_type,
+                           decision.risk_level, decision.status, decision.created_at
+                    FROM decision_record decision
+                    JOIN organization org ON org.id::text = decision.organization_id::text
+                    JOIN store st ON st.id::text = decision.store_id::text AND st.organization_id::text = org.id::text
+                    LEFT JOIN message msg ON msg.id::text = decision.message_id::text
+                    WHERE (%s::text IS NULL OR org.external_organization_id = %s)
+                      AND (%s::text IS NULL OR st.external_store_id = %s)
+                      AND (%s::text IS NULL OR decision.decision_id = %s)
+                      AND (%s::text IS NULL OR msg.external_message_id = %s)
+                      AND (%s::text IS NULL OR EXISTS (
+                          SELECT 1
+                          FROM decision_trace_step step
+                          WHERE step.decision_id = decision.decision_id
+                            AND (step.id::text = %s OR step.summary->>'trace_id' = %s OR step.summary->>'step_id' = %s)
+                      ))
+                      AND (%s::text IS NULL OR decision.status = %s)
+                      AND (%s::timestamptz IS NULL OR decision.created_at >= %s::timestamptz)
+                      AND (%s::timestamptz IS NULL OR decision.created_at <= %s::timestamptz)
+                    ORDER BY decision.created_at DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (*params, page["limit"], page["offset"]),
+                )
+                return _page_response([_message_trace_summary_from_row(row) for row in cur.fetchall()], page["page"], page["page_size"], total)
+
+    def get_message_trace(self, session: SystemAdminSession, decision_id: str, filters: dict[str, Any]) -> dict[str, Any] | None:
+        include_raw_payload = _truthy(filters.get("include_raw_payload"))
+        self._validate_raw_trace_access_with_audit(session, decision_id, filters, include_raw_payload)
+        self._require_trace_read(session)
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT decision.decision_id, org.external_organization_id, st.external_store_id,
+                           decision.request_id, msg.external_message_id, msg.platform,
+                           conv.external_conversation_id, decision.decision_type,
+                           (decision.response_payload->>'confidence')::float,
+                           decision.risk_level,
+                           COALESCE(checkpoint.state, checkpoint.state_json, jsonb_build_object(
+                               'request', jsonb_build_object(
+                                   'request_id', decision.request_id,
+                                   'platform', msg.platform,
+                                   'store_id', st.external_store_id,
+                                   'conversation', jsonb_build_object('external_conversation_id', conv.external_conversation_id),
+                                   'message', jsonb_build_object('external_message_id', msg.external_message_id)
+                               ),
+                               'response', decision.response_payload
+                           )) AS state_payload,
+                           decision.created_at
+                    FROM decision_record decision
+                    JOIN organization org ON org.id::text = decision.organization_id::text
+                    JOIN store st ON st.id::text = decision.store_id::text AND st.organization_id::text = org.id::text
+                    LEFT JOIN message msg ON msg.id::text = decision.message_id::text
+                    LEFT JOIN conversation conv ON conv.id::text = decision.conversation_id::text
+                    LEFT JOIN LATERAL (
+                        SELECT checkpoint.state, checkpoint.state_json
+                        FROM decision_graph_checkpoint checkpoint
+                        WHERE checkpoint.decision_id = decision.decision_id
+                          AND (checkpoint.organization_id IS NULL OR checkpoint.organization_id::text = decision.organization_id::text)
+                          AND (checkpoint.store_id IS NULL OR checkpoint.store_id::text = decision.store_id::text)
+                          AND (
+                              checkpoint.checkpoint_key = 'latest'
+                              OR checkpoint.node_name IN ('persist_trace', 'latest')
+                              OR checkpoint.checkpoint_key IS NULL
+                          )
+                        ORDER BY (checkpoint.checkpoint_key = 'latest') DESC, checkpoint.created_at DESC
+                        LIMIT 1
+                    ) checkpoint ON true
+                    WHERE decision.decision_id = %s
+                    """,
+                    (decision_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    cur.execute(
+                        """
+                        SELECT legacy.decision_id, legacy.organization_id, legacy.store_id,
+                               legacy.request_id,
+                               legacy.request_payload->'message'->>'external_message_id',
+                               legacy.request_payload->>'platform',
+                               legacy.request_payload->'conversation'->>'external_conversation_id',
+                               legacy.response_payload->>'action',
+                               (legacy.response_payload->>'confidence')::float,
+                               legacy.response_payload->>'risk_level',
+                               legacy.state_payload,
+                               legacy.created_at
+                        FROM app_decision_state legacy
+                        WHERE legacy.decision_id = %s
+                        """,
+                        (decision_id,),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return None
+                cur.execute(
+                    """
+                    SELECT step.id::text, step.step_name, step.step_order, step.status, step.summary, step.created_at
+                    FROM decision_trace_step step
+                    WHERE step.decision_id = %s
+                    ORDER BY step.step_order ASC
+                    """,
+                    (decision_id,),
+                )
+                trace_steps = cur.fetchall()
+                cur.execute(
+                    """
+                    SELECT snapshot.context_request_id, snapshot.context_type, snapshot.source, snapshot.payload, snapshot.captured_at
+                    FROM context_snapshot snapshot
+                    WHERE snapshot.decision_id = %s
+                    ORDER BY snapshot.captured_at ASC
+                    """,
+                    (decision_id,),
+                )
+                context_snapshots = cur.fetchall()
+                cur.execute(
+                    """
+                    SELECT action.action_id, action.action_type, action.status, action.request_payload,
+                           result.status, result.result_payload, COALESCE(result.received_at, action.updated_at)
+                    FROM action_request action
+                    LEFT JOIN action_result result
+                      ON result.decision_id = action.decision_id
+                     AND result.action_id = action.action_id
+                    WHERE action.decision_id = %s
+                    ORDER BY action.created_at ASC
+                    """,
+                    (decision_id,),
+                )
+                action_rows = cur.fetchall()
+                organization_id = str(row[1])
+                store_id = str(row[2])
+                audit_id = self._audit(
+                    cur,
+                    session,
+                    organization_id,
+                    store_id,
+                    "system_admin.message_trace.get",
+                    "decision_record",
+                    decision_id,
+                    {
+                        "include_raw_payload": include_raw_payload,
+                        "reason": filters.get("reason"),
+                        "sensitive_access": include_raw_payload,
+                    },
+                )
+                return _message_trace_detail_from_row(row, trace_steps, context_snapshots, action_rows, audit_id, include_raw_payload)
+
+    def system_health(self, session: SystemAdminSession) -> dict[str, Any]:
+        self._require_any_role(session, {"super_admin", "technical_support", "security_auditor", "platform_operator", "release_admin"})
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                self._audit(cur, session, None, None, "system_admin.health.get", "system_health", "summary", {})
+                cur.execute(
+                    """
+                    SELECT
+                        EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto') AS has_pgcrypto,
+                        EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector') AS has_pgvector,
+                        (SELECT count(*) FROM background_task WHERE status = 'failed' AND retryable = true) AS retryable_failed_tasks,
+                        (SELECT count(*) FROM background_task WHERE status IN ('queued', 'running')) AS active_tasks
+                    """
+                )
+                row = cur.fetchone()
+        has_pgcrypto = bool(row[0])
+        has_pgvector = bool(row[1])
+        failed_tasks = int(row[2] or 0)
+        active_tasks = int(row[3] or 0)
+        dependencies = [
+            _health_dependency("api", "healthy", "system admin API reachable"),
+            _health_dependency("postgresql", "healthy" if has_pgcrypto else "degraded", "query succeeded; pgcrypto installed" if has_pgcrypto else "query succeeded; pgcrypto missing"),
+            _health_dependency("pgvector", "healthy" if has_pgvector else "degraded", "extension installed" if has_pgvector else "extension missing"),
+            _health_dependency("queue", "degraded" if failed_tasks else "healthy", f"retryable_failed={failed_tasks} active={active_tasks}"),
+        ]
+        status = "degraded" if any(item["status"] != "healthy" for item in dependencies) else "healthy"
+        return _system_health_response(status, dependencies)
 
     def list_tasks(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         organization_id = filters.get("organization_id")
@@ -602,6 +922,7 @@ class PostgresSystemAdminRepository:
         organization_id = filters.get("organization_id")
         store_id = filters.get("store_id")
         actor_user_id = filters.get("actor_user_id")
+        sensitive_access = filters.get("sensitive_access")
         page = _pagination(filters)
         with self._connect(self._database_url) as conn:
             with conn.cursor() as cur:
@@ -614,8 +935,9 @@ class PostgresSystemAdminRepository:
                     WHERE (%s::text IS NULL OR org.external_organization_id = %s)
                       AND (%s::text IS NULL OR st.external_store_id = %s)
                       AND (%s::text IS NULL OR audit.system_admin_user_id::text = %s)
+                      AND (%s::text IS NULL OR COALESCE((audit.diff_summary->>'sensitive_access')::boolean, false) = %s)
                     """,
-                    (organization_id, organization_id, store_id, store_id, actor_user_id, actor_user_id),
+                    (organization_id, organization_id, store_id, store_id, actor_user_id, actor_user_id, sensitive_access, _truthy(sensitive_access)),
                 )
                 total = int(cur.fetchone()[0])
                 cur.execute(
@@ -628,10 +950,22 @@ class PostgresSystemAdminRepository:
                     WHERE (%s::text IS NULL OR org.external_organization_id = %s)
                       AND (%s::text IS NULL OR st.external_store_id = %s)
                       AND (%s::text IS NULL OR audit.system_admin_user_id::text = %s)
+                      AND (%s::text IS NULL OR COALESCE((audit.diff_summary->>'sensitive_access')::boolean, false) = %s)
                     ORDER BY audit.created_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (organization_id, organization_id, store_id, store_id, actor_user_id, actor_user_id, page["limit"], page["offset"]),
+                    (
+                        organization_id,
+                        organization_id,
+                        store_id,
+                        store_id,
+                        actor_user_id,
+                        actor_user_id,
+                        sensitive_access,
+                        _truthy(sensitive_access),
+                        page["limit"],
+                        page["offset"],
+                    ),
                 )
                 rows = [_audit_from_row(row) for row in cur.fetchall()]
                 self._audit(cur, session, organization_id, store_id, "system_admin.audit.list", "system_admin_audit_log", "list", filters)
@@ -704,6 +1038,44 @@ class PostgresSystemAdminRepository:
         if session.role not in roles:
             raise api_error(403, "forbidden", "system admin role cannot modify this resource")
 
+    def _require_trace_read(self, session: SystemAdminSession) -> None:
+        if session.role not in _TRACE_READ_ROLES:
+            raise api_error(403, "forbidden", "system admin role cannot read message traces")
+
+    def _validate_raw_trace_access(self, session: SystemAdminSession, include_raw_payload: bool, reason: Any) -> None:
+        if not include_raw_payload:
+            return
+        if not str(reason or "").strip():
+            raise api_error(422, "audit_reason_required", "reason is required when include_raw_payload=true")
+        if not _has_capability(session, _RAW_TRACE_CAPABILITY):
+            raise api_error(403, "raw_payload_access_denied", "system admin role cannot read raw message payload")
+
+    def _validate_raw_trace_access_with_audit(
+        self,
+        session: SystemAdminSession,
+        object_id: str,
+        filters: dict[str, Any],
+        include_raw_payload: bool,
+    ) -> None:
+        if not include_raw_payload:
+            return
+        reason = filters.get("reason")
+        if str(reason or "").strip() and _has_capability(session, _RAW_TRACE_CAPABILITY):
+            return
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                self._audit(
+                    cur,
+                    session,
+                    filters.get("organization_id"),
+                    filters.get("store_id"),
+                    "system_admin.message_trace.raw_payload_denied",
+                    "decision_record",
+                    object_id,
+                    {"reason": reason, "sensitive_access": True, "role": session.role},
+                )
+        self._validate_raw_trace_access(session, include_raw_payload, reason)
+
 
 def system_admin_repository_for(settings: Settings) -> SystemAdminRepository:
     if settings.database_url and settings.environment.lower() not in {"test"}:
@@ -717,14 +1089,14 @@ def _slice_page(items: list[dict[str, Any]], filters: dict[str, Any]) -> tuple[l
     return items[page["offset"] : page["offset"] + page["limit"]], page["page"], page["page_size"], total
 
 
-def _page_response(items: list[dict[str, Any]], page: int = 1, page_size: int = 50, total: int | None = None) -> dict[str, Any]:
+def _page_response(items: list[dict[str, Any]], page: int = 1, page_size: int = 20, total: int | None = None) -> dict[str, Any]:
     page_info = {"page": page, "page_size": page_size, "total": len(items) if total is None else total}
     return {"items": items, "page": page_info, "page_info": page_info}
 
 
 def _pagination(filters: dict[str, Any]) -> dict[str, int]:
     page = _bounded_int(filters.get("page"), 1, 1, 100000)
-    page_size = _bounded_int(filters.get("page_size"), 50, 1, 100)
+    page_size = _bounded_int(filters.get("page_size"), 20, 1, 100)
     return {"page": page, "page_size": page_size, "limit": page_size, "offset": (page - 1) * page_size}
 
 
@@ -804,6 +1176,108 @@ def _task_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
     }
 
 
+def _message_trace_summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "decision_id": str(row[0]),
+        "organization_id": str(row[1]),
+        "store_id": str(row[2]),
+        "request_id": str(row[3]),
+        "external_message_id": str(row[4]) if row[4] is not None else None,
+        "action": str(row[5]),
+        "risk_level": str(row[6]),
+        "status": str(row[7]),
+        "sensitive_access": False,
+        "created_at": _iso(row[8]),
+    }
+
+
+def _message_trace_detail_from_row(
+    row: tuple[Any, ...],
+    trace_step_rows: list[tuple[Any, ...]],
+    context_snapshot_rows: list[tuple[Any, ...]],
+    action_rows: list[tuple[Any, ...]],
+    audit_id: str,
+    include_raw_payload: bool,
+) -> dict[str, Any]:
+    state = row[10] or {}
+    request = state.get("request") or {}
+    response = state.get("response") or {}
+    trace_payload = dict(response.get("trace") or {})
+    if trace_step_rows:
+        trace_payload["steps"] = [_trace_step_from_row(item) for item in trace_step_rows]
+    else:
+        trace_payload.setdefault("steps", [])
+    trace_payload.setdefault("graph_version", "reply-decision-graph-v1")
+    trace_payload.setdefault("model_version", response.get("model_version") or "deterministic-v1")
+    trace = {
+        "decision_id": str(row[0]),
+        "message_id": row[4],
+        "external_message_id": row[4],
+        "request_id": row[3],
+        "platform": row[5],
+        "store_id": row[2],
+        "conversation_id": row[6],
+            "action": row[7],
+            "confidence": row[8],
+            "risk_level": row[9],
+            "sections": {
+                "ingest": {"status": "completed"},
+                "normalization": {"status": "completed"},
+            "retrieval": {"status": "completed", "context_snapshots": [_context_snapshot_from_row(item, include_raw_payload) for item in context_snapshot_rows]},
+            "generation": {"status": "completed"},
+            "risk_and_policy": {"status": "completed"},
+            "persistence": {"status": "completed", "action_requests": [_action_trace_from_row(item, include_raw_payload) for item in action_rows]},
+            "feedback": {"status": "completed" if state.get("feedback") else "pending"},
+        },
+        "trace": trace_payload,
+    }
+    detail = {"trace": trace, "audit_log_id": audit_id}
+    if include_raw_payload:
+        detail["raw_payload"] = request
+    return detail
+
+
+def _trace_step_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
+    summary = row[4] or {}
+    created_at = _iso(row[5])
+    return {
+        "step_id": str(summary.get("step_id") or summary.get("trace_id") or row[0]),
+        "name": str(summary.get("name") or row[1]),
+        "status": str(summary.get("status") or row[3]),
+        "started_at": str(summary.get("started_at") or created_at),
+        "ended_at": str(summary.get("ended_at") or created_at),
+        "inputs_ref": list(summary.get("inputs_ref") or []),
+        "outputs_ref": list(summary.get("outputs_ref") or []),
+        "error": summary.get("error"),
+    }
+
+
+def _context_snapshot_from_row(row: tuple[Any, ...], include_raw_payload: bool) -> dict[str, Any]:
+    snapshot = {
+        "context_snapshot_id": str(row[0]),
+        "context_type": str(row[1]),
+        "source": str(row[2]),
+        "captured_at": _iso(row[4]),
+    }
+    if include_raw_payload:
+        snapshot["payload"] = row[3] or {}
+    return snapshot
+
+
+def _action_trace_from_row(row: tuple[Any, ...], include_raw_payload: bool) -> dict[str, Any]:
+    action = {
+        "action_id": str(row[0]),
+        "action_type": str(row[1]),
+        "status": str(row[2]),
+        "result_status": str(row[4]) if row[4] is not None else None,
+        "updated_at": _iso(row[6]),
+    }
+    if include_raw_payload:
+        action["request_payload"] = row[3] or {}
+        action["result_payload"] = row[5] or {}
+    return action
+
+
 def _audit_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
     diff = row[7] or {}
     return _audit_log(
@@ -845,7 +1319,7 @@ def _audit_log(
         "object_id": object_id,
         "reason": reason,
         "diff_summary": diff_summary,
-        "sensitive_access": False,
+        "sensitive_access": bool(diff_summary.get("sensitive_access")),
         "created_at": created_at or _now(),
     }
 
@@ -894,6 +1368,43 @@ def _readiness_status(has_product: bool, has_price: bool, has_knowledge: bool, h
     if has_product:
         return "warning"
     return "blocked"
+
+
+def _truthy(value: Any) -> bool:
+    return str(value).lower() in {"1", "true", "yes", "on"}
+
+
+def _has_capability(session: SystemAdminSession, capability: str) -> bool:
+    capabilities = session.capabilities
+    if capabilities is None:
+        if session.role == "super_admin":
+            return True
+        return False
+    return capability in capabilities
+
+
+def _require_trace_scope(filters: dict[str, Any]) -> None:
+    scoped_keys = {
+        "organization_id",
+        "store_id",
+        "decision_id",
+        "external_message_id",
+        "trace_id",
+        "created_at_from",
+        "created_at_to",
+        "time_from",
+        "time_to",
+    }
+    if not any(filters.get(key) for key in scoped_keys):
+        raise api_error(422, "tenant_scope_required", "message trace query requires a tenant, trace, message, decision, or time scope")
+
+
+def _system_health_response(status: str, dependencies: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"status": status, "checked_at": _now(), "dependencies": dependencies}
+
+
+def _health_dependency(name: str, status: str, message: str) -> dict[str, str]:
+    return {"name": name, "status": status, "message": message, "checked_at": _now()}
 
 
 def _stable_suffix(value: str) -> str:

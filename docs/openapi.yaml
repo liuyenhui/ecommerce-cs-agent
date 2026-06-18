@@ -1459,13 +1459,19 @@ paths:
           required: false
           schema:
             type: string
+        - name: trace_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Trace step ID 或运行时 trace 内部 step_id，用于定位具体图节点。
         - name: include_raw_payload
           in: query
           required: false
           schema:
             type: boolean
             default: false
-          description: 是否申请查看 raw payload；需要技术支持或更高权限且必须提供 `reason`。
+          description: 是否申请查看 raw payload；需要 `trace:raw_payload:read` 专门能力且必须提供 `reason`。
         - name: reason
           in: query
           required: false
@@ -3936,6 +3942,9 @@ components:
           $ref: "#/components/schemas/DecisionAction"
         risk_level:
           $ref: "#/components/schemas/RiskLevel"
+        status:
+          type: string
+          enum: [candidate, context_request, action_request, completed, waiting_context, waiting_action, handoff, failed]
         sensitive_access:
           type: boolean
           default: false

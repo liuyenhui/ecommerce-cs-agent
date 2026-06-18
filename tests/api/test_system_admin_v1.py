@@ -12,23 +12,27 @@ from ecommerce_cs_agent.services.system_admin import PostgresSystemAdminReposito
 from tests.api.test_v1_api import auth_headers, minimal_reply_request
 
 
-def test_system_admin_message_traces_list_reads_real_decisions() -> None:
+def test_system_admin_message_traces_require_scope_and_use_repository_policy() -> None:
     client = TestClient(create_app())
-    decision = client.post(
+    client.post(
         "/v1/reply-decisions",
         headers=auth_headers(),
         json=minimal_reply_request("req-system-trace", "什么时候发货？"),
-    ).json()
+    )
 
-    traces = client.get(
+    unscoped = client.get(
+        "/v1/system-admin/message-traces",
+        headers={"Cookie": "agent_system_admin_session=test-system-session"},
+    )
+    scoped = client.get(
         "/v1/system-admin/message-traces?organization_id=org-001&store_id=store-001",
         headers={"Cookie": "agent_system_admin_session=test-system-session"},
     )
 
-    assert traces.status_code == 200
-    assert traces.json()["items"][0]["decision_id"] == decision["decision_id"]
-    assert traces.json()["items"][0]["request_id"] == "req-system-trace"
-    assert traces.json()["page"]["total"] >= 1
+    assert unscoped.status_code == 422
+    assert unscoped.json()["error"]["code"] == "tenant_scope_required"
+    assert scoped.status_code == 200
+    assert scoped.json()["items"] == []
 
 
 def test_system_admin_task_retry_rejects_unknown_or_non_retryable_task() -> None:
@@ -124,6 +128,47 @@ def test_system_admin_api_uses_postgres_repository_when_database_url_is_configur
     assert response.status_code == 200
     assert response.json()["items"][0]["id"] == "org-db"
     assert "FROM organization" in executed_sql
+    assert "INSERT INTO system_admin_audit_log" in executed_sql
+
+
+def test_system_admin_message_traces_use_postgres_repository_when_database_url_is_configured(monkeypatch) -> None:
+    connection = _FakeConnection(
+        fetch_rows=[
+            (1,),
+            [
+                (
+                    "decision-db",
+                    "org-db",
+                    "store-db",
+                    "req-db",
+                    "msg-db",
+                    "candidate",
+                    "low",
+                    "completed",
+                    "2026-06-18T00:00:00Z",
+                )
+            ],
+        ]
+    )
+
+    def fake_repo_init(self: PostgresSystemAdminRepository, database_url: str) -> None:
+        self._database_url = database_url
+        self._connect = lambda _url: connection
+
+    monkeypatch.setattr(app_module, "system_admin_auth_service_for", lambda settings: InMemorySystemAdminAuthService(settings))
+    monkeypatch.setattr(PostgresSystemAdminRepository, "__init__", fake_repo_init)
+
+    client = TestClient(create_app(Settings(database_url="postgresql://example", environment="development")))
+    response = client.get(
+        "/v1/system-admin/message-traces?organization_id=org-db&store_id=store-db&external_message_id=msg-db",
+        headers={"Cookie": "agent_system_admin_session=test-system-session"},
+    )
+
+    executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    assert response.status_code == 200
+    assert response.json()["items"][0]["decision_id"] == "decision-db"
+    assert response.json()["items"][0]["external_message_id"] == "msg-db"
+    assert "FROM decision_record decision" in executed_sql
     assert "INSERT INTO system_admin_audit_log" in executed_sql
 
 
