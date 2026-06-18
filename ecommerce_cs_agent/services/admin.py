@@ -484,7 +484,28 @@ class PostgresAdminRepository:
                     """,
                     (candidate_id, asset_id, asset_id, asset_id, markdown_id, markdown["markdown_text"]),
                 )
-                self._canonical_audit(cur, "org-001", "store-001", actor_id, "product_asset.markdown.create", "product_asset_markdown", markdown_id, payload)
+                cur.execute(
+                    """
+                    SELECT org.external_organization_id, st.external_store_id
+                    FROM product_asset asset
+                    JOIN organization org ON org.id = asset.organization_id
+                    JOIN store st ON st.id = asset.store_id
+                    WHERE asset.public_asset_id = %s
+                    """,
+                    (asset_id,),
+                )
+                tenant_row = cur.fetchone()
+                if tenant_row:
+                    self._canonical_audit(
+                        cur,
+                        str(tenant_row[0]),
+                        str(tenant_row[1]),
+                        actor_id,
+                        "product_asset.markdown.create",
+                        "product_asset_markdown",
+                        markdown_id,
+                        payload,
+                    )
         return markdown
 
     def create_price_snapshot(self, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
@@ -574,12 +595,32 @@ class PostgresAdminRepository:
     def product_health(self, product_id: str) -> dict[str, Any]:
         with self._connect(self._database_url) as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT 1 FROM app_product WHERE product_id = %s", (product_id,))
-                exists = cur.fetchone() is not None
+                cur.execute(
+                    """
+                    SELECT
+                        EXISTS(SELECT 1 FROM product WHERE public_product_id = %s),
+                        EXISTS(
+                            SELECT 1
+                            FROM product_price_snapshot price
+                            JOIN product product_row ON product_row.id = price.product_id
+                            WHERE product_row.public_product_id = %s
+                        )
+                    """,
+                    (product_id, product_id),
+                )
+                row = cur.fetchone()
+                exists = bool(row and row[0])
+                has_price_snapshot = bool(row and row[1])
+                if not exists:
+                    cur.execute("SELECT 1 FROM app_product WHERE product_id = %s", (product_id,))
+                    exists = cur.fetchone() is not None
         return {
             "product_id": product_id,
             "status": "healthy" if exists else "warning",
-            "checks": [{"name": "product_exists", "status": "pass" if exists else "warning"}],
+            "checks": [
+                {"name": "product_exists", "status": "pass" if exists else "warning"},
+                {"name": "price_snapshot_exists", "status": "pass" if has_price_snapshot else "warning"},
+            ],
         }
 
     def system_health(self) -> dict[str, Any]:
