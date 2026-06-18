@@ -32,6 +32,7 @@ class SystemAdminSession:
     display_name: str
     role: str
     expires_at: datetime
+    capabilities: list[str] | None = None
     revoked_at: datetime | None = None
 
 
@@ -932,7 +933,7 @@ def system_admin_auth_service_for(settings: Settings) -> InMemorySystemAdminAuth
 
 
 def _system_admin_me_payload(session: SystemAdminSession) -> dict[str, Any]:
-    capabilities = _system_admin_capabilities(session.role)
+    capabilities = _session_capabilities(session)
     return {
         "user": {
             "id": session.user_id,
@@ -953,7 +954,7 @@ def _system_admin_me_payload(session: SystemAdminSession) -> dict[str, Any]:
 
 def _system_admin_capabilities(role: str) -> list[str]:
     role_capabilities = {
-        "super_admin": ["system:read", "system:write", "system:user:write", "system:audit:read"],
+        "super_admin": ["system:read", "system:write", "system:user:write", "system:audit:read", "trace:read", "trace:raw_payload:read"],
         "platform_operator": ["system:read", "tenant:write", "store:write", "task:retry"],
         "technical_support": ["system:read", "trace:read", "task:retry"],
         "rule_admin": ["system:read", "rule:write"],
@@ -961,6 +962,12 @@ def _system_admin_capabilities(role: str) -> list[str]:
         "release_admin": ["system:read", "release:write"],
     }
     return role_capabilities.get(role, ["system:read"])
+
+
+def _session_capabilities(session: SystemAdminSession) -> list[str]:
+    if session.capabilities is not None:
+        return list(session.capabilities)
+    return _system_admin_capabilities(session.role)
 
 
 def _organization_from_row(row: tuple[Any, ...]) -> dict[str, Any]:

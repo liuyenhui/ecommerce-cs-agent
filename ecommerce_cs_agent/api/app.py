@@ -308,8 +308,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return system_admin_auth.me(session)
 
     @app.get("/v1/system-admin/health")
-    def get_system_health(_principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        return admin_data.system_health()
+    def get_system_health(session: Any = Depends(system_session)) -> dict[str, Any]:
+        return system_admin_data.system_health(session)
 
     @app.get("/v1/system-admin/readiness/stores")
     def list_system_store_readiness(request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
@@ -346,17 +346,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(status_code=201, content=system_admin_data.create_store(session, payload))
 
     @app.get("/v1/system-admin/message-traces")
-    def list_system_message_traces(request: Request, _principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        items = decisions.list_traces(
-            organization_id=request.query_params.get("organization_id"),
-            store_id=request.query_params.get("store_id"),
-        )
-        page = _page(len(items))
-        return {"items": items, "page": page, "page_info": page}
+    def list_system_message_traces(request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
+        return system_admin_data.list_message_traces(session, _query_filters(request))
 
     @app.get("/v1/system-admin/message-traces/{decision_id}")
-    def get_system_message_trace(decision_id: str, _principal: Principal = Depends(system_principal)) -> dict[str, Any]:
-        response = decisions.get_trace(decision_id)
+    def get_system_message_trace(decision_id: str, request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
+        response = system_admin_data.get_message_trace(session, decision_id, _query_filters(request))
         if response is None:
             raise api_error(404, "not_found", "decision not found")
         return response
