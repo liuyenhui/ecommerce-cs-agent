@@ -17,23 +17,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_tenant_external
 ALTER TABLE message ADD COLUMN IF NOT EXISTS organization_id uuid;
 ALTER TABLE message ADD COLUMN IF NOT EXISTS store_id uuid;
 ALTER TABLE message ADD COLUMN IF NOT EXISTS platform text;
-ALTER TABLE message ADD COLUMN IF NOT EXISTS sender_type text NOT NULL DEFAULT 'buyer';
-ALTER TABLE message ADD COLUMN IF NOT EXISTS content text NOT NULL DEFAULT '';
-ALTER TABLE message ADD COLUMN IF NOT EXISTS raw jsonb NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE message ADD COLUMN IF NOT EXISTS direction text;
 ALTER TABLE message ADD COLUMN IF NOT EXISTS message_type text NOT NULL DEFAULT 'text';
 ALTER TABLE message ADD COLUMN IF NOT EXISTS content_redacted text;
 ALTER TABLE message ADD COLUMN IF NOT EXISTS raw_payload jsonb NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE message ADD COLUMN IF NOT EXISTS received_at timestamptz NOT NULL DEFAULT now();
-ALTER TABLE message ALTER COLUMN sender_type SET DEFAULT 'buyer';
-ALTER TABLE message ALTER COLUMN content SET DEFAULT '';
-ALTER TABLE message ALTER COLUMN raw SET DEFAULT '{}'::jsonb;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_message_tenant_external
     ON message (organization_id, store_id, platform, external_message_id);
 
-ALTER TABLE decision_record ADD COLUMN IF NOT EXISTS action text NOT NULL DEFAULT 'unknown';
-ALTER TABLE decision_record ALTER COLUMN action SET DEFAULT 'unknown';
 ALTER TABLE decision_record ADD COLUMN IF NOT EXISTS status text;
 UPDATE decision_record
 SET status = COALESCE(
@@ -78,11 +70,6 @@ CREATE INDEX IF NOT EXISTS idx_context_snapshot_decision_type
 
 ALTER TABLE decision_graph_checkpoint ADD COLUMN IF NOT EXISTS organization_id uuid;
 ALTER TABLE decision_graph_checkpoint ADD COLUMN IF NOT EXISTS store_id uuid;
-ALTER TABLE decision_graph_checkpoint ADD COLUMN IF NOT EXISTS thread_id text NOT NULL DEFAULT '';
-ALTER TABLE decision_graph_checkpoint ADD COLUMN IF NOT EXISTS graph_version text NOT NULL DEFAULT 'reply-decision-graph-v1';
-ALTER TABLE decision_graph_checkpoint ADD COLUMN IF NOT EXISTS node_name text NOT NULL DEFAULT 'latest';
-ALTER TABLE decision_graph_checkpoint ADD COLUMN IF NOT EXISTS decision_status text NOT NULL DEFAULT 'completed';
-ALTER TABLE decision_graph_checkpoint ADD COLUMN IF NOT EXISTS state_json jsonb NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE decision_graph_checkpoint ADD COLUMN IF NOT EXISTS checkpoint_key text;
 UPDATE decision_graph_checkpoint
 SET checkpoint_key = COALESCE(
@@ -99,11 +86,6 @@ SET state = COALESCE(
     '{}'::jsonb
 )
 WHERE state IS NULL;
-ALTER TABLE decision_graph_checkpoint ALTER COLUMN thread_id SET DEFAULT '';
-ALTER TABLE decision_graph_checkpoint ALTER COLUMN graph_version SET DEFAULT 'reply-decision-graph-v1';
-ALTER TABLE decision_graph_checkpoint ALTER COLUMN node_name SET DEFAULT 'latest';
-ALTER TABLE decision_graph_checkpoint ALTER COLUMN decision_status SET DEFAULT 'completed';
-ALTER TABLE decision_graph_checkpoint ALTER COLUMN state_json SET DEFAULT '{}'::jsonb;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_decision_graph_checkpoint_decision_key
     ON decision_graph_checkpoint (decision_id, checkpoint_key);
@@ -120,13 +102,11 @@ CREATE INDEX IF NOT EXISTS idx_action_result_decision_action
 ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS organization_id uuid;
 ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS store_id uuid;
 ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS decision_id text;
-ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS human_reply text NOT NULL DEFAULT '';
 ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS replied_by_ref text;
 ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS final_reply_redacted text;
 ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS adopted_suggestion boolean;
 ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS outcome text NOT NULL DEFAULT 'submitted';
 ALTER TABLE human_reply ADD COLUMN IF NOT EXISTS feedback_payload jsonb NOT NULL DEFAULT '{}'::jsonb;
-ALTER TABLE human_reply ALTER COLUMN human_reply SET DEFAULT '';
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_human_reply_decision_id
     ON human_reply (decision_id);

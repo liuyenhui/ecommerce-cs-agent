@@ -157,11 +157,7 @@ def test_canonical_runtime_alignment_migration_contains_external_mapping_and_ind
         "alter table conversation add column if not exists organization_id",
         "idx_conversation_tenant_external",
         "alter table message add column if not exists organization_id",
-        "alter table message add column if not exists sender_type",
-        "alter table message alter column sender_type set default",
         "idx_message_tenant_external",
-        "alter table decision_record add column if not exists action",
-        "alter table decision_record alter column action set default",
         "alter table decision_record add column if not exists status",
         "alter table decision_record add column if not exists decision_type",
         "alter table decision_record add column if not exists message_id",
@@ -173,13 +169,11 @@ def test_canonical_runtime_alignment_migration_contains_external_mapping_and_ind
         "idx_context_snapshot_decision_type",
         "alter table decision_graph_checkpoint add column if not exists checkpoint_key",
         "alter table decision_graph_checkpoint add column if not exists state",
-        "alter table decision_graph_checkpoint alter column thread_id set default",
         "idx_decision_graph_checkpoint_decision_key",
         "idx_action_request_decision_action",
         "idx_action_result_decision_action_idempotency",
         "idx_action_result_decision_action",
         "alter table human_reply add column if not exists decision_id",
-        "alter table human_reply alter column human_reply set default",
         "idx_human_reply_decision_id",
         "alter table product add column if not exists public_product_id",
         "alter table product_knowledge_candidate add column if not exists public_candidate_id",
@@ -192,6 +186,22 @@ def test_canonical_runtime_alignment_migration_contains_external_mapping_and_ind
         "alter table knowledge_entry add column if not exists status",
         "create table if not exists knowledge_embedding",
         "idx_knowledge_entry_store_status_created",
+    ]:
+        assert snippet in sql
+
+
+def test_legacy_runtime_defaults_migration_contains_not_null_defaults() -> None:
+    sql = Path("migrations/005_legacy_runtime_defaults.sql").read_text(encoding="utf-8").lower()
+
+    for snippet in [
+        "alter table message add column if not exists sender_type",
+        "alter table message alter column sender_type set default",
+        "alter table decision_record add column if not exists action",
+        "alter table decision_record alter column action set default",
+        "alter table decision_graph_checkpoint add column if not exists thread_id",
+        "alter table decision_graph_checkpoint alter column thread_id set default",
+        "alter table human_reply add column if not exists human_reply",
+        "alter table human_reply alter column human_reply set default",
     ]:
         assert snippet in sql
 
