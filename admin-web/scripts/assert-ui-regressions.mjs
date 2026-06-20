@@ -19,6 +19,7 @@ const checks = [
   ['Customer Admin design records implementation baseline', customerDesign.includes('### 3.1 客户后台实现基准') && customerDesign.includes('不得展示“系统后台”按钮、tab、workspace switch')],
   ['System Admin design records normalized prototype baseline', systemDesign.includes('### 5.0 当前实现基准') && systemDesign.includes('系统后台 UI 的源文档是本文')],
   ['App routes by host/path instead of a shared workspace switch', main.includes('resolveAdminSurface') && !main.includes('workspaceSwitch')],
+  ['System Admin routes are gated away from customer Admin hosts', main.includes('isSystemAdminRouteAllowed') && !main.includes('if (path === "/system-admin") return "system-admin";')],
   ['Customer shell has no system-admin switch or system auth probe', !main.includes('setWorkspace("system")') && !main.includes('refreshSession("system")')],
   ['System navigation matches prototype required pages', ['配置完成度', '资料与知识', '规则与动作', '评测与发布'].every((label) => main.includes(label))],
   ['Carbon topbar and shell classes are present', main.includes('systemTopbar') && main.includes('systemContextPanel')],

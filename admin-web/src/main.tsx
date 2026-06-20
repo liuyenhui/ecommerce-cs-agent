@@ -226,20 +226,29 @@ function resolveAdminSurface(location: Location): Surface {
   const host = location.hostname.toLowerCase();
   const path = location.pathname.replace(/\/+$/, "") || "/";
   const querySurface = new URLSearchParams(location.search).get("surface");
+  const systemRouteAllowed = isSystemAdminRouteAllowed(host);
 
-  if (querySurface === "system-login") return "system-login";
-  if (querySurface === "system") return "system-admin";
+  if (systemRouteAllowed && querySurface === "system-login") return "system-login";
+  if (systemRouteAllowed && querySurface === "system") return "system-admin";
   if (querySurface === "customer-login") return "customer-login";
   if (querySurface === "customer") return "customer-admin";
 
-  if (host.startsWith("system-admin.") || host.startsWith("ops-admin.")) {
+  if (isSystemAdminHost(host)) {
     return path === "/login" ? "system-login" : "system-admin";
   }
-  if (path === "/system-admin/login") return "system-login";
-  if (path === "/system-admin") return "system-admin";
+  if (systemRouteAllowed && path === "/system-admin/login") return "system-login";
+  if (systemRouteAllowed && path === "/system-admin") return "system-admin";
   if (path === "/login") return "customer-login";
   if (path === "/admin") return "customer-admin";
   return "public";
+}
+
+function isSystemAdminHost(host: string): boolean {
+  return host.startsWith("system-admin.") || host.startsWith("ops-admin.");
+}
+
+function isSystemAdminRouteAllowed(host: string): boolean {
+  return isSystemAdminHost(host) || host === "localhost" || host === "127.0.0.1" || host === "::1";
 }
 
 async function requestJson<T = JsonRecord>(path: string, options: RequestInit = {}): Promise<T> {
