@@ -1028,6 +1028,15 @@ def _password_matches(email: Any, password: Any, expected_email: str, stored_has
         return False
     if stored_hash.startswith("plain:"):
         return password == stored_hash.removeprefix("plain:")
+    if stored_hash.startswith(("$2a$", "$2b$", "$2y$")):
+        try:
+            import bcrypt
+        except ImportError:
+            return False
+        try:
+            return bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8"))
+        except ValueError:
+            return False
     return False
 
 

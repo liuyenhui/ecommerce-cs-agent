@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import bcrypt
 import pytest
 
 from fastapi import HTTPException
@@ -258,6 +259,31 @@ def test_postgres_system_admin_auth_login_persists_hashed_session_and_audit() ->
     assert "INSERT INTO system_admin_audit_log" in executed_sql
     session_insert = [item for item in connection.executed if "INSERT INTO system_admin_session" in item[0]][0]
     assert token not in str(session_insert[1])
+
+
+def test_postgres_system_admin_auth_login_accepts_bcrypt_password_hash() -> None:
+    password_hash = bcrypt.hashpw(b"system-admin-password", bcrypt.gensalt()).decode("utf-8")
+    settings = Settings(database_url="postgresql://example", system_admin_initial_password_hash=password_hash)
+    connection = _FakeConnection(
+        fetch_rows=[
+            (
+                "sysadmin-uuid",
+                "system-admin@example.test",
+                password_hash,
+                "System Admin",
+                "super_admin",
+            )
+        ]
+    )
+    service = PostgresSystemAdminAuthService(settings)
+    service._connect = lambda _url: connection
+
+    response, token = service.login(
+        {"email": "system-admin@example.test", "password": "system-admin-password"}
+    )
+
+    assert response["user"]["id"] == "sysadmin-uuid"
+    assert token
 
 
 def test_postgres_system_admin_auth_require_session_queries_hashed_active_session() -> None:
