@@ -4,6 +4,11 @@
 
 ## 最近文档更新
 
+### 2026-06-21
+
+- 更新客户公开首页方向：`admin.ecommerce-cs-agent-dev.fcihome.com` 的 `/` 是公开宣传页和客户登录入口，对外统一使用“AI / AI 客服”白话叙事，不把 Agent 概念、系统后台入口或 ERP 身份源暴露给客户。
+- 公开首页首屏、产品演示轮播和“怎么工作”动效围绕“商品信息管好了，AI 客服才答得准。”以及“上传商品说明书 → AI 学习 → 模拟问答 → AI 自动回复”主流程实现；客户 Admin 登录后仍保持 IBM / Carbon 式密集企业控制台。
+
 ### 2026-06-18
 
 - 固定客户后台和系统后台的 Web 站点边界：客户后台使用 `admin.ecommerce-cs-agent-dev.fcihome.com`，系统后台使用 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 作为目标域名，`ops-admin.ecommerce-cs-agent-dev.fcihome.com` 仅作为可选别名。
