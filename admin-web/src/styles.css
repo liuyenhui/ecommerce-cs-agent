@@ -78,6 +78,13 @@ textarea {
   padding: 7px 10px;
 }
 
+input[aria-invalid="true"],
+select[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: var(--error);
+  outline: 2px solid transparent;
+}
+
 textarea {
   min-height: 112px;
   resize: vertical;
@@ -307,6 +314,24 @@ pre,
   place-items: center;
   background: var(--blue);
   color: #ffffff;
+}
+
+.loginError {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  border-left: 4px solid var(--error);
+  background: var(--error-bg);
+  color: #a2191f;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.loginError svg {
+  margin-top: 1px;
 }
 
 .mutedText {

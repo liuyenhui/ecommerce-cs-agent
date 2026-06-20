@@ -20,6 +20,8 @@ const checks = [
   ['System Admin design records normalized prototype baseline', systemDesign.includes('### 5.0 当前实现基准') && systemDesign.includes('系统后台 UI 的源文档是本文')],
   ['App routes by host/path instead of a shared workspace switch', main.includes('resolveAdminSurface') && !main.includes('workspaceSwitch')],
   ['System Admin routes are gated away from customer Admin hosts', main.includes('isSystemAdminRouteAllowed') && !main.includes('if (path === "/system-admin") return "system-admin";')],
+  ['Login auth failures render inline form error', main.includes('loginError') && main.includes('role="alert"') && styles.includes('.loginError')],
+  ['Login 401 auth failures use user-facing credential copy', main.includes('message.startsWith("401 ")') && main.includes('邮箱或密码不正确，请检查后重试。')],
   ['Customer shell has no system-admin switch or system auth probe', !main.includes('setWorkspace("system")') && !main.includes('refreshSession("system")')],
   ['System navigation matches prototype required pages', ['配置完成度', '资料与知识', '规则与动作', '评测与发布'].every((label) => main.includes(label))],
   ['Carbon topbar and shell classes are present', main.includes('systemTopbar') && main.includes('systemContextPanel')],
