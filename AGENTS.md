@@ -83,6 +83,9 @@ node docs/scripts/validate-business-flow-x6-labels.mjs
 
 - The public landing page is Notion-led: black/neutral palette, generous whitespace, clear AI Agent narrative, product capability modules, trust proof, product previews, and a black primary CTA.
 - The logged-in customer Admin must not become Notion-like. It remains an IBM / Carbon-style dense enterprise console with scan-friendly tables, queues, forms, low shadows, and hairline dividers.
+- Customer Admin implementation baseline is `docs/customer-admin-design.md`; System Admin implementation baseline is `docs/system-admin-design.md` plus `docs/system-admin-ui-prototype.html` for layout, navigation grouping, visual density, state expression, drawers, modals, filters, and table behavior.
+- Do not implement customer Admin and system Admin as tabs or a workspace switch inside one shared shell. They must remain separate web entry surfaces with separate login pages, route guards, Cookie / session names, and API auth domains.
+- Keep detailed Admin UI rules in `docs/customer-admin-design.md` and `docs/system-admin-design.md`; README, AGENTS, architecture summaries, and handoff notes should link to those sources instead of duplicating full design content.
 - Ant Design may be used as the component capability layer, but it is not the visual style source. Final Admin visuals must be controlled by project theme tokens, custom CSS, and the project-owned visual baseline.
 - When changing public landing pages, login pages, Admin shell, tables, forms, review queues, or configuration screens, update `docs/customer-admin-design.md` in the same change and keep architecture summaries consistent when they mention UI/UX rules.
 - External websites and `DESIGN.md` files are reference material only. Do not copy their brands, Logo, licensed fonts, assets, copywriting, rounded-corner language, or brand-specific semantics into this project.

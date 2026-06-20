@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "test": "tsc --noEmit"
+    "test": "tsc --noEmit && node scripts/assert-ui-regressions.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.1",

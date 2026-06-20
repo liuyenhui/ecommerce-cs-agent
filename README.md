@@ -22,6 +22,12 @@
 - 决策过程必须可追踪：为什么给候选、为什么自动回复、为什么转人工，都要留记录。
 - 商品、订单、平台、店铺、客服账号、会话上下文要结构化存储，避免只存问答文本。
 
+## Admin UI 实现基准
+
+- 客户后台 UI 源文档：[Customer Admin Design](docs/customer-admin-design.md)。
+- 系统后台 UI 源文档：[System Admin Design](docs/system-admin-design.md)，视觉参照：[System Admin UI Prototype](docs/system-admin-ui-prototype.html)。
+- README 只保留设计入口；后台视觉、导航、交互和隔离细节以对应设计文档为准。
+
 ## 推荐初始技术方向
 
 - 主存储：PostgreSQL。

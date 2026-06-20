@@ -25,7 +25,7 @@
 | 电商平台 | 拼多多、淘宝、京东、抖音等平台仍由外部客服系统对接。 |
 | LLM Provider | 提供回复生成、辅助分类、辅助抽参能力，由 Provider Adapter 屏蔽供应商差异。 |
 
-公开宣传页的视觉基准由 Notion 主导：黑白中性基调、大留白、清晰 AI Agent 叙事、产品能力模块、可信背书、产品预览和黑色主 CTA。Admin Web 不做 Notion 化，继续采用 IBM / Carbon 式企业后台密度、hairline、低阴影、表格 / 队列 / 配置表单优先。Ant Design 只作为组件能力层，最终视觉由项目主题 token 和自定义 CSS 控制。
+公开宣传页的视觉基准由 Notion 主导：黑白中性基调、大留白、清晰 AI Agent 叙事、产品能力模块、可信背书、产品预览和黑色主 CTA。Admin Web 不做 Notion 化，继续采用 IBM / Carbon 式企业后台密度、hairline、低阴影、表格 / 队列 / 配置表单优先。客户后台 UI 细节以 [Customer Admin Design](customer-admin-design.md) 为源文档，系统后台 UI 细节以 [System Admin Design](system-admin-design.md) 和 [System Admin UI Prototype](system-admin-ui-prototype.html) 为源文档；本文只保留架构摘要。
 
 Agent 输出的是 `auto_reply`、`candidate`、`handoff`、`context_request`、`action_request` 等结构化结果。客服问答只有一个主入口；商品、订单、物流、规则和动作执行结果按缺口单独回填。真实发送消息和真实修改订单、备注、地址等动作，仍由外部客服系统执行。
 
@@ -37,7 +37,7 @@ Agent 输出的是 `auto_reply`、`candidate`、`handoff`、`context_request`、
 | 客服前台 | 展示买家消息、Agent 候选、风险原因、追踪结果 | 外部客服系统已有工作台承载 |
 | 客户运营后台 | 客户登录、组织/店铺切换、上传商品说明书、照片、视频，维护商品/SKU 资料，审核 Markdown 知识片段，配置规则和动作能力 | 第一版必备客户 Admin 模块，dev 域名为 `admin.ecommerce-cs-agent-dev.fcihome.com`，详见 [Customer Admin Design](customer-admin-design.md) |
 | 系统管理后台 | 平台运营、技术支持、系统管理员和安全审计查看跨租户 readiness、trace、任务、发布、审计和健康 | 第一版必备系统 Admin 模块，目标 dev 域名为 `system-admin.ecommerce-cs-agent-dev.fcihome.com`，详见 [System Admin Design](system-admin-design.md) |
-| Admin UI 视觉 | 宣传页、登录页、后台 shell、表格、表单、审核队列和配置界面的视觉规则 | Notion 主导宣传页 + IBM / Carbon 企业后台规则 + Ant Design 组件能力层；不照抄外部品牌 |
+| Admin UI 视觉 | 宣传页、登录页、后台 shell、表格、表单、审核队列和配置界面的视觉规则 | 源文档归一到 Customer Admin Design、System Admin Design 和 System Admin UI Prototype；本文只保留摘要 |
 | Agent API 服务 | 提供回复决策、反馈、消息追踪、动作请求等 API | 独立 FastAPI 服务 |
 | Agent 领域服务 | 上下文构建、意图识别、风险识别、RAG、生成、评分、规则闸门 | Python 服务内部模块 |
 | 数据与知识层 | 保存商品资料、价格快照、会话、消息、快照、决策、候选、反馈、知识、向量 | PostgreSQL + JSONB + pgvector |

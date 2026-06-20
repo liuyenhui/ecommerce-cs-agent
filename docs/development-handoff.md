@@ -4,6 +4,12 @@
 
 ## 最近文档更新
 
+### 2026-06-20
+
+- Admin UI 设计归一化：客户后台 UI 源文档为 `docs/customer-admin-design.md`，系统后台 UI 源文档为 `docs/system-admin-design.md`，系统后台视觉参照为 `docs/system-admin-ui-prototype.html`。
+- README 和 AGENTS 只保留设计入口和维护规则；后台视觉、导航、交互和隔离细节不再散落复制到入口文档。
+- Admin Web 实现必须按客户后台 / 系统后台两个独立入口处理，不再用同一 shell 内的 tab 或开关切换两个后台。
+
 ### 2026-06-18
 
 - 固定客户后台和系统后台的 Web 站点边界：客户后台使用 `admin.ecommerce-cs-agent-dev.fcihome.com`，系统后台使用 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 作为目标域名，`ops-admin.ecommerce-cs-agent-dev.fcihome.com` 仅作为可选别名。

@@ -96,6 +96,7 @@ OpenAPI 契约测试应以 `docs/openapi.yaml` 为源文件，不依赖服务启
 | `/v1/system-admin/auth/login`、`/v1/system-admin/auth/logout`、`/v1/system-admin/auth/me` | 系统 Admin 登录态。 |
 | `/v1/system-admin/message-traces`、`/v1/system-admin/audit-logs`、`/v1/system-admin/health` | 系统排障、审计和健康检查。 |
 | Customer / System Admin Web split | `admin.ecommerce-cs-agent-dev.fcihome.com` 不展示系统后台入口；`system-admin.ecommerce-cs-agent-dev.fcihome.com` 使用系统后台专用登录页、Cookie 和路由守卫。 |
+| Admin UI design guard | `npm --prefix admin-web test` 包含 `admin-web/scripts/assert-ui-regressions.mjs`，用于检查客户 / 系统后台入口隔离、系统后台原型导航、Carbon shell 类名、移动表格 `data-label` 和设计源文档归一化。 |
 
 后续新增、重命名或删除 OpenAPI path 时，必须同步更新 contract test 的必需路径清单。
 
