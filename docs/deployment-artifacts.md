@@ -97,7 +97,7 @@ TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com \
 
 - 应用 commit / image tag。
 - Helm release revision 或 GitOps commit。
-- API/Admin `/health` 状态。
+- API、Customer Admin、System Admin `/health` 状态。
 - live eval pass/fail 和 `decision_id` 摘要。
 - 若失败，引用 [Runbook](runbook.md) 中的排查分支。
 

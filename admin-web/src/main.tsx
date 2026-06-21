@@ -59,6 +59,15 @@ const systemTabs: Array<{ key: SystemTab; label: string; group: string; icon: Re
   { key: "health", label: "系统健康", group: "发布安全", icon: <HeartPulse size={17} /> }
 ];
 
+const CUSTOMER_ADMIN_HOST = "admin.ecommerce-cs-agent-dev.fcihome.com";
+const SYSTEM_ADMIN_HOST = "system-admin.ecommerce-cs-agent-dev.fcihome.com";
+
+export function detectWorkspaceFromLocation(location: Pick<Location, "hostname" | "pathname">): Workspace {
+  if (location.hostname === SYSTEM_ADMIN_HOST || location.hostname.startsWith("system-admin.")) return "system";
+  if (location.hostname === CUSTOMER_ADMIN_HOST || location.hostname.startsWith("admin.")) return "customer";
+  return location.pathname.startsWith("/system-admin") ? "system" : "customer";
+}
+
 const statusTone: Record<string, "ok" | "warn" | "bad" | "info"> = {
   active: "ok",
   healthy: "ok",
@@ -79,11 +88,6 @@ function normalizePath() {
   if (typeof window === "undefined") return "/";
   const path = window.location.pathname || "/";
   return path.endsWith("/") && path !== "/" ? path.slice(0, -1) : path;
-}
-
-function isSystemAdminHost() {
-  if (typeof window === "undefined") return false;
-  return window.location.hostname.startsWith("system-admin.");
 }
 
 async function requestJson<T = JsonRecord>(path: string, options: RequestInit = {}): Promise<T> {
@@ -107,6 +111,7 @@ async function requestJson<T = JsonRecord>(path: string, options: RequestInit = 
 }
 
 function App() {
+  const [workspace] = React.useState<Workspace>(() => detectWorkspaceFromLocation(window.location));
   const [path, setPath] = React.useState(() => normalizePath());
 
   React.useEffect(() => {
@@ -120,7 +125,7 @@ function App() {
     setPath(normalizePath());
   }
 
-  return isSystemAdminHost() ? <SystemSite /> : <CustomerSite path={path} navigate={navigate} />;
+  return workspace === "system" ? <SystemSite /> : <CustomerSite path={path} navigate={navigate} />;
 }
 
 function CustomerSite({ path, navigate }: { path: string; navigate: (path: string) => void }) {

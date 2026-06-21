@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir \
         "uvicorn>=0.34,<1" \
         "pydantic>=2.8,<3" \
         "psycopg[binary]>=3.2,<4" \
+        "bcrypt>=4.1,<5" \
     && pip install --no-cache-dir --no-deps .
 
 USER 10001:10001

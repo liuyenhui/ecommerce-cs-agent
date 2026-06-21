@@ -279,6 +279,21 @@ def test_product_knowledge_storage_migration_contains_asset_metadata_indexes() -
     assert "idx_knowledge_embedding_entry_chunk" not in sql
 
 
+def test_admin_auth_schema_repair_migration_contains_idempotent_admin_user_alignment() -> None:
+    sql = Path("migrations/008_admin_auth_schema_repair.sql").read_text(encoding="utf-8").lower()
+
+    for snippet in [
+        "alter table admin_user add column if not exists organization_id",
+        "references organization(id)",
+        "idx_admin_user_organization_email",
+        "alter table admin_session add column if not exists organization_id",
+        "alter table admin_session add column if not exists admin_user_id",
+        "alter table system_admin_user add column if not exists roles",
+        "set roles = array[role]",
+    ]:
+        assert snippet in sql
+
+
 def test_psycopg_connection_retries_transient_connect_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = migrations.PsycopgMigrationConnection.__new__(migrations.PsycopgMigrationConnection)
     connection._database_url = "postgresql://example"

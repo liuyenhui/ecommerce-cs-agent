@@ -30,6 +30,24 @@ def test_admin_web_is_vite_react_app() -> None:
     assert "proxy_pass http://ecommerce-cs-agent-api:8000" in nginx
 
 
+def test_admin_web_splits_customer_and_system_sites_by_host() -> None:
+    app = Path("admin-web/src/main.tsx").read_text(encoding="utf-8")
+
+    assert "detectWorkspaceFromLocation" in app
+    assert "system-admin.ecommerce-cs-agent-dev.fcihome.com" in app
+    assert "admin.ecommerce-cs-agent-dev.fcihome.com" in app
+    assert "workspaceSwitch" not in app
+    assert "setWorkspace" not in app
+    assert "/v1/admin/auth/me" in app
+    assert "/v1/system-admin/auth/me" in app
+    assert 'workspace === "system" ? <SystemSite /> : <CustomerSite' in app
+    assert "function CustomerSite(" in app
+    assert "function SystemSite()" in app
+    assert 'void refreshSession(workspace)' not in app
+    assert 'void refreshSession("customer").catch' not in app
+    assert 'void refreshSession("system").catch' not in app
+
+
 def test_helm_values_define_dev_runtime_contract() -> None:
     values = yaml.safe_load(
         Path("deploy/helm/ecommerce-cs-agent/values-dev.yaml").read_text(
@@ -49,9 +67,13 @@ def test_helm_values_define_dev_runtime_contract() -> None:
     assert values["admin"]["image"]["repository"] == (
         "registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-admin"
     )
-    assert values["admin"]["ingress"]["host"] == (
+    assert values["admin"]["customer"]["host"] == (
         "admin.ecommerce-cs-agent-dev.fcihome.com"
     )
+    assert values["admin"]["system"]["host"] == (
+        "system-admin.ecommerce-cs-agent-dev.fcihome.com"
+    )
+    assert values["admin"]["ingress"]["tlsSecretName"] == "cs-agent-dev-tls"
     assert values["proxy"]["enabled"] is True
 
 
@@ -83,6 +105,7 @@ def test_helm_chart_defines_k8s_security_defaults() -> None:
 
 def test_helm_templates_include_api_admin_and_migration_job() -> None:
     chart_dir = Path("deploy/helm/ecommerce-cs-agent")
+    admin_ingress = (chart_dir / "templates/admin-ingress.yaml").read_text(encoding="utf-8")
 
     assert (chart_dir / "Chart.yaml").exists()
     assert (chart_dir / "templates/api-deployment.yaml").exists()
@@ -95,6 +118,12 @@ def test_helm_templates_include_api_admin_and_migration_job() -> None:
     assert "python\", \"-m\", \"ecommerce_cs_agent.db.cli\", \"migrate" in (
         chart_dir / "templates/migration-job.yaml"
     ).read_text(encoding="utf-8")
+    assert 'acme.cert-manager.io/http01-edit-in-place: "true"' in admin_ingress
+    assert ".Values.api.ingress.host" in admin_ingress
+    assert ".Values.admin.customer.host" in admin_ingress
+    assert ".Values.admin.system.host" in admin_ingress
+    assert admin_ingress.count("- host:") == 2
+    assert admin_ingress.count(".Values.admin.ingress.tlsSecretName") == 1
     assert 'replace "+" "_"' in (chart_dir / "templates/_helpers.tpl").read_text(
         encoding="utf-8"
     )
