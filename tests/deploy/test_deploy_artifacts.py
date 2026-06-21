@@ -40,7 +40,10 @@ def test_admin_web_splits_customer_and_system_sites_by_host() -> None:
     assert "setWorkspace" not in app
     assert "/v1/admin/auth/me" in app
     assert "/v1/system-admin/auth/me" in app
-    assert 'void refreshSession(workspace)' in app
+    assert 'workspace === "system" ? <SystemSite /> : <CustomerSite' in app
+    assert "function CustomerSite(" in app
+    assert "function SystemSite()" in app
+    assert 'void refreshSession(workspace)' not in app
     assert 'void refreshSession("customer").catch' not in app
     assert 'void refreshSession("system").catch' not in app
 
