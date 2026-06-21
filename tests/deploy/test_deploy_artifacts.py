@@ -153,7 +153,7 @@ def test_publish_workflow_generates_sbom_and_scans_images() -> None:
         "trivy-${{ matrix.component }}.sarif",
         "format: cyclonedx",
         "sbom-${{ matrix.component }}.cdx.json",
-        "actions/upload-artifact@v4",
+        "actions/upload-artifact@v7",
         "Enforce image vulnerability gate",
         "severity: CRITICAL",
         'exit-code: "1"',
@@ -172,7 +172,7 @@ def test_deploy_workflow_archives_dev_release_gate_report() -> None:
         "Initialize release gate report",
         "python scripts/run_dev_release_gate.py",
         "--image-tag \"${{ needs.update-gitops.outputs.image_tag }}\"",
-        "actions/upload-artifact@v4",
+        "actions/upload-artifact@v7",
         "dev-release-gate-${{ needs.update-gitops.outputs.image_tag }}",
     ]:
         assert snippet in workflow
