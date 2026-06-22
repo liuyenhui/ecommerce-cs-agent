@@ -9,6 +9,7 @@ const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const main = read('admin-web/src/main.tsx');
 const styles = read('admin-web/src/styles.css');
 const packageJson = read('admin-web/package.json');
+const nginxConf = read('admin-web/nginx.conf');
 const loginPanel = main.slice(main.indexOf('function LoginPanel'), main.indexOf('function CustomerWorkspace'));
 
 const checks = [
@@ -24,7 +25,9 @@ const checks = [
   ['Field label map includes organization_id', main.includes('organization_id: "组织 ID"')],
   ['Status badges render localized status text', main.includes('const statusLabel') && main.includes('title={value}>{statusLabel[value] || value}</span>')],
   ['EmptyState accepts title, description, and optional action', main.includes('function EmptyState({ title, description, action }: EmptyStateProps)')],
-  ['Mobile table cells render labels before content', styles.includes('td::before') && styles.includes('content: attr(data-label)')]
+  ['Mobile table cells render labels before content', styles.includes('td::before') && styles.includes('content: attr(data-label)')],
+  ['Nginx does not serve index.html for missing hashed assets', /location\s+\^~\s+\/assets\/\s*\{[\s\S]*try_files\s+\$uri\s+=404;/.test(nginxConf)],
+  ['Nginx keeps SPA documents revalidatable after deployments', /location\s+=\s+\/index\.html\s*\{[\s\S]*Cache-Control[\s\S]*no-store/.test(nginxConf)]
 ];
 
 const failures = checks.filter(([, ok]) => !ok);
