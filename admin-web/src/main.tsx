@@ -513,10 +513,18 @@ function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLog
   const [email, setEmail] = React.useState(target === "customer" ? "admin@example.test" : "system-admin@example.test");
   const [password, setPassword] = React.useState("");
   const [organizationId, setOrganizationId] = React.useState("org-001");
+  const [loginError, setLoginError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const loginErrorId = `${target}-login-error`;
+  const authErrorText = target === "customer" ? "邮箱、密码或组织 ID 不正确，请检查后重试。" : "邮箱或密码不正确，请检查后重试。";
+
+  function clearLoginError() {
+    if (loginError) setLoginError(null);
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    setLoginError(null);
     setLoading(true);
     try {
       const path = target === "customer" ? "/v1/admin/auth/login" : "/v1/system-admin/auth/login";
@@ -526,7 +534,7 @@ function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLog
       onLoggedIn(session);
       setToast({ tone: "success", text: "登录成功" });
     } catch (error) {
-      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+      setLoginError(loginFailureMessage(error, authErrorText));
     } finally {
       setLoading(false);
     }
@@ -539,17 +547,50 @@ function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLog
         <h2>{target === "customer" ? "客户后台登录" : "系统后台登录"}</h2>
         <label>
           邮箱
-          <input value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" />
+          <input
+            value={email}
+            onChange={(event) => {
+              setEmail(event.target.value);
+              clearLoginError();
+            }}
+            autoComplete="username"
+            aria-invalid={Boolean(loginError)}
+            aria-describedby={loginError ? loginErrorId : undefined}
+          />
         </label>
         <label>
           密码
-          <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" />
+          <input
+            value={password}
+            onChange={(event) => {
+              setPassword(event.target.value);
+              clearLoginError();
+            }}
+            type="password"
+            autoComplete="current-password"
+            aria-invalid={Boolean(loginError)}
+            aria-describedby={loginError ? loginErrorId : undefined}
+          />
         </label>
         {target === "customer" ? (
           <label>
             组织 ID
-            <input value={organizationId} onChange={(event) => setOrganizationId(event.target.value)} />
+            <input
+              value={organizationId}
+              onChange={(event) => {
+                setOrganizationId(event.target.value);
+                clearLoginError();
+              }}
+              aria-invalid={Boolean(loginError)}
+              aria-describedby={loginError ? loginErrorId : undefined}
+            />
           </label>
+        ) : null}
+        {loginError ? (
+          <div className="loginError" id={loginErrorId} role="alert">
+            <AlertTriangle size={16} />
+            <span>{loginError}</span>
+          </div>
         ) : null}
         <button className="primaryButton" type="submit" disabled={loading}>
           {loading ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
@@ -558,6 +599,12 @@ function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLog
       </form>
     </section>
   );
+}
+
+function loginFailureMessage(error: unknown, authErrorText: string): string {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (message.startsWith("401 ")) return authErrorText;
+  return "登录失败，请稍后重试。";
 }
 
 function CustomerWorkspace({ session, activeTab, setActiveTab, setToast }: {
