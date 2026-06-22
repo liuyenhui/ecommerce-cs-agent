@@ -15,7 +15,10 @@ const checks = [
   ['Admin Web regression guard is wired into npm test', packageJson.includes('assert-ui-regressions.mjs')],
   ['Login auth failures render inline form error', loginPanel.includes('loginError') && loginPanel.includes('role="alert"') && styles.includes('.loginError')],
   ['Login 401 auth failures use user-facing credential copy', main.includes('message.startsWith("401 ")') && loginPanel.includes('邮箱或密码不正确，请检查后重试。')],
-  ['Login auth failures are not shown through global toast', !loginPanel.includes('setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });')]
+  ['Login auth failures are not shown through global toast', !loginPanel.includes('setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });')],
+  ['Login fields are empty by default on live builds', loginPanel.includes('React.useState("")') && !loginPanel.includes('admin@example.test') && !loginPanel.includes('system-admin@example.test') && !loginPanel.includes('React.useState("org-001")')],
+  ['Login validates required fields before requesting auth', loginPanel.includes('请填写邮箱、密码和组织 ID') && loginPanel.includes('请填写邮箱和密码') && loginPanel.includes('return;')],
+  ['Login submits trimmed identifiers', loginPanel.includes('email: email.trim()') && loginPanel.includes('organization_id: organizationId.trim()')]
 ];
 
 const failures = checks.filter(([, ok]) => !ok);

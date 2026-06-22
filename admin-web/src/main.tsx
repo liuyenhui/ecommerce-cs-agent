@@ -511,25 +511,40 @@ function TopBar({ workspace, session, onRefresh, onLogout }: { workspace: Worksp
 }
 
 function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLoggedIn: (session: JsonRecord) => void; setToast: (toast: ToastState) => void }) {
-  const [email, setEmail] = React.useState(target === "customer" ? "admin@example.test" : "system-admin@example.test");
+  const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
-  const [organizationId, setOrganizationId] = React.useState("org-001");
+  const [organizationId, setOrganizationId] = React.useState("");
   const [loginError, setLoginError] = React.useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = React.useState<Partial<Record<"email" | "password" | "organizationId", boolean>>>({});
   const [loading, setLoading] = React.useState(false);
   const loginErrorId = `${target}-login-error`;
   const authErrorText = target === "customer" ? "邮箱、密码或组织 ID 不正确，请检查后重试。" : "邮箱或密码不正确，请检查后重试。";
 
   function clearLoginError() {
     if (loginError) setLoginError(null);
+    if (Object.keys(fieldErrors).length) setFieldErrors({});
   }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setLoginError(null);
+    const nextFieldErrors = {
+      email: !email.trim(),
+      password: !password,
+      organizationId: target === "customer" && !organizationId.trim()
+    };
+    if (nextFieldErrors.email || nextFieldErrors.password || nextFieldErrors.organizationId) {
+      setFieldErrors(nextFieldErrors);
+      setLoginError(target === "customer" ? "请填写邮箱、密码和组织 ID" : "请填写邮箱和密码");
+      return;
+    }
+    setFieldErrors({});
     setLoading(true);
     try {
       const path = target === "customer" ? "/v1/admin/auth/login" : "/v1/system-admin/auth/login";
-      const body = target === "customer" ? { email, password, organization_id: organizationId } : { email, password };
+      const body = target === "customer"
+        ? { email: email.trim(), password, organization_id: organizationId.trim() }
+        : { email: email.trim(), password };
       await requestJson(path, { method: "POST", body: JSON.stringify(body) });
       const session = await requestJson(target === "customer" ? "/v1/admin/auth/me" : "/v1/system-admin/auth/me");
       onLoggedIn(session);
@@ -555,8 +570,10 @@ function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLog
               clearLoginError();
             }}
             autoComplete="username"
-            aria-invalid={Boolean(loginError)}
-            aria-describedby={loginError ? loginErrorId : undefined}
+            inputMode="email"
+            placeholder="name@example.com"
+            aria-invalid={Boolean(fieldErrors.email)}
+            aria-describedby={loginError && fieldErrors.email ? loginErrorId : undefined}
           />
         </label>
         <label>
@@ -569,8 +586,8 @@ function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLog
             }}
             type="password"
             autoComplete="current-password"
-            aria-invalid={Boolean(loginError)}
-            aria-describedby={loginError ? loginErrorId : undefined}
+            aria-invalid={Boolean(fieldErrors.password)}
+            aria-describedby={loginError && fieldErrors.password ? loginErrorId : undefined}
           />
         </label>
         {target === "customer" ? (
@@ -582,8 +599,10 @@ function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLog
                 setOrganizationId(event.target.value);
                 clearLoginError();
               }}
-              aria-invalid={Boolean(loginError)}
-              aria-describedby={loginError ? loginErrorId : undefined}
+              autoComplete="off"
+              placeholder="输入当前组织 ID"
+              aria-invalid={Boolean(fieldErrors.organizationId)}
+              aria-describedby={loginError && fieldErrors.organizationId ? loginErrorId : undefined}
             />
           </label>
         ) : null}
