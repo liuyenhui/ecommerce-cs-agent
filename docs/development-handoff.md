@@ -4,6 +4,11 @@
 
 ## 最近文档更新
 
+### 2026-06-23
+
+- Customer Admin 商品资料页收敛为商品主数据列表 + “上传商品”导入草稿：客户 UI 不再展示组织上下文、顶部刷新按钮或账号 badge；上传文件先生成 AI 抽取草稿，用户确认后才写入正式商品和资料资产。
+- Product Content API 新增 `GET /v1/product-content/products`、`POST /v1/product-content/product-import-drafts`、`POST /v1/product-content/product-import-drafts/{draft_id}/confirm`；导入草稿持久化到 `product_import_draft`，审计不得记录上传正文或 `content_base64` 明文。
+
 ### 2026-06-22
 
 - Customer Admin 登录入口收敛为邮箱 + 密码：登录页和 `AdminLoginRequest` 不再展示或接收 `organization_id`；登录成功后通过 `GET /v1/admin/auth/me` 返回的组织 / 店铺列表选择业务上下文。

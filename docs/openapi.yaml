@@ -1001,6 +1001,48 @@ paths:
           $ref: "#/components/responses/ValidationError"
 
   /v1/product-content/products:
+    get:
+      tags: [Product Content]
+      operationId: listProductContentProducts
+      summary: 查询商品资料列表
+      description: 客户 Admin 按当前 session 的内部租户和店铺权限查询商品主数据；客户 UI 不展示或要求输入组织 ID。
+      security:
+        - AdminSession: []
+      parameters:
+        - name: store_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 当前客户 Admin 可访问的店铺 ID。
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: 商品资料列表。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
     post:
       tags: [Product Content]
       operationId: upsertProductContentProduct
@@ -1025,6 +1067,79 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/product-content/product-import-drafts:
+    post:
+      tags: [Product Content]
+      operationId: createProductImportDraft
+      summary: 上传商品文档并生成导入草稿
+      description: 客户上传说明书、资料文档或文本后，系统保存原始对象并调用商品文档分析服务生成可编辑草稿；草稿确认前不创建正式商品。
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductImportDraftCreateRequest"
+      responses:
+        "201":
+          description: 商品导入草稿已生成。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductImportDraftResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ObjectStorageUnavailable"
+
+  /v1/product-content/product-import-drafts/{draft_id}/confirm:
+    post:
+      tags: [Product Content]
+      operationId: confirmProductImportDraft
+      summary: 确认商品导入草稿
+      description: 用户确认或修正 AI 抽取字段后才创建 / 更新商品，并把上传文件归档为商品资产。重复幂等键返回同一结果。
+      security:
+        - AdminSession: []
+      parameters:
+        - name: draft_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 商品导入草稿 ID。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductImportDraftConfirmRequest"
+      responses:
+        "200":
+          description: 重复幂等确认请求返回已保存结果。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductImportDraftConfirmResponse"
+        "201":
+          description: 商品导入草稿已确认。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductImportDraftConfirmResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/ValidationError"
 
@@ -3300,6 +3415,154 @@ components:
           type: array
           items:
             type: string
+
+    ProductListResponse:
+      type: object
+      required: [items, page_info]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductListItem"
+        page_info:
+          $ref: "#/components/schemas/PageInfo"
+
+    ProductListItem:
+      type: object
+      required: [product_id, store_id, external_product_id, title, status, health_status, updated_at]
+      properties:
+        product_id:
+          type: string
+        store_id:
+          type: string
+        external_product_id:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+        health_status:
+          type: string
+          enum: [healthy, warning, blocked]
+        updated_at:
+          type: string
+          format: date-time
+
+    ProductImportDraftCreateRequest:
+      type: object
+      required: [file_name, mime_type, content_base64, idempotency_key]
+      properties:
+        store_id:
+          type: string
+          description: 当前客户 Admin 可访问的店铺 ID；省略时使用当前 session 店铺。
+        file_name:
+          type: string
+        mime_type:
+          type: string
+        content_base64:
+          type: string
+          description: 上传文件内容；服务端不得写入审计明文。
+        idempotency_key:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/Metadata"
+
+    ProductDraftProduct:
+      type: object
+      required: [external_product_id, title, status, attributes]
+      properties:
+        external_product_id:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive, archived]
+        attributes:
+          $ref: "#/components/schemas/Metadata"
+
+    ProductImportDraftResponse:
+      type: object
+      required: [draft_id, store_id, status, file_name, mime_type, object_key, object_hash, storage_status, analysis_status, draft_product]
+      properties:
+        draft_id:
+          type: string
+        store_id:
+          type: string
+        status:
+          type: string
+          enum: [draft, confirmed]
+        file_name:
+          type: string
+        mime_type:
+          type: string
+        object_key:
+          type: string
+        object_hash:
+          type: string
+        size_bytes:
+          type:
+            - integer
+            - "null"
+        storage_status:
+          type: string
+          enum: [referenced, stored, failed]
+        analysis_status:
+          type: string
+          enum: [completed, fallback, failed]
+        analysis_model:
+          type:
+            - string
+            - "null"
+        analysis_error:
+          type:
+            - string
+            - "null"
+        draft_product:
+          $ref: "#/components/schemas/ProductDraftProduct"
+        markdown_text:
+          type: string
+        source_map:
+          $ref: "#/components/schemas/Metadata"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        confirmed_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+
+    ProductImportDraftConfirmRequest:
+      type: object
+      required: [idempotency_key, draft_product]
+      properties:
+        idempotency_key:
+          type: string
+        draft_product:
+          $ref: "#/components/schemas/ProductDraftProduct"
+
+    ProductImportDraftConfirmResponse:
+      type: object
+      required: [draft_id, product_id, asset_id, status, analysis_status, draft_product]
+      properties:
+        draft_id:
+          type: string
+        product_id:
+          type: string
+        asset_id:
+          type: string
+        status:
+          type: string
+          enum: [confirmed]
+        analysis_status:
+          type: string
+          enum: [completed, fallback, failed]
+        draft_product:
+          $ref: "#/components/schemas/ProductUpsertResponse"
 
     ProductAssetCreateRequest:
       type: object

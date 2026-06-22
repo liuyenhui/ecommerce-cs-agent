@@ -8,11 +8,9 @@ import {
   Boxes,
   CheckCircle2,
   ClipboardList,
-  Database,
   FileText,
   HeartPulse,
   KeyRound,
-  Layers3,
   ListFilter,
   Loader2,
   LogOut,
@@ -100,8 +98,11 @@ const statusLabel: Record<string, string> = {
 const fieldLabels: Record<string, string> = {
   id: "ID",
   name: "名称",
-  organization_id: "组织 ID",
+  organization_id: "客户 ID",
   store_id: "店铺 ID",
+  external_product_id: "外部商品 ID",
+  title: "商品名称",
+  health_status: "资料健康",
   status: "状态",
   reason: "原因",
   platform: "平台",
@@ -117,8 +118,6 @@ const fieldLabels: Record<string, string> = {
   object_type: "对象类型",
   message: "消息"
 };
-
-const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 
 function normalizePath() {
   if (typeof window === "undefined") return "/";
@@ -406,7 +405,6 @@ function CustomerAdminShell({
         <TopBar
           workspace="customer"
           session={customerSession}
-          onRefresh={() => refreshSession().then(() => setToast({ tone: "success", text: "会话已刷新" })).catch((error) => setToast({ tone: "error", text: error.message }))}
           onLogout={() => void logout()}
           onToggleNav={() => setMobileNavOpen((open) => !open)}
           navOpen={mobileNavOpen}
@@ -488,7 +486,6 @@ function SystemSite() {
         <TopBar
           workspace="system"
           session={systemSession}
-          onRefresh={() => refreshSession().then(() => setToast({ tone: "success", text: "会话已刷新" })).catch((error) => setToast({ tone: "error", text: error.message }))}
           onLogout={() => void logout()}
           onToggleNav={() => setMobileNavOpen((open) => !open)}
           navOpen={mobileNavOpen}
@@ -559,18 +556,15 @@ function Navigation(props: {
   );
 }
 
-function TopBar({ workspace, session, onRefresh, onLogout, onToggleNav, navOpen }: {
+function TopBar({ workspace, session, onLogout, onToggleNav, navOpen }: {
   workspace: Workspace;
   session: JsonRecord | null;
-  onRefresh: () => void;
   onLogout: () => void;
   onToggleNav: () => void;
   navOpen: boolean;
 }) {
-  const user = readRecord(session, "user") || {};
-  const userBadge = formatUserBadge(workspace, user);
   const title = workspace === "customer" ? "客户资料与知识运营" : "平台运维与发布治理";
-  const subtitle = workspace === "customer" ? "组织、店铺、商品资料、知识审核和审计" : "租户开通、决策追踪、任务、健康和安全审计";
+  const subtitle = workspace === "customer" ? "店铺、商品资料、知识审核和审计" : "租户开通、决策追踪、任务、健康和安全审计";
   return (
     <header className="topBar">
       <div className="topTitle">
@@ -587,13 +581,9 @@ function TopBar({ workspace, session, onRefresh, onLogout, onToggleNav, navOpen 
       </div>
       {session ? (
         <div className="topActions">
-          <button className="iconButton" onClick={onRefresh} title="刷新">
-            <RefreshCw size={16} />刷新
+          <button className="iconButton" onClick={onLogout} title="退出登录">
+            <LogOut size={16} />退出
           </button>
-            <span className="userBadge">{userBadge}</span>
-            <button className="iconButton" onClick={onLogout} title="退出登录">
-              <LogOut size={16} />退出
-            </button>
         </div>
       ) : null}
     </header>
@@ -705,23 +695,23 @@ function CustomerWorkspace({ session, activeTab, setActiveTab, setToast }: {
 }) {
   const activeOrg = String(session.active_organization_id || firstId(session.organizations, "org-001"));
   const activeStore = String(session.active_store_id || firstId(session.stores, "store-001"));
-  const [organizationId, setOrganizationId] = React.useState(activeOrg);
+  const organizationId = activeOrg;
   const [storeId, setStoreId] = React.useState(activeStore);
   const [data, setData] = React.useState<Record<string, unknown>>({});
   const [loading, setLoading] = React.useState(false);
   const [selected, setSelected] = React.useState<JsonRecord | null>(null);
 
-  const organizations = arrayFrom(session.organizations);
-  const stores = arrayFrom(session.stores).filter((store) => !organizationId || String(store.organization_id || store.id).includes(organizationId) || store.organization_id === organizationId);
+  const stores = arrayFrom(session.stores);
 
   async function refresh() {
     setLoading(true);
     try {
-      const [users, audit] = await Promise.all([
+      const [users, audit, products] = await Promise.all([
         requestJson<Page>(`/v1/admin/users?organization_id=${encodeURIComponent(organizationId)}`),
-        requestJson<Page>(`/v1/admin/audit-logs?organization_id=${encodeURIComponent(organizationId)}&store_id=${encodeURIComponent(storeId)}`)
+        requestJson<Page>(`/v1/admin/audit-logs?organization_id=${encodeURIComponent(organizationId)}&store_id=${encodeURIComponent(storeId)}`),
+        requestJson<Page>(`/v1/product-content/products?store_id=${encodeURIComponent(storeId)}`)
       ]);
-      setData({ users: users.items || [], audit: audit.items || [] });
+      setData({ users: users.items || [], audit: audit.items || [], products: products.items || [] });
     } catch (error) {
       setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -731,26 +721,22 @@ function CustomerWorkspace({ session, activeTab, setActiveTab, setToast }: {
 
   React.useEffect(() => {
     void refresh();
-  }, [organizationId, storeId]);
+  }, [storeId]);
 
   return (
-    <div className="workGrid">
+    <div className="workGrid singlePane">
       <section className="contentPane">
         <ContextStrip
-          organizationId={organizationId}
           storeId={storeId}
-          organizations={organizations}
           stores={stores}
-          setOrganizationId={setOrganizationId}
           setStoreId={setStoreId}
-          onRefresh={refresh}
           loading={loading}
         />
         {activeTab === "overview" ? (
           <CustomerOverview session={session} data={data} setActiveTab={setActiveTab} />
         ) : null}
         {activeTab === "products" ? (
-          <ProductContent organizationId={organizationId} storeId={storeId} setToast={setToast} setSelected={setSelected} />
+          <ProductContent storeId={storeId} setToast={setToast} setSelected={setSelected} onChanged={refresh} />
         ) : null}
         {activeTab === "knowledge" ? (
           <KnowledgeReview storeId={storeId} setToast={setToast} />
@@ -759,12 +745,6 @@ function CustomerWorkspace({ session, activeTab, setActiveTab, setToast }: {
           <AuditTable title="客户后台审计" rows={arrayFrom(data.audit)} onSelect={setSelected} />
         ) : null}
       </section>
-      <ContextPanel title="客户上下文">
-        <Metric label="组织" value={organizationId} tone="info" />
-        <Metric label="店铺" value={storeId} tone="info" />
-        <Metric label="成员" value={String(arrayFrom(data.users).length)} tone="ok" />
-        <Metric label="审计" value={String(arrayFrom(data.audit).length)} tone="warn" />
-      </ContextPanel>
       {selected ? <Drawer title="记录详情" record={selected} onClose={() => setSelected(null)} /> : null}
     </div>
   );
@@ -775,154 +755,179 @@ function CustomerOverview({ session, data, setActiveTab }: { session: JsonRecord
     <>
       <SectionHeader label="CUSTOMER" title="首页概览" action={<button onClick={() => setActiveTab("products")}><PackagePlus size={16} />维护商品</button>} />
       <div className="metricGrid">
-        <Metric label="可访问组织" value={String(arrayFrom(session.organizations).length)} tone="ok" />
         <Metric label="可访问店铺" value={String(arrayFrom(session.stores).length)} tone="ok" />
+        <Metric label="商品资料" value={String(arrayFrom(data.products).length)} tone="ok" />
         <Metric label="成员记录" value={String(arrayFrom(data.users).length)} tone="info" />
         <Metric label="审计记录" value={String(arrayFrom(data.audit).length)} tone="warn" />
       </div>
       <div className="twoColumns">
-        <ListPanel title="组织" rows={arrayFrom(session.organizations)} fields={["id", "name", "status"]} emptyState={{ title: "暂无可访问组织", description: "当前账号还没有可访问组织；请确认租户授权或联系系统管理员开通权限。" }} />
-        <ListPanel title="店铺" rows={arrayFrom(session.stores)} fields={["id", "platform", "status"]} emptyState={{ title: "暂无可访问店铺", description: "当前账号还没有可访问店铺；选择其他组织或完成店铺授权后会显示在这里。" }} />
+        <ListPanel title="店铺" rows={arrayFrom(session.stores)} fields={["id", "platform", "status"]} emptyState={{ title: "暂无可访问店铺", description: "当前账号还没有可访问店铺；完成店铺授权后会显示在这里。" }} />
+        <ListPanel title="商品资料" rows={arrayFrom(data.products)} fields={["title", "external_product_id", "status", "health_status"]} emptyState={{ title: "暂无商品资料", description: "上传商品说明书并确认 AI 抽取字段后，商品会显示在这里。" }} />
       </div>
     </>
   );
 }
 
-function ProductContent({ organizationId, storeId, setToast, setSelected }: {
-  organizationId: string;
+function ProductContent({ storeId, setToast, setSelected, onChanged }: {
   storeId: string;
   setToast: (toast: ToastState) => void;
   setSelected: (record: JsonRecord) => void;
+  onChanged: () => Promise<void>;
 }) {
-  const [product, setProduct] = React.useState<JsonRecord | null>(null);
-  const [asset, setAsset] = React.useState<JsonRecord | null>(null);
-  const [markdown, setMarkdown] = React.useState<JsonRecord | null>(null);
-  const [health, setHealth] = React.useState<JsonRecord | null>(null);
-  const [form, setForm] = React.useState({
-    external_product_id: "",
-    title: "",
-    asset_type: "manual",
-    file_ref: "",
-    file_hash: "",
-    markdown_text: "",
-    current_price: ""
-  });
+  const [products, setProducts] = React.useState<JsonRecord[]>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [uploadOpen, setUploadOpen] = React.useState(false);
 
-  async function saveProduct(event: React.FormEvent) {
-    event.preventDefault();
+  async function loadProducts() {
+    setLoading(true);
     try {
-      const response = await requestJson("/v1/product-content/products", {
-        method: "POST",
-        body: JSON.stringify({
-          organization_id: organizationId,
-          store_id: storeId,
-          external_product_id: form.external_product_id,
-          title: form.title
-        })
-      });
-      setProduct(response);
-      setToast({ tone: "success", text: "商品资料已保存" });
+      const response = await requestJson<Page>(`/v1/product-content/products?store_id=${encodeURIComponent(storeId)}`);
+      setProducts(arrayFrom(response.items));
     } catch (error) {
       setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setLoading(false);
     }
   }
 
-  async function saveAsset(event: React.FormEvent) {
-    event.preventDefault();
-    if (!product?.product_id) return setToast({ tone: "error", text: "请先保存商品资料" });
-    try {
-      const response = await requestJson("/v1/product-content/assets", {
-        method: "POST",
-        body: JSON.stringify({
-          product_id: product.product_id,
-          asset_type: form.asset_type,
-          file_ref: form.file_ref,
-          file_hash: form.file_hash,
-          version: "v1"
-        })
-      });
-      setAsset(response);
-      setToast({ tone: "success", text: "资料资产已登记" });
-    } catch (error) {
-      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
-    }
-  }
+  React.useEffect(() => {
+    void loadProducts();
+  }, [storeId]);
 
-  async function convertMarkdown(event: React.FormEvent) {
-    event.preventDefault();
-    if (!asset?.asset_id) return setToast({ tone: "error", text: "请先登记资料资产" });
-    try {
-      const response = await requestJson(`/v1/product-content/assets/${asset.asset_id}/markdown`, {
-        method: "POST",
-        body: JSON.stringify({
-          markdown_text: form.markdown_text,
-          conversion_status: "converted",
-          source_map: { source: "admin-web" }
-        })
-      });
-      setMarkdown(response);
-      setToast({ tone: "success", text: "Markdown 已转换并生成候选" });
-    } catch (error) {
-      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  async function savePrice() {
-    if (!product?.product_id) return setToast({ tone: "error", text: "请先保存商品资料" });
-    try {
-      await requestJson("/v1/product-content/price-snapshots", {
-        method: "POST",
-        body: JSON.stringify({
-          product_id: product.product_id,
-          store_id: storeId,
-          source: "admin-web",
-          current_price: Number(form.current_price),
-          currency: "CNY",
-          effective_at: nowIso(),
-          status: "active"
-        })
-      });
-      const nextHealth = await requestJson(`/v1/product-content/products/${product.product_id}/health`);
-      setHealth(nextHealth);
-      setToast({ tone: "success", text: "价格快照已保存" });
-    } catch (error) {
-      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
-    }
+  async function handleImported(record: JsonRecord) {
+    setSelected(record);
+    setToast({ tone: "success", text: "商品已保存" });
+    setUploadOpen(false);
+    await loadProducts();
+    await onChanged();
   }
 
   return (
     <>
-      <SectionHeader label="PRODUCT CONTENT" title="商品资料" action={<button onClick={() => product && setSelected(product)}><Search size={16} />查看当前商品</button>} />
-      <div className="formGrid">
-        <form className="operationPanel" onSubmit={saveProduct}>
-          <h3><Boxes size={16} />商品</h3>
-          <Field label="外部商品 ID" value={form.external_product_id} onChange={(value) => setForm({ ...form, external_product_id: value })} />
-          <Field label="标题" value={form.title} onChange={(value) => setForm({ ...form, title: value })} />
-          <button className="primaryButton"><CheckCircle2 size={16} />保存商品</button>
-        </form>
-        <form className="operationPanel" onSubmit={saveAsset}>
-          <h3><Layers3 size={16} />资产</h3>
-          <Field label="资料类型" value={form.asset_type} onChange={(value) => setForm({ ...form, asset_type: value })} />
-          <Field label="对象 Key / 引用" value={form.file_ref} onChange={(value) => setForm({ ...form, file_ref: value })} />
-          <Field label="文件 Hash" value={form.file_hash} onChange={(value) => setForm({ ...form, file_hash: value })} />
-          <button><PackagePlus size={16} />登记资产</button>
-        </form>
-        <form className="operationPanel" onSubmit={convertMarkdown}>
-          <h3><FileText size={16} />Markdown</h3>
-          <label>
-            审稿稿件
-            <textarea value={form.markdown_text} onChange={(event) => setForm({ ...form, markdown_text: event.target.value })} />
-          </label>
-          <button><FileText size={16} />转换并抽取</button>
-        </form>
-        <div className="operationPanel">
-          <h3><HeartPulse size={16} />价格与健康</h3>
-          <Field label="当前价格" value={form.current_price} onChange={(value) => setForm({ ...form, current_price: value })} />
-          <button onClick={savePrice}><Database size={16} />保存价格快照</button>
-          <RecordSummary record={health || markdown || asset || product} />
-        </div>
-      </div>
+      <SectionHeader label="PRODUCT CONTENT" title="商品资料" action={<button className="primaryButton" onClick={() => setUploadOpen(true)}><UploadCloud size={16} />上传商品</button>} />
+      <DataTable
+        title="商品列表"
+        rows={products}
+        fields={["title", "external_product_id", "store_id", "status", "health_status", "updated_at"]}
+        onSelect={setSelected}
+        action={(row) => <button onClick={() => setSelected(row)}><Search size={15} />详情</button>}
+        emptyState={{
+          title: loading ? "正在加载商品资料" : "暂无商品资料",
+          description: loading ? "商品列表正在读取，请稍候。" : "点击右上角上传商品，AI 会先抽取字段，确认后再写入正式商品资料。"
+        }}
+      />
+      {uploadOpen ? <ProductUploadModal storeId={storeId} onClose={() => setUploadOpen(false)} onImported={handleImported} setToast={setToast} /> : null}
     </>
+  );
+}
+
+function ProductUploadModal({ storeId, onClose, onImported, setToast }: {
+  storeId: string;
+  onClose: () => void;
+  onImported: (record: JsonRecord) => Promise<void>;
+  setToast: (toast: ToastState) => void;
+}) {
+  const [file, setFile] = React.useState<File | null>(null);
+  const [draft, setDraft] = React.useState<JsonRecord | null>(null);
+  const [form, setForm] = React.useState({ external_product_id: "", title: "", attributes: "{}" });
+  const [loading, setLoading] = React.useState(false);
+
+  async function analyze(event: React.FormEvent) {
+    event.preventDefault();
+    if (!file) {
+      setToast({ tone: "error", text: "请选择商品资料文件" });
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await requestJson("/v1/product-content/product-import-drafts", {
+        method: "POST",
+        body: JSON.stringify({
+          store_id: storeId,
+          file_name: file.name,
+          mime_type: file.type || "application/octet-stream",
+          content_base64: await fileToBase64(file),
+          idempotency_key: `admin-web-upload-${Date.now()}-${file.name}`
+        })
+      });
+      const draftProduct = readRecord(response, "draft_product");
+      setDraft(response);
+      setForm({
+        external_product_id: String(draftProduct.external_product_id || ""),
+        title: String(draftProduct.title || ""),
+        attributes: JSON.stringify(readRecord(draftProduct, "attributes"), null, 2)
+      });
+      setToast({ tone: "success", text: "AI 已生成商品草稿" });
+    } catch (error) {
+      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function confirm() {
+    if (!draft?.draft_id) return;
+    setLoading(true);
+    try {
+      const attributes = parseAttributes(form.attributes);
+      const response = await requestJson(`/v1/product-content/product-import-drafts/${draft.draft_id}/confirm`, {
+        method: "POST",
+        body: JSON.stringify({
+          idempotency_key: `admin-web-confirm-${draft.draft_id}`,
+          draft_product: {
+            external_product_id: form.external_product_id.trim(),
+            title: form.title.trim(),
+            status: "active",
+            attributes
+          }
+        })
+      });
+      await onImported(response);
+    } catch (error) {
+      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="modalBackdrop" role="dialog" aria-modal="true">
+      <form className="modal uploadModal" onSubmit={analyze}>
+        <div className="modalHeader">
+          <div>
+            <p className="eyebrow">PRODUCT UPLOAD</p>
+            <h2>上传商品</h2>
+          </div>
+          <button type="button" onClick={onClose}>关闭</button>
+        </div>
+        <label>
+          商品资料文件
+          <input type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} />
+        </label>
+        {!draft ? (
+          <button className="primaryButton" type="submit" disabled={loading}>
+            {loading ? <Loader2 size={16} className="spin" /> : <UploadCloud size={16} />}
+            上传并分析
+          </button>
+        ) : (
+          <div className="draftFields">
+            <Field label="外部商品 ID" value={form.external_product_id} onChange={(value) => setForm({ ...form, external_product_id: value })} />
+            <Field label="商品名称" value={form.title} onChange={(value) => setForm({ ...form, title: value })} />
+            <label>
+              抽取属性 JSON
+              <textarea value={form.attributes} onChange={(event) => setForm({ ...form, attributes: event.target.value })} />
+            </label>
+            <div className="buttonRow end">
+              <button type="button" onClick={onClose}>取消</button>
+              <button className="primaryButton" type="button" onClick={confirm} disabled={loading}>
+                {loading ? <Loader2 size={16} className="spin" /> : <CheckCircle2 size={16} />}
+                确认保存
+              </button>
+            </div>
+          </div>
+        )}
+      </form>
+    </div>
   );
 }
 
@@ -1195,26 +1200,19 @@ function SystemFilters({ filters, setFilters, refresh }: {
   );
 }
 
-function ContextStrip({ organizationId, storeId, organizations, stores, setOrganizationId, setStoreId, onRefresh, loading }: {
-  organizationId: string;
+function ContextStrip({ storeId, stores, setStoreId, loading }: {
   storeId: string;
-  organizations: JsonRecord[];
   stores: JsonRecord[];
-  setOrganizationId: (value: string) => void;
   setStoreId: (value: string) => void;
-  onRefresh: () => void;
   loading: boolean;
 }) {
   return (
     <section className="filterBar">
       <Store size={17} />
-      <select value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
-        {organizations.map((item) => <option key={String(item.id || item.organization_id)} value={String(item.id || item.organization_id)}>{String(item.name || item.id || item.organization_id)}</option>)}
-      </select>
       <select value={storeId} onChange={(event) => setStoreId(event.target.value)}>
         {stores.map((item) => <option key={String(item.id || item.store_id)} value={String(item.id || item.store_id)}>{String(item.name || item.id || item.store_id)}</option>)}
       </select>
-      <button onClick={onRefresh}>{loading ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />}刷新</button>
+      {loading ? <span className="inlineStatus"><Loader2 size={16} className="spin" />读取中</span> : null}
     </section>
   );
 }
@@ -1336,6 +1334,27 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
       <input value={value} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("文件读取失败"));
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      resolve(result.includes(",") ? result.split(",").pop() || "" : result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function parseAttributes(value: string): JsonRecord {
+  try {
+    const parsed = JSON.parse(value || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as JsonRecord : {};
+  } catch {
+    throw new Error("抽取属性 JSON 格式不正确");
+  }
 }
 
 function RecordSummary({ record }: { record: unknown }) {

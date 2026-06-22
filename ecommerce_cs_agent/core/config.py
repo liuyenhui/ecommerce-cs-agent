@@ -20,6 +20,15 @@ class Settings:
     database_url: str | None = None
     object_storage_backend: str = "reference"
     object_storage_root: str = ".object-storage"
+    object_storage_endpoint: str | None = None
+    object_storage_bucket: str | None = None
+    object_storage_region: str = "us-east-1"
+    object_storage_path_style: bool = True
+    object_storage_access_key_id: str | None = None
+    object_storage_secret_access_key: str | None = None
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
 
 
 def load_settings() -> Settings:
@@ -63,6 +72,15 @@ def load_settings() -> Settings:
         database_url=os.environ.get("DATABASE_URL"),
         object_storage_backend=os.environ.get("OBJECT_STORAGE_BACKEND", "reference"),
         object_storage_root=os.environ.get("OBJECT_STORAGE_ROOT", ".object-storage"),
+        object_storage_endpoint=os.environ.get("OBJECT_STORAGE_ENDPOINT"),
+        object_storage_bucket=os.environ.get("OBJECT_STORAGE_BUCKET"),
+        object_storage_region=os.environ.get("OBJECT_STORAGE_REGION", "us-east-1"),
+        object_storage_path_style=os.environ.get("OBJECT_STORAGE_PATH_STYLE", "true").lower() not in {"0", "false", "no"},
+        object_storage_access_key_id=os.environ.get("OBJECT_STORAGE_ACCESS_KEY_ID"),
+        object_storage_secret_access_key=os.environ.get("OBJECT_STORAGE_SECRET_ACCESS_KEY"),
+        llm_api_key=os.environ.get("LLM_API_KEY"),
+        llm_base_url=os.environ.get("LLM_BASE_URL"),
+        llm_model=os.environ.get("LLM_MODEL"),
     )
 
 
