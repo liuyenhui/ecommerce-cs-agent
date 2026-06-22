@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "test": "tsc --noEmit && node --test src/*.test.mjs",
+    "test": "tsc --noEmit && node scripts/assert-ui-regressions.mjs && node --test src/mobile-shell.test.mjs",
     "test:landing": "node --test scripts/landing-page-copy.test.mjs"
   },
   "dependencies": {

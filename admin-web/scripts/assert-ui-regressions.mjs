@@ -1,0 +1,35 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const adminRoot = path.resolve(scriptDir, '..');
+const root = path.resolve(adminRoot, '..');
+const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
+const main = read('admin-web/src/main.tsx');
+const styles = read('admin-web/src/styles.css');
+const packageJson = read('admin-web/package.json');
+const loginPanel = main.slice(main.indexOf('function LoginPanel'), main.indexOf('function CustomerWorkspace'));
+
+const checks = [
+  ['Admin Web regression guard is wired into npm test', packageJson.includes('assert-ui-regressions.mjs')],
+  ['Login auth failures render inline form error', loginPanel.includes('loginError') && loginPanel.includes('role="alert"') && styles.includes('.loginError')],
+  ['Login 401 auth failures use user-facing credential copy', main.includes('message.startsWith("401 ")') && loginPanel.includes('邮箱或密码不正确，请检查后重试。')],
+  ['Login auth failures are not shown through global toast', !loginPanel.includes('setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });')],
+  ['Login fields are empty by default on live builds', loginPanel.includes('React.useState("")') && !loginPanel.includes('admin@example.test') && !loginPanel.includes('system-admin@example.test') && !loginPanel.includes('React.useState("org-001")')],
+  ['Login validates required fields before requesting auth', loginPanel.includes('请填写邮箱、密码和组织 ID') && loginPanel.includes('请填写邮箱和密码') && loginPanel.includes('return;')],
+  ['Login submits trimmed identifiers', loginPanel.includes('email: email.trim()') && loginPanel.includes('organization_id: organizationId.trim()')],
+  ['DataTable cells expose mobile data labels', main.includes('data-label={fieldLabel(field)}') && main.includes('data-label="操作"')],
+  ['Field label map includes organization_id', main.includes('organization_id: "组织 ID"')],
+  ['Status badges render localized status text', main.includes('const statusLabel') && main.includes('title={value}>{statusLabel[value] || value}</span>')],
+  ['EmptyState accepts title, description, and optional action', main.includes('function EmptyState({ title, description, action }: EmptyStateProps)')],
+  ['Mobile table cells render labels before content', styles.includes('td::before') && styles.includes('content: attr(data-label)')]
+];
+
+const failures = checks.filter(([, ok]) => !ok);
+if (failures.length) {
+  console.error('Admin UI regression guard failed:');
+  for (const [name] of failures) console.error(`- ${name}`);
+  process.exit(1);
+}
+console.log(`Admin UI regression guard passed (${checks.length} checks).`);

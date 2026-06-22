@@ -17,6 +17,7 @@ body,
 body {
   margin: 0;
   min-width: 320px;
+  overflow-x: hidden;
 }
 
 button,
@@ -46,6 +47,14 @@ button:hover {
   border-color: #2563eb;
 }
 
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.45);
+  outline-offset: 2px;
+}
+
 button:disabled {
   color: #8b96a5;
   cursor: not-allowed;
@@ -60,6 +69,12 @@ textarea {
   background: #ffffff;
   color: #1f2937;
   padding: 8px 10px;
+}
+
+input[aria-invalid="true"],
+select[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: #dc2626;
 }
 
 textarea {
@@ -626,6 +641,25 @@ pre {
   padding: 22px;
 }
 
+.loginError {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  border-left: 4px solid #dc2626;
+  border-radius: 4px;
+  background: #fef2f2;
+  color: #991b1b;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.loginError svg {
+  margin-top: 1px;
+}
+
 .workGrid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
@@ -655,6 +689,51 @@ pre {
   display: grid;
   gap: 10px;
   padding: 14px;
+}
+
+.contextPanel > h2,
+.userSummary {
+  grid-column: 1 / -1;
+}
+
+.userSummary {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #e5eaf0;
+  border-radius: 4px;
+  background: #f7f9fb;
+  padding: 10px;
+  min-width: 0;
+}
+
+.userSummary h3 {
+  margin-bottom: 0;
+}
+
+.userSummary dl {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.userSummary div {
+  display: grid;
+  grid-template-columns: minmax(64px, 92px) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.userSummary dt {
+  color: #667489;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.userSummary dd {
+  margin: 0;
+  color: #1f2937;
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .filterBar {
@@ -815,6 +894,30 @@ tbody tr:hover {
 .emptyText {
   color: #667489;
   font-size: 13px;
+}
+
+.emptyState {
+  display: grid;
+  gap: 6px;
+  border: 1px dashed #c8d0d9;
+  border-radius: 4px;
+  background: #f8fafc;
+  padding: 14px;
+  color: #667489;
+  font-size: 13px;
+}
+
+.emptyState strong {
+  color: #334155;
+  font-size: 14px;
+}
+
+.emptyState p {
+  line-height: 1.55;
+}
+
+.emptyAction {
+  margin-top: 4px;
 }
 
 .recordSummary,
@@ -1099,8 +1202,24 @@ tbody tr:hover {
   }
 
   td {
+    display: grid;
+    grid-template-columns: minmax(86px, 34%) minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
     max-width: none;
     border-top: 0;
     border-bottom: 1px solid #e5eaf0;
+  }
+
+  td::before {
+    content: attr(data-label);
+    color: #667489;
+    font-size: 12px;
+    font-weight: 720;
+  }
+
+  td:empty::after {
+    content: "-";
+    color: #667489;
   }
 }
