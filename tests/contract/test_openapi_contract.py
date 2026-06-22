@@ -269,6 +269,40 @@ class OpenApiContractTest(unittest.TestCase):
 
         self.assertEqual(failures, [], "\n".join(failures))
 
+    def test_external_reply_decision_contract_uses_platform_store_listing_context(self):
+        schema = self.document["components"]["schemas"]["ReplyDecisionCreateRequest"]
+        required = set(schema["required"])
+        properties = schema["properties"]
+
+        self.assertNotIn("organization_id", required)
+        self.assertIn("platform", required)
+        self.assertIn("external_store_id", required)
+        self.assertIn("platform_account_ref", properties)
+        self.assertIn("listing_ref", properties)
+        self.assertIn("external_product_id", properties)
+        self.assertIn("external_sku_id", properties)
+
+        example = self.document["paths"]["/v1/reply-decisions"]["post"]["requestBody"]["content"]["application/json"]["examples"]["waitingContext"]["value"]
+        self.assertNotIn("organization_id", example)
+        self.assertEqual(example["external_store_id"], "pdd-store-001")
+        self.assertEqual(example["platform_account_ref"], "pdd-account-main")
+
+    def test_customer_admin_login_contract_does_not_use_organization_id(self):
+        schema = self.document["components"]["schemas"]["AdminLoginRequest"]
+
+        self.assertEqual(set(schema["required"]), {"email", "password"})
+        self.assertNotIn("organization_id", schema["properties"])
+
+    def test_product_snapshot_contract_separates_master_product_and_listing_context(self):
+        schema = self.document["components"]["schemas"]["ProductSnapshot"]
+        properties = schema["properties"]
+
+        self.assertIn("product_master_ref", properties)
+        self.assertIn("listing_ref", properties)
+        self.assertIn("external_store_id", properties)
+        self.assertIn("platform_account_ref", properties)
+        self.assertIn("external_sku_id", properties)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -96,7 +96,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _principal: Principal = Depends(agent_principal),
     ) -> dict[str, Any]:
         payload = await request.json()
-        _require_fields(payload, ["request_id", "organization_id", "store_id", "platform", "message", "conversation", "mode"])
+        _require_fields(payload, ["request_id", "platform", "message", "conversation", "mode"])
+        payload = _normalize_reply_decision_payload(payload)
         return decisions.create_reply_decision(payload)
 
     def context_endpoint(context_type: str) -> Callable[..., Any]:
@@ -402,6 +403,26 @@ def _require_fields(payload: dict[str, Any], fields: list[str]) -> None:
     missing = [field for field in fields if field not in payload]
     if missing:
         raise api_error(422, "validation_error", f"missing required fields: {', '.join(missing)}")
+
+
+def _normalize_reply_decision_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    external_store_id = normalized.get("external_store_id") or normalized.get("store_id")
+    if not external_store_id:
+        raise api_error(422, "validation_error", "missing required fields: external_store_id")
+
+    platform_account_ref = normalized.get("platform_account_ref") or normalized.get("platform_account_id")
+    tenant_ref = normalized.get("tenant_id") or normalized.get("organization_id")
+    tenant_id = str(tenant_ref) if tenant_ref is not None else str(platform_account_ref or external_store_id)
+    if tenant_ref is None and not tenant_id.startswith("tenant-"):
+        tenant_id = f"tenant-{tenant_id}"
+
+    normalized.setdefault("tenant_id", tenant_id)
+    # Existing persistence and Admin surfaces still use organization_id internally.
+    normalized.setdefault("organization_id", tenant_id)
+    normalized.setdefault("store_id", str(external_store_id))
+    normalized.setdefault("external_store_id", str(external_store_id))
+    return normalized
 
 
 def _now() -> str:

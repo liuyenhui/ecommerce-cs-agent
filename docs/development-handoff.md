@@ -6,6 +6,9 @@
 
 ### 2026-06-22
 
+- Customer Admin 登录入口收敛为邮箱 + 密码：登录页和 `AdminLoginRequest` 不再展示或接收 `organization_id`；登录成功后通过 `GET /v1/admin/auth/me` 返回的组织 / 店铺列表选择业务上下文。
+- P4 统一门户接入契约收敛：`POST /v1/reply-decisions` 的外部请求以 `platform`、`external_store_id`、`platform_account_ref`、`listing_ref`、`external_product_id`、`external_sku_id` 定位业务上下文；公开接入不再要求集成方理解 `organization_id`，服务端将 API Key / Connector 和店铺引用映射到内部 `tenant` / `store` 边界。
+- 补充商品主数据与销售实例边界：通用商品资料归属 `product_master_ref`，平台/店铺/链接/SKU 售卖上下文归属 `listing_ref`；缺商品、SKU、订单或物流上下文时继续返回 `context_requests[]`，不能让模型猜测。
 - 补充 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 的公网入口排障路径：系统后台域名复用 `frp-system/bpg-frpc` 的 `cs-agent-dev-http` HTTP vhost，需要同时检查 ai-agent 外层 Traefik `frps_vhost` Host rule、K3s frpc `customDomains`、Ingress host 和 TLS SAN。
 
 ### 2026-06-21

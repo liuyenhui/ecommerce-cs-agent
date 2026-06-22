@@ -186,8 +186,12 @@ class DecisionService:
             "message_id": message.get("external_message_id"),
             "external_message_id": message.get("external_message_id"),
             "request_id": request.get("request_id"),
+            "tenant_id": request.get("tenant_id") or request.get("organization_id"),
             "platform": request.get("platform"),
             "store_id": request.get("store_id"),
+            "external_store_id": request.get("external_store_id") or request.get("store_id"),
+            "platform_account_ref": request.get("platform_account_ref"),
+            "listing_ref": request.get("listing_ref"),
             "conversation_id": conversation.get("external_conversation_id"),
             "action": response.get("action"),
             "confidence": response.get("confidence"),
@@ -260,6 +264,19 @@ class DecisionService:
             self._context_request(decision_id, context_type, payload)
             for context_type in missing_context
         ]
+        trace = self._trace(
+            "classify_intent",
+            "classify_intent",
+            inputs_ref=[f"message:{payload.get('message', {}).get('external_message_id', '')}"],
+            outputs_ref=[f"decision:{decision_id}"],
+            rule_hits=risk_flags,
+            matched_knowledge=matched_knowledge,
+            graph=True,
+        )
+        trace["tenant_id"] = payload.get("tenant_id") or payload.get("organization_id")
+        trace["external_store_id"] = payload.get("external_store_id") or payload.get("store_id")
+        trace["platform_account_ref"] = payload.get("platform_account_ref")
+        trace["listing_ref"] = payload.get("listing_ref")
         return {
             "decision_id": decision_id,
             "decision_status": status,
@@ -274,15 +291,7 @@ class DecisionService:
             "risk_flags": risk_flags,
             "missing_context": missing_context,
             "handoff_reason": handoff_reason,
-            "trace": self._trace(
-                "classify_intent",
-                "classify_intent",
-                inputs_ref=[f"message:{payload.get('message', {}).get('external_message_id', '')}"],
-                outputs_ref=[f"decision:{decision_id}"],
-                rule_hits=risk_flags,
-                matched_knowledge=matched_knowledge,
-                graph=True,
-            ),
+            "trace": trace,
         }
 
     def _missing_context(self, payload: dict[str, Any], lowered: str, content: str, *, has_product_knowledge: bool = False) -> list[str]:
@@ -303,10 +312,16 @@ class DecisionService:
         context_request_id = f"ctx-{context_type}-{decision_id[-8:]}"
         conversation = payload.get("conversation", {})
         query = {
-            "store_id": payload.get("store_id"),
+            "platform": payload.get("platform"),
+            "external_store_id": payload.get("external_store_id") or payload.get("store_id"),
+            "platform_account_ref": payload.get("platform_account_ref"),
+            "listing_ref": payload.get("listing_ref"),
+            "external_product_id": payload.get("external_product_id"),
+            "external_sku_id": payload.get("external_sku_id"),
             "buyer_ref": conversation.get("buyer_ref"),
             "conversation_id": conversation.get("external_conversation_id"),
         }
+        query = {key: value for key, value in query.items() if value is not None}
         return {
             "context_request_id": context_request_id,
             "type": context_type,
@@ -319,13 +334,19 @@ class DecisionService:
 
     def _action_request(self, decision_id: str, payload: dict[str, Any], content: str) -> dict[str, Any]:
         action_type = "change_shipping_address" if "地址" in content else "update-note"
+        tenant_id = payload.get("tenant_id") or payload.get("organization_id")
+        store_id = payload.get("external_store_id") or payload.get("store_id")
         return {
             "type": "action_request",
             "action_id": f"action-{decision_id[-8:]}",
             "action_type": action_type,
-            "idempotency_key": f"{payload.get('organization_id')}:{payload.get('store_id')}:{payload.get('request_id')}:{action_type}",
+            "idempotency_key": f"{tenant_id}:{store_id}:{payload.get('request_id')}:{action_type}",
             "payload": {"instruction": content},
-            "target": {"store_id": payload.get("store_id")},
+            "target": {
+                "platform": payload.get("platform"),
+                "external_store_id": store_id,
+                "platform_account_ref": payload.get("platform_account_ref"),
+            },
             "confidence": 0.66,
             "risk_level": "medium",
             "requires_human_confirm": True,
@@ -334,10 +355,13 @@ class DecisionService:
 
     def _same_tenant_store(self, state: DecisionState, payload: dict[str, Any]) -> bool:
         request = state.request
-        return (
-            str(payload.get("organization_id")) == str(request.get("organization_id"))
-            and str(payload.get("store_id")) == str(request.get("store_id"))
-        )
+        payload_tenant = payload.get("tenant_id") or payload.get("organization_id")
+        payload_store = payload.get("external_store_id") or payload.get("store_id")
+        if payload_tenant and str(payload_tenant) not in {str(request.get("tenant_id")), str(request.get("organization_id"))}:
+            return False
+        if payload_store and str(payload_store) not in {str(request.get("external_store_id")), str(request.get("store_id"))}:
+            return False
+        return True
 
     def _trace(
         self,
@@ -435,8 +459,8 @@ def _public(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _request_key(payload: dict[str, Any]) -> tuple[str, str, str]:
     return (
-        str(payload.get("organization_id", "")),
-        str(payload.get("store_id", "")),
+        str(payload.get("tenant_id") or payload.get("organization_id", "")),
+        str(payload.get("external_store_id") or payload.get("store_id", "")),
         str(payload.get("request_id", "")),
     )
 

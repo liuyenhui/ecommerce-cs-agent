@@ -83,7 +83,7 @@ class InMemoryAdminAuthService:
         password = payload.get("password")
         if not _password_matches(email, password, self.settings.admin_initial_email, self.settings.admin_initial_password_hash):
             raise api_error(401, "unauthorized", "invalid admin credentials")
-        organization_id = str(payload.get("organization_id") or "org-001")
+        organization_id = "org-001"
         if organization_id not in self.organizations:
             raise api_error(403, "forbidden", "admin user cannot access organization")
         token = secrets.token_urlsafe(32)
@@ -258,10 +258,9 @@ class PostgresAdminAuthService:
     def login(self, payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
         email = str(payload.get("email", ""))
         password = payload.get("password")
-        organization_id = str(payload.get("organization_id") or "org-001")
         with self._connect(self.settings.database_url) as conn:
             with conn.cursor() as cur:
-                self._bootstrap_initial_admin(cur, organization_id)
+                self._bootstrap_initial_admin(cur, "org-001")
                 cur.execute(
                     """
                     SELECT admin.id, org.id, st.id, admin.email, admin.password_hash,
@@ -274,11 +273,11 @@ class PostgresAdminAuthService:
                      AND membership.status = 'active'
                     LEFT JOIN store st ON st.organization_id = org.id
                     WHERE admin.email = %s
-                      AND org.external_organization_id = %s
                       AND admin.status = 'active'
+                    ORDER BY membership.created_at ASC NULLS LAST, org.created_at ASC NULLS LAST
                     LIMIT 1
                     """,
-                    (email, organization_id),
+                    (email,),
                 )
                 row = cur.fetchone()
                 if not row or not _password_matches(email, password, row[3], row[4]):

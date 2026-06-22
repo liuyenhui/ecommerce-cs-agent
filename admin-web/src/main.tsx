@@ -603,12 +603,11 @@ function TopBar({ workspace, session, onRefresh, onLogout, onToggleNav, navOpen 
 function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLoggedIn: (session: JsonRecord) => void; setToast: (toast: ToastState) => void }) {
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
-  const [organizationId, setOrganizationId] = React.useState("");
   const [loginError, setLoginError] = React.useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = React.useState<Partial<Record<"email" | "password" | "organizationId", boolean>>>({});
+  const [fieldErrors, setFieldErrors] = React.useState<Partial<Record<"email" | "password", boolean>>>({});
   const [loading, setLoading] = React.useState(false);
   const loginErrorId = `${target}-login-error`;
-  const authErrorText = target === "customer" ? "邮箱、密码或组织 ID 不正确，请检查后重试。" : "邮箱或密码不正确，请检查后重试。";
+  const authErrorText = "邮箱或密码不正确，请检查后重试。";
 
   function clearLoginError() {
     if (loginError) setLoginError(null);
@@ -620,21 +619,18 @@ function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLog
     setLoginError(null);
     const nextFieldErrors = {
       email: !email.trim(),
-      password: !password,
-      organizationId: target === "customer" && !organizationId.trim()
+      password: !password
     };
-    if (nextFieldErrors.email || nextFieldErrors.password || nextFieldErrors.organizationId) {
+    if (nextFieldErrors.email || nextFieldErrors.password) {
       setFieldErrors(nextFieldErrors);
-      setLoginError(target === "customer" ? "请填写邮箱、密码和组织 ID" : "请填写邮箱和密码");
+      setLoginError("请填写邮箱和密码");
       return;
     }
     setFieldErrors({});
     setLoading(true);
     try {
       const path = target === "customer" ? "/v1/admin/auth/login" : "/v1/system-admin/auth/login";
-      const body = target === "customer"
-        ? { email: email.trim(), password, organization_id: organizationId.trim() }
-        : { email: email.trim(), password };
+      const body = { email: email.trim(), password };
       await requestJson(path, { method: "POST", body: JSON.stringify(body) });
       const session = await requestJson(target === "customer" ? "/v1/admin/auth/me" : "/v1/system-admin/auth/me");
       onLoggedIn(session);
@@ -680,22 +676,6 @@ function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLog
             aria-describedby={loginError && fieldErrors.password ? loginErrorId : undefined}
           />
         </label>
-        {target === "customer" ? (
-          <label>
-            组织 ID
-            <input
-              value={organizationId}
-              onChange={(event) => {
-                setOrganizationId(event.target.value);
-                clearLoginError();
-              }}
-              autoComplete="off"
-              placeholder="输入当前组织 ID"
-              aria-invalid={Boolean(fieldErrors.organizationId)}
-              aria-describedby={loginError && fieldErrors.organizationId ? loginErrorId : undefined}
-            />
-          </label>
-        ) : null}
         {loginError ? (
           <div className="loginError" id={loginErrorId} role="alert">
             <AlertTriangle size={16} />

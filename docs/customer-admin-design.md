@@ -30,7 +30,7 @@
 
 - 客服 Agent 是独立系统，任何外部客服、ERP、订单、仓储或平台接入系统都应通过标准 HTTP API 单独接入。
 - 客户 Admin 后台属于客服 Agent 自身，不由任何外部系统承载，也不依赖外部系统登录态、组织表、店铺表、用户表、session、token 或 Admin。
-- 外部系统只能作为数据来源或动作执行方，通过 `organization.external_ref`、`store.external_store_id`、`platform_account.external_account_id`、`platform_account.auth_ref` 等通用引用字段建立映射。
+- 外部系统只能作为数据来源或动作执行方，通过 API Key / Connector Token、`store.external_store_id`、`platform_account.external_account_id`、`platform_account.auth_ref`、`listing_ref`、`external_product_id`、`external_sku_id` 等通用引用字段建立映射；公开接入不要求对方传或理解 `organization_id`。
 - 外部系统数据库主键、账号 ID 或登录态不能直接作为客服 Agent 的权限来源；进入 Agent 后必须映射到 Agent 自有 `organization`、`store` 和 Admin 成员权限。
 - ERP 只能作为外部系统的一种实现示例，不能成为默认身份源、默认上游或必需部署组件。
 
@@ -114,7 +114,7 @@
 - Admin 后台不做 Notion 化，应继续采用 IBM / Carbon 式密集、可扫描、低阴影、1px hairline、表格 / 队列 / 配置表单优先的企业操作台规则。
 - Linear 的暗色处理只用于宣传页局部产品预览或截图容器，不把整个 Admin 做成暗色系统。
 - 组件库可以使用 Ant Design，但 Ant Design 是组件能力层，不是视觉风格来源；最终视觉由项目主题 token、自定义 CSS 和上述分工控制。
-- 移动端未登录状态不得渲染后台左侧导航或后台菜单，登录页首屏必须优先展示邮箱、密码、组织 ID 和提交按钮。
+- 移动端未登录状态不得渲染后台左侧导航或后台菜单，登录页首屏必须优先展示邮箱、密码和提交按钮；组织 / 店铺上下文在登录成功后从 `GET /v1/admin/auth/me` 返回的可访问列表中选择。
 - 移动端登录后保留桌面左侧 rail 的信息架构，但通过顶部应用栏的菜单按钮打开抽屉式导航；导航项点击后关闭抽屉，按钮触控高度不小于 44px，长中文标签可截断或换行且不得造成横向溢出。
 - Admin 后台预览仍采用 IBM / Carbon 式密集企业控制台，只作为产品演示截图或轮播内容，不让整个公开页变成后台。
 - 字体使用 PingFang SC / system-ui / Inter / JetBrains Mono 等可用替代字体；不得使用外部品牌授权字体。
@@ -126,7 +126,7 @@
 | 页面 | 核心能力 |
 | --- | --- |
 | 公开宣传页 | 产品介绍、能力摘要、后台产品预览和登录按钮；Hero 下方展示商品信息、AI 自学习、AI 客服回复可控 3 张产品演示轮播；“怎么工作”段落使用短 GIF 或等效动效展示上传商品说明书 → AI 学习 → 模拟问答 → AI 自动回复；不展示租户数据。 |
-| 登录页 | 用户登录、会话续期、退出登录、登录失败提示。 |
+| 登录页 | 用户使用邮箱和密码登录、会话续期、退出登录、登录失败提示；不要求或展示组织 ID。 |
 | 组织 / 店铺选择 | 显示当前用户可访问组织和店铺，切换后刷新所有配置上下文。 |
 | 首页概览 | 展示资料缺口、待审核知识、价格过期、规则未启用、动作能力异常和最近变更。 |
 | 商品资料 | 创建和编辑商品、SKU、属性、适用范围、状态；查看资料体检结果。 |

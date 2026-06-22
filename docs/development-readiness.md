@@ -29,7 +29,7 @@
 
 | 范围 | 第一版必须具备 | 依据 |
 | --- | --- | --- |
-| 外部接入 | 外部客服系统调用 `POST /v1/reply-decisions`，提交买家消息、最小会话、租户、店铺、平台和可选上下文。 | [HTTP API Design](http-api-design.md)、[System Architecture](system-architecture.md) |
+| 外部接入 | 外部客服系统调用 `POST /v1/reply-decisions`，提交买家消息、最小会话、平台、外部店铺、平台账号、listing / 商品 / SKU 引用和可选上下文；内部再映射到 tenant / store。 | [HTTP API Design](http-api-design.md)、[System Architecture](system-architecture.md) |
 | 决策输出 | 返回 `auto_reply`、`candidate`、`handoff`、`context_request` 或 `action_request`，并带 `decision_id`、风险、原因和 trace。 | [HTTP API Design](http-api-design.md) |
 | typed context refill | 支持按 `context_requests[]` 回填商品、订单、物流和规则上下文，并用同一个 `decision_id` 聚合。 | [HTTP API Design](http-api-design.md)、[System Architecture](system-architecture.md) |
 | 动作闭环 | 动作类需求返回结构化 `action_request`；外部系统执行真实业务 API 后调用 `actions/results` 回传结果。 | [HTTP API Design](http-api-design.md)、[Application Technology Architecture](application-technology-architecture.md) |

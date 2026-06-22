@@ -59,9 +59,12 @@ paths:
                 summary: 缺订单和物流上下文
                 value:
                   request_id: external-idempotency-key
-                  organization_id: org-001
                   platform: pdd
-                  store_id: store-001
+                  external_store_id: pdd-store-001
+                  platform_account_ref: pdd-account-main
+                  listing_ref: pdd-listing-001
+                  external_product_id: pdd-product-001
+                  external_sku_id: pdd-sku-001
                   message:
                     external_message_id: msg-001
                     sender_type: buyer
@@ -1854,19 +1857,37 @@ components:
   schemas:
     ReplyDecisionCreateRequest:
       type: object
-      required: [request_id, organization_id, store_id, platform, message, conversation, mode]
+      required: [request_id, platform, external_store_id, message, conversation, mode]
       properties:
         request_id:
           type: string
           description: 外部请求幂等键。
+        tenant_id:
+          type: string
+          description: 内部租户边界；通常由 API Key / Connector Token 映射，外部系统不需要传。
         organization_id:
           type: string
-          description: 租户组织 ID。
+          description: 旧版兼容字段；外部接入不应依赖或公开展示该字段，服务端会映射为内部 tenant。
         store_id:
           type: string
-          description: 店铺 ID。
+          description: 旧版兼容字段；外部接入优先使用 `external_store_id`。
         platform:
           $ref: "#/components/schemas/Platform"
+        external_store_id:
+          type: string
+          description: 外部系统里的店铺或业务单元引用；接入 API 的公开店铺定位字段。
+        platform_account_ref:
+          type: string
+          description: 平台账号或 Connector 引用，用于把请求映射到内部 `platform_account`。
+        listing_ref:
+          type: string
+          description: 某平台、某店铺下的销售实例引用；用于区分同一商品在多个平台或店铺售卖。
+        external_product_id:
+          type: string
+          description: 外部平台商品 ID。缺少完整商品上下文时仅作为补上下文查询条件，不能让 Agent 猜测商品资料。
+        external_sku_id:
+          type: string
+          description: 外部平台 SKU ID。缺少完整 SKU 上下文时仅作为补上下文查询条件。
         message:
           $ref: "#/components/schemas/IncomingMessage"
         conversation:
@@ -2449,9 +2470,6 @@ components:
           type: string
           format: password
           writeOnly: true
-        organization_id:
-          type: string
-          description: 多组织用户可在登录后或登录时选择组织上下文。
 
     AdminAuthResponse:
       type: object
@@ -3496,8 +3514,24 @@ components:
     ProductSnapshot:
       type: object
       properties:
+        product_master_ref:
+          type: string
+          description: 通用商品主数据引用；同一真实商品可被多个平台、店铺和 listing 复用。
+        listing_ref:
+          type: string
+          description: 平台/店铺/销售链接/SKU 维度的销售实例引用。
+        external_store_id:
+          type: string
+          description: 外部店铺引用，和 `platform` 一起定位销售上下文。
+        platform_account_ref:
+          type: string
+          description: 平台账号或 Connector 引用。
         external_product_id:
           type: string
+          description: 外部平台商品 ID。
+        external_sku_id:
+          type: string
+          description: 外部平台 SKU ID。
         title:
           type: string
         sku:

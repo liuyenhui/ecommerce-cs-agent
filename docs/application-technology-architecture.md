@@ -29,6 +29,8 @@
 
 Agent 输出的是 `auto_reply`、`candidate`、`handoff`、`context_request`、`action_request` 等结构化结果。客服问答只有一个主入口；商品、订单、物流、规则和动作执行结果按缺口单独回填。真实发送消息和真实修改订单、备注、地址等动作，仍由外部客服系统执行。
 
+外部接入不要求调用方理解客服 Agent 内部的 `organization` 模型。集成方只传 `platform`、`external_store_id`、`platform_account_ref`、`listing_ref`、商品 / SKU / 订单 / 会话引用等业务上下文；服务端将这些引用映射到内部 `tenant`、`store`、`platform_account`、`listing` 和 `product_master`。统一身份或 OIDC 后续只证明“用户是谁”，不替代各业务系统自己的权限判断。
+
 ## 2. 前台 / 后台 / Agent 服务分层
 
 | 层 | 主要职责 | 第一版形态 |
@@ -80,8 +82,8 @@ PostgreSQL 16+
 
 | 分组 | 代表表 | 职责 |
 | --- | --- | --- |
-| 租户与平台 | `organization`、`store`、`platform_account` | 组织、店铺、平台账号和权限边界。 |
-| 商品资料中心 | `product_profile`、`product_sku_profile`、`product_asset`、`product_asset_markdown`、`product_price_snapshot` | 客户手工维护商品、SKU、说明书、照片、Markdown 审稿稿件和外部价格快照。 |
+| 租户与平台 | `organization` / 内部 `tenant`、`store`、`platform_account` | 客户隔离、店铺、平台账号和权限边界；外部 API 不暴露 organization 概念。 |
+| 商品资料中心 | `product_master` / `product_profile`、`listing` / `store_product`、`product_sku_profile`、`product_asset`、`product_asset_markdown`、`product_price_snapshot` | 通用商品主数据、平台/店铺销售实例、SKU、说明书、照片、Markdown 审稿稿件和外部价格快照。 |
 | 会话与消息 | `conversation`、`message` | 外部会话、消息原文、平台消息 ID 和 raw payload。 |
 | 上下文快照 | `product_snapshot`、`order_snapshot` | 保存请求当时的商品、订单、物流状态，保证决策可回放。 |
 | 决策与候选 | `decision_record`、`agent_suggestion` | 保存 action、confidence、risk、trace、候选回复和模型输出。 |
@@ -114,7 +116,7 @@ PostgreSQL 16+
 | `GET /v1/tasks/{task_id}` | 后续轮询查询异步任务状态。 |
 | Webhook 回调 | 后续异步决策完成、动作执行结果、失败重试通知。 |
 
-公开页面路由不属于外部系统接入协议。外部系统 API 鉴权建议使用 API Key 或 Bearer Token；客户 Admin 登录使用 `agent_admin_session`，系统 Admin 登录使用 `agent_system_admin_session`，两者不能互认。主请求必须带 `request_id`；补上下文和动作结果必须带 `context_request_id` / `action_id` 与 `idempotency_key`，避免外部系统重试导致重复决策、重复回填或重复动作。
+公开页面路由不属于外部系统接入协议。外部系统 API 鉴权建议使用 API Key 或 Bearer Token；客户 Admin 登录使用 `agent_admin_session`，系统 Admin 登录使用 `agent_system_admin_session`，两者不能互认。主请求必须带 `request_id`，并用 `platform`、`external_store_id`、`platform_account_ref`、`listing_ref` 等业务引用定位上下文；补上下文和动作结果必须带 `context_request_id` / `action_id` 与 `idempotency_key`，避免外部系统重试导致重复决策、重复回填或重复动作。
 
 ## 6. AI 架构与模型访问
 

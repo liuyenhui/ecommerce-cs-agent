@@ -77,6 +77,37 @@ def test_postgres_admin_auth_login_bootstraps_user_and_persists_hashed_session()
     assert token not in str(session_insert[1])
 
 
+def test_postgres_admin_auth_login_does_not_filter_by_request_organization_id() -> None:
+    settings = Settings(database_url="postgresql://example")
+    connection = _FakeConnection(
+        fetch_rows=[
+            (
+                "admin-uuid",
+                "org-uuid",
+                "store-uuid",
+                "admin@example.test",
+                "plain:admin-password",
+                "Customer Admin",
+                ["owner"],
+                "org-001",
+                "store-001",
+            )
+        ]
+    )
+    service = PostgresAdminAuthService(settings)
+    service._connect = lambda _url: connection
+
+    response, _token = service.login(
+        {"email": "admin@example.test", "password": "admin-password", "organization_id": "org-other"}
+    )
+
+    login_select = [sql for sql, _params in connection.executed if "SELECT admin.id, org.id, st.id" in sql][0]
+    executed_params = " ".join(str(params) for _sql, params in connection.executed)
+    assert response["active_organization_id"] == "org-001"
+    assert "org.external_organization_id = %s" not in login_select
+    assert "org-other" not in executed_params
+
+
 def test_postgres_admin_auth_require_session_queries_hashed_active_session() -> None:
     settings = Settings(database_url="postgresql://example")
     connection = _FakeConnection(
