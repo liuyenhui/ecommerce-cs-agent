@@ -92,7 +92,7 @@
 | --- | --- | --- |
 | `GET /` | 公开访问 | 展示宣传页、产品能力、后台预览和登录按钮；不查询租户业务数据。 |
 | `GET /login` | 未登录优先 | 展示 Agent 自有登录页；登录成功后跳转 `/admin`。 |
-| `GET /admin` | 需要登录 | 已登录进入后台 shell；未登录重定向 `/login`。 |
+| `GET /admin` | 需要登录 | 已登录进入后台 shell；未登录显示客户登录页，不展示后台侧栏或系统后台入口。 |
 
 登录后落点：
 
@@ -153,7 +153,7 @@
 
 | 分组 | 接口方向 | 说明 |
 | --- | --- | --- |
-| 页面入口 | `GET /`、`GET /login`、`GET /admin` | 宣传页、登录页和受保护后台 shell；`/admin` 未登录必须跳转 `/login`。 |
+| 页面入口 | `GET /`、`GET /login`、`GET /admin` | 宣传页、登录页和受保护后台 shell；`/admin` 未登录必须显示客户登录页且不展示后台导航。 |
 | 登录与会话 | `POST /v1/admin/auth/login`、`POST /v1/admin/auth/logout`、`GET /v1/admin/auth/me` | 登录、退出、读取当前用户、组织、店铺和角色。 |
 | 组织与店铺 | `GET /v1/admin/organizations`、`GET /v1/admin/stores`、`PATCH /v1/admin/stores/{store_id}/settings` | 查看可访问组织/店铺，维护店铺设置。 |
 | 用户与权限 | `GET /v1/admin/users`、`POST /v1/admin/invitations`、`PATCH /v1/admin/users/{user_id}/roles` | 组织管理员维护成员、邀请和角色。 |
