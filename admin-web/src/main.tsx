@@ -370,21 +370,37 @@ function CustomerAdminShell({
   setToast: (toast: ToastState) => void;
   toast: ToastState;
 }) {
+  const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
+  const isAuthenticated = Boolean(customerSession);
+
+  React.useEffect(() => {
+    if (!mobileNavOpen) return undefined;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileNavOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mobileNavOpen]);
+
   return (
-    <main className="appShell">
-      <aside className="rail">
-        <div className="brandMark">
-          <ShieldCheck size={22} />
-          <span>AI 客服客户后台</span>
-        </div>
-        <Navigation
-          workspace="customer"
-          customerTab={customerTab}
-          systemTab="home"
-          setCustomerTab={setCustomerTab}
-          setSystemTab={() => undefined}
-        />
-      </aside>
+    <main className={`appShell ${isAuthenticated ? "isAuthed" : "isGuest"} ${mobileNavOpen ? "navOpen" : ""}`}>
+      {isAuthenticated ? (
+        <aside className="rail">
+          <div className="brandMark">
+            <ShieldCheck size={22} />
+            <span>AI 客服客户后台</span>
+          </div>
+          <Navigation
+            workspace="customer"
+            customerTab={customerTab}
+            systemTab="home"
+            setCustomerTab={setCustomerTab}
+            setSystemTab={() => undefined}
+            onNavigate={() => setMobileNavOpen(false)}
+          />
+        </aside>
+      ) : null}
+      {isAuthenticated ? <button className="navBackdrop" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} /> : null}
 
       <section className="mainPane">
         <TopBar
@@ -392,6 +408,8 @@ function CustomerAdminShell({
           session={customerSession}
           onRefresh={() => refreshSession().then(() => setToast({ tone: "success", text: "会话已刷新" })).catch((error) => setToast({ tone: "error", text: error.message }))}
           onLogout={() => void logout()}
+          onToggleNav={() => setMobileNavOpen((open) => !open)}
+          navOpen={mobileNavOpen}
         />
 
         {customerSession ? (
@@ -415,6 +433,8 @@ function SystemSite() {
   const [systemTab, setSystemTab] = React.useState<SystemTab>("home");
   const [systemSession, setSystemSession] = React.useState<JsonRecord | null>(null);
   const [toast, setToast] = React.useState<ToastState>(null);
+  const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
+  const isAuthenticated = Boolean(systemSession);
 
   async function refreshSession() {
     const me = await requestJson("/v1/system-admin/auth/me");
@@ -435,21 +455,34 @@ function SystemSite() {
     void refreshSession().catch(() => undefined);
   }, []);
 
+  React.useEffect(() => {
+    if (!mobileNavOpen) return undefined;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileNavOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mobileNavOpen]);
+
   return (
-    <main className="appShell">
-      <aside className="rail">
-        <div className="brandMark">
-          <ShieldCheck size={22} />
-          <span>Ecommerce CS System Admin</span>
-        </div>
-        <Navigation
-          workspace="system"
-          customerTab="overview"
-          systemTab={systemTab}
-          setCustomerTab={() => undefined}
-          setSystemTab={setSystemTab}
-        />
-      </aside>
+    <main className={`appShell ${isAuthenticated ? "isAuthed" : "isGuest"} ${mobileNavOpen ? "navOpen" : ""}`}>
+      {isAuthenticated ? (
+        <aside className="rail">
+          <div className="brandMark">
+            <ShieldCheck size={22} />
+            <span>Ecommerce CS System Admin</span>
+          </div>
+          <Navigation
+            workspace="system"
+            customerTab="overview"
+            systemTab={systemTab}
+            setCustomerTab={() => undefined}
+            setSystemTab={setSystemTab}
+            onNavigate={() => setMobileNavOpen(false)}
+          />
+        </aside>
+      ) : null}
+      {isAuthenticated ? <button className="navBackdrop" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} /> : null}
 
       <section className="mainPane">
         <TopBar
@@ -457,6 +490,8 @@ function SystemSite() {
           session={systemSession}
           onRefresh={() => refreshSession().then(() => setToast({ tone: "success", text: "会话已刷新" })).catch((error) => setToast({ tone: "error", text: error.message }))}
           onLogout={() => void logout()}
+          onToggleNav={() => setMobileNavOpen((open) => !open)}
+          navOpen={mobileNavOpen}
         />
 
         {systemSession ? (
@@ -486,14 +521,18 @@ function Navigation(props: {
   systemTab: SystemTab;
   setCustomerTab: (tab: CustomerTab) => void;
   setSystemTab: (tab: SystemTab) => void;
+  onNavigate?: () => void;
 }) {
   if (props.workspace === "customer") {
     return (
       <nav className="navList" aria-label="客户后台导航">
         <span className="navGroup">客户运营</span>
         {customerTabs.map((tab) => (
-          <button key={tab.key} className={props.customerTab === tab.key ? "active" : ""} onClick={() => props.setCustomerTab(tab.key)}>
-            {tab.icon}{tab.label}
+          <button key={tab.key} className={props.customerTab === tab.key ? "active" : ""} onClick={() => {
+            props.setCustomerTab(tab.key);
+            props.onNavigate?.();
+          }}>
+            {tab.icon}<span>{tab.label}</span>
           </button>
         ))}
       </nav>
@@ -507,8 +546,11 @@ function Navigation(props: {
         <React.Fragment key={group}>
           <span className="navGroup">{group}</span>
           {systemTabs.filter((tab) => tab.group === group).map((tab) => (
-            <button key={tab.key} className={props.systemTab === tab.key ? "active" : ""} onClick={() => props.setSystemTab(tab.key)}>
-              {tab.icon}{tab.label}
+            <button key={tab.key} className={props.systemTab === tab.key ? "active" : ""} onClick={() => {
+              props.setSystemTab(tab.key);
+              props.onNavigate?.();
+            }}>
+              {tab.icon}<span>{tab.label}</span>
             </button>
           ))}
         </React.Fragment>
@@ -517,31 +559,43 @@ function Navigation(props: {
   );
 }
 
-function TopBar({ workspace, session, onRefresh, onLogout }: { workspace: Workspace; session: JsonRecord | null; onRefresh: () => void; onLogout: () => void }) {
+function TopBar({ workspace, session, onRefresh, onLogout, onToggleNav, navOpen }: {
+  workspace: Workspace;
+  session: JsonRecord | null;
+  onRefresh: () => void;
+  onLogout: () => void;
+  onToggleNav: () => void;
+  navOpen: boolean;
+}) {
   const user = readRecord(session, "user") || {};
   const userBadge = formatUserBadge(workspace, user);
   const title = workspace === "customer" ? "客户资料与知识运营" : "平台运维与发布治理";
   const subtitle = workspace === "customer" ? "组织、店铺、商品资料、知识审核和审计" : "租户开通、决策追踪、任务、健康和安全审计";
   return (
     <header className="topBar">
-      <div>
-        <p className="eyebrow">{workspace === "customer" ? "CUSTOMER ADMIN" : "SYSTEM ADMIN"}</p>
-        <h1>{title}</h1>
-        <p>{subtitle}</p>
-      </div>
-      <div className="topActions">
-        <button className="iconButton" onClick={onRefresh} title="刷新">
-          <RefreshCw size={16} />刷新
-        </button>
+      <div className="topTitle">
         {session ? (
-          <>
+          <button className="mobileNavButton" type="button" onClick={onToggleNav} aria-label={navOpen ? "关闭后台导航" : "打开后台导航"} aria-expanded={navOpen}>
+            <ListFilter size={17} />
+          </button>
+        ) : null}
+        <div>
+          <p className="eyebrow">{workspace === "customer" ? "CUSTOMER ADMIN" : "SYSTEM ADMIN"}</p>
+          <h1>{title}</h1>
+          <p>{subtitle}</p>
+        </div>
+      </div>
+      {session ? (
+        <div className="topActions">
+          <button className="iconButton" onClick={onRefresh} title="刷新">
+            <RefreshCw size={16} />刷新
+          </button>
             <span className="userBadge">{userBadge}</span>
             <button className="iconButton" onClick={onLogout} title="退出登录">
               <LogOut size={16} />退出
             </button>
-          </>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
     </header>
   );
 }
