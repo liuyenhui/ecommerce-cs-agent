@@ -232,6 +232,282 @@ pre {
   color: #ffffff;
 }
 
+.publicShell {
+  min-height: 100vh;
+  background: #f7f7f4;
+  color: #151515;
+}
+
+.publicHeader {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  border-bottom: 1px solid #dfded9;
+}
+
+.publicBrand,
+.publicLoginLink {
+  border-color: transparent;
+  background: transparent;
+  color: #151515;
+}
+
+.publicBrand {
+  padding-inline: 0;
+  font-weight: 760;
+}
+
+.publicLoginLink {
+  border-color: #151515;
+  padding-inline: 15px;
+}
+
+.landingHero {
+  min-height: min(690px, calc(100vh - 72px));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 500px);
+  gap: 56px;
+  align-items: center;
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 52px 0 44px;
+}
+
+.heroCopy {
+  display: grid;
+  gap: 22px;
+}
+
+.publicEyebrow {
+  color: #525252;
+  font-size: 12px;
+  font-weight: 790;
+}
+
+.heroCopy h1,
+.loginIntro h1 {
+  max-width: 820px;
+  font-size: 56px;
+  line-height: 1.04;
+  font-weight: 820;
+}
+
+.heroCopy p,
+.loginIntro p,
+.trustBand p,
+.capabilityCard p {
+  color: #4b4b4b;
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.heroActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.publicPrimaryButton,
+.publicSecondaryButton {
+  min-height: 44px;
+  border-radius: 5px;
+  padding: 10px 16px;
+}
+
+.publicPrimaryButton {
+  border-color: #151515;
+  background: #151515;
+  color: #ffffff;
+}
+
+.publicSecondaryButton {
+  border-color: #b8b6ae;
+  background: #ffffff;
+  color: #151515;
+}
+
+.productPreview {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+  border: 1px solid #232323;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 16px;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.11);
+}
+
+.previewHeader {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+  border-bottom: 1px solid #e8e6df;
+  padding-bottom: 12px;
+}
+
+.previewHeader strong {
+  overflow-wrap: anywhere;
+}
+
+.previewHeader span,
+.previewGrid span {
+  color: #6a6a6a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.previewGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.previewGrid div {
+  min-width: 0;
+  min-height: 82px;
+  display: grid;
+  align-content: center;
+  gap: 7px;
+  border: 1px solid #e8e6df;
+  border-radius: 6px;
+  padding: 11px;
+}
+
+.previewGrid strong {
+  font-size: 26px;
+}
+
+.previewList {
+  display: grid;
+  gap: 8px;
+}
+
+.previewList p {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border-top: 1px solid #eeeeea;
+  padding-top: 9px;
+  color: #333333;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.publicBand,
+.trustBand {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 54px 0;
+  border-top: 1px solid #dfded9;
+}
+
+.publicSectionHeader,
+.trustBand > div:first-child {
+  max-width: 760px;
+  display: grid;
+  gap: 10px;
+}
+
+.publicSectionHeader h2,
+.trustBand h2 {
+  font-size: 34px;
+  line-height: 1.15;
+}
+
+.capabilityGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 26px;
+}
+
+.capabilityCard {
+  min-height: 214px;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  border: 1px solid #dfded9;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 17px;
+}
+
+.capabilityCard > span {
+  width: 36px;
+  height: 36px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid #dad8d0;
+  border-radius: 6px;
+  background: #f7f7f4;
+}
+
+.capabilityCard h3 {
+  margin: 0;
+}
+
+.capabilityCard p {
+  font-size: 14px;
+}
+
+.trustBand {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(360px, 1fr);
+  gap: 32px;
+  align-items: start;
+}
+
+.trustStats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.loginPage {
+  background: #f4f6f8;
+}
+
+.customerLoginLayout {
+  min-height: calc(100vh - 72px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 440px);
+  gap: 44px;
+  align-items: center;
+  width: min(980px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 44px 0;
+}
+
+.loginIntro {
+  display: grid;
+  gap: 16px;
+}
+
+.customerLoginLayout .loginSurface {
+  min-height: auto;
+  place-items: stretch;
+}
+
+.customerLoginLayout .loginPanel {
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.09);
+}
+
+.authCheck {
+  min-height: calc(100vh - 72px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #525252;
+}
+
 .loginSurface {
   min-height: calc(100vh - 126px);
   display: grid;
@@ -537,6 +813,16 @@ tbody tr:hover {
     position: static;
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
+
+  .capabilityGrid,
+  .trustStats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .landingHero,
+  .trustBand {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 900px) {
@@ -571,6 +857,15 @@ tbody tr:hover {
   .sectionActions {
     justify-content: flex-start;
   }
+
+  .heroCopy h1,
+  .loginIntro h1 {
+    font-size: 42px;
+  }
+
+  .customerLoginLayout {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 560px) {
@@ -581,6 +876,64 @@ tbody tr:hover {
   .workspaceSwitch,
   .navList {
     grid-template-columns: 1fr;
+  }
+
+  .publicHeader,
+  .landingHero,
+  .publicBand,
+  .trustBand,
+  .customerLoginLayout {
+    width: min(100% - 28px, 1180px);
+  }
+
+  .publicHeader {
+    min-height: 62px;
+  }
+
+  .landingHero {
+    min-height: auto;
+    gap: 24px;
+    padding: 30px 0 26px;
+  }
+
+  .heroCopy {
+    gap: 16px;
+  }
+
+  .heroCopy h1,
+  .loginIntro h1 {
+    font-size: 34px;
+  }
+
+  .heroCopy p,
+  .loginIntro p,
+  .trustBand p {
+    font-size: 15px;
+  }
+
+  .heroActions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .productPreview {
+    padding: 13px;
+  }
+
+  .previewGrid,
+  .capabilityGrid,
+  .trustStats {
+    grid-template-columns: 1fr;
+  }
+
+  .publicBand,
+  .trustBand {
+    padding: 34px 0;
+  }
+
+  .publicSectionHeader h2,
+  .trustBand h2 {
+    font-size: 26px;
   }
 
   table {

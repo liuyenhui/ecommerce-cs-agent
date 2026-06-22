@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import {
   Activity,
   AlertTriangle,
+  ArrowRight,
+  Bot,
   Boxes,
   CheckCircle2,
   ClipboardList,
@@ -22,10 +24,16 @@ import {
   Store,
   Users
 } from "lucide-react";
+import {
+  authMePathForWorkspace,
+  detectWorkspaceFromLocation,
+  resolveAdminRoute,
+  shouldRefreshAuth,
+  type Workspace
+} from "./routing";
 import "./styles.css";
 
 type JsonRecord = Record<string, unknown>;
-type Workspace = "customer" | "system";
 type CustomerTab = "overview" | "products" | "knowledge" | "audit";
 type SystemTab = "home" | "tenants" | "traces" | "tasks" | "audit" | "health";
 type ToastState = { tone: "success" | "error" | "info"; text: string } | null;
@@ -53,15 +61,6 @@ const systemTabs: Array<{ key: SystemTab; label: string; group: string; icon: Re
   { key: "audit", label: "安全审计", group: "发布安全", icon: <ShieldCheck size={17} /> },
   { key: "health", label: "系统健康", group: "发布安全", icon: <HeartPulse size={17} /> }
 ];
-
-const CUSTOMER_ADMIN_HOST = "admin.ecommerce-cs-agent-dev.fcihome.com";
-const SYSTEM_ADMIN_HOST = "system-admin.ecommerce-cs-agent-dev.fcihome.com";
-
-export function detectWorkspaceFromLocation(location: Pick<Location, "hostname" | "pathname">): Workspace {
-  if (location.hostname === SYSTEM_ADMIN_HOST || location.hostname.startsWith("system-admin.")) return "system";
-  if (location.hostname === CUSTOMER_ADMIN_HOST || location.hostname.startsWith("admin.")) return "customer";
-  return location.pathname.startsWith("/system-admin") ? "system" : "customer";
-}
 
 const statusTone: Record<string, "ok" | "warn" | "bad" | "info"> = {
   active: "ok",
@@ -101,23 +100,32 @@ async function requestJson<T = JsonRecord>(path: string, options: RequestInit = 
 
 function App() {
   const [workspace] = React.useState<Workspace>(() => detectWorkspaceFromLocation(window.location));
+  const [path, setPath] = React.useState(() => window.location.pathname || "/");
   const [customerTab, setCustomerTab] = React.useState<CustomerTab>("overview");
   const [systemTab, setSystemTab] = React.useState<SystemTab>("home");
   const [customerSession, setCustomerSession] = React.useState<JsonRecord | null>(null);
   const [systemSession, setSystemSession] = React.useState<JsonRecord | null>(null);
+  const [authChecked, setAuthChecked] = React.useState(false);
   const [toast, setToast] = React.useState<ToastState>(null);
 
   const customerAuthed = Boolean(customerSession);
   const systemAuthed = Boolean(systemSession);
+  const activeAuthed = workspace === "customer" ? customerAuthed : systemAuthed;
+  const route = resolveAdminRoute({ workspace, pathname: path, authed: activeAuthed });
+  const checkingProtectedRoute = shouldRefreshAuth(workspace, path) && !authChecked;
+
+  function navigate(nextPath: string, replace = false) {
+    if (window.location.pathname !== nextPath) {
+      const method = replace ? "replaceState" : "pushState";
+      window.history[method](null, "", nextPath);
+    }
+    setPath(nextPath);
+  }
 
   async function refreshSession(target: Workspace) {
-    if (target === "customer") {
-      const me = await requestJson("/v1/admin/auth/me");
-      setCustomerSession(me);
-      return;
-    }
-    const me = await requestJson("/v1/system-admin/auth/me");
-    setSystemSession(me);
+    const me = await requestJson(authMePathForWorkspace(target));
+    if (target === "customer") setCustomerSession(me);
+    if (target === "system") setSystemSession(me);
   }
 
   async function logout(target: Workspace) {
@@ -132,8 +140,75 @@ function App() {
   }
 
   React.useEffect(() => {
-    void refreshSession(workspace).catch(() => undefined);
-  }, [workspace]);
+    const handlePopState = () => setPath(window.location.pathname || "/");
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  React.useEffect(() => {
+    if (!shouldRefreshAuth(workspace, path)) {
+      setAuthChecked(true);
+      return;
+    }
+
+    let cancelled = false;
+    setAuthChecked(false);
+    void refreshSession(workspace)
+      .catch(() => {
+        if (workspace === "customer") setCustomerSession(null);
+        if (workspace === "system") setSystemSession(null);
+      })
+      .finally(() => {
+        if (!cancelled) setAuthChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspace, path]);
+
+  React.useEffect(() => {
+    if (!checkingProtectedRoute && route.redirectTo) navigate(route.redirectTo, true);
+  }, [checkingProtectedRoute, route.redirectTo]);
+
+  if (workspace === "customer") {
+    if (checkingProtectedRoute) {
+      return (
+        <main className="publicShell">
+          <PublicHeader onNavigate={navigate} />
+          <section className="authCheck">
+            <Loader2 size={18} className="spin" />
+            <span>正在校验客户后台会话</span>
+          </section>
+        </main>
+      );
+    }
+
+    if (route.surface === "customer-landing") {
+      return (
+        <>
+          <CustomerLanding onNavigate={navigate} />
+          {toast ? <Toast toast={toast} onClose={() => setToast(null)} /> : null}
+        </>
+      );
+    }
+
+    if (route.surface === "customer-login") {
+      return (
+        <>
+          <CustomerLoginPage
+            onNavigate={navigate}
+            onLoggedIn={(session) => {
+              setCustomerSession(session);
+              setAuthChecked(true);
+              navigate("/admin");
+            }}
+            setToast={setToast}
+          />
+          {toast ? <Toast toast={toast} onClose={() => setToast(null)} /> : null}
+        </>
+      );
+    }
+  }
 
   return (
     <main className="appShell">
@@ -170,7 +245,7 @@ function App() {
           ) : (
             <LoginPanel key="customer-login" target="customer" onLoggedIn={(session) => setCustomerSession(session)} setToast={setToast} />
           )
-        ) : systemAuthed ? (
+        ) : route.surface === "system-admin" ? (
           <SystemWorkspace
             session={systemSession!}
             activeTab={systemTab}
@@ -184,6 +259,126 @@ function App() {
 
       {toast ? <Toast toast={toast} onClose={() => setToast(null)} /> : null}
     </main>
+  );
+}
+
+function CustomerLanding({ onNavigate }: { onNavigate: (path: string) => void }) {
+  return (
+    <main className="publicShell">
+      <PublicHeader onNavigate={onNavigate} />
+      <section className="landingHero">
+        <div className="heroCopy">
+          <p className="publicEyebrow">CUSTOMER SERVICE AI AGENT</p>
+          <h1>把商品资料、审核知识和回复规则放进一个客户后台</h1>
+          <p>
+            Ecommerce CS Agent 为外部客服系统提供独立的 AI 回复决策服务。客户团队在这里维护长期资料、规则和动作能力，前台系统继续负责接待和真实发送。
+          </p>
+          <div className="heroActions">
+            <button className="publicPrimaryButton" onClick={() => onNavigate("/login")}>
+              进入客户登录 <ArrowRight size={17} />
+            </button>
+            <button className="publicSecondaryButton" onClick={() => document.getElementById("capabilities")?.scrollIntoView({ behavior: "smooth" })}>
+              查看能力模块
+            </button>
+          </div>
+        </div>
+        <div className="productPreview" aria-label="客户后台产品预览">
+          <div className="previewHeader">
+            <span>客户后台概览</span>
+            <strong>资料就绪度 84%</strong>
+          </div>
+          <div className="previewGrid">
+            <div>
+              <span>待审核知识</span>
+              <strong>18</strong>
+            </div>
+            <div>
+              <span>价格过期</span>
+              <strong>6</strong>
+            </div>
+            <div>
+              <span>规则版本</span>
+              <strong>v12</strong>
+            </div>
+          </div>
+          <div className="previewList">
+            <p><CheckCircle2 size={15} /> 商品说明书已生成 Markdown 审稿稿件</p>
+            <p><ClipboardList size={15} /> 高风险动作需要人工确认</p>
+            <p><Search size={15} /> 每条回复决策可追踪到知识和规则来源</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="publicBand" id="capabilities">
+        <div className="publicSectionHeader">
+          <p className="publicEyebrow">OPERATING LOOP</p>
+          <h2>客户团队真正需要维护的四类能力</h2>
+        </div>
+        <div className="capabilityGrid">
+          <CapabilityCard icon={<Boxes size={20} />} title="商品资料中心" text="维护商品、SKU、说明书、图片、视频和价格快照，让 Agent 有稳定的业务上下文。" />
+          <CapabilityCard icon={<FileText size={20} />} title="知识审核队列" text="从资料和人工反馈中沉淀候选知识，审核、脱敏、改写后才进入可召回知识库。" />
+          <CapabilityCard icon={<ListFilter size={20} />} title="规则与风险边界" text="配置店铺规则、自动回复边界、转人工条件和版本生效范围。" />
+          <CapabilityCard icon={<Bot size={20} />} title="动作能力配置" text="定义可触发动作、参数 schema、风险级别和外部系统回调方式。" />
+        </div>
+      </section>
+
+      <section className="trustBand">
+        <div>
+          <p className="publicEyebrow">TRUST BOUNDARY</p>
+          <h2>独立系统，清晰边界</h2>
+          <p>客户后台只服务本租户资料和规则维护，不读取平台运维域，也不依赖 ERP 或电商平台登录态。</p>
+        </div>
+        <div className="trustStats">
+          <Metric label="公开页租户数据" value="0" tone="ok" />
+          <Metric label="客户鉴权接口" value="/v1/admin/auth/me" tone="info" />
+          <Metric label="跨站入口" value="无" tone="warn" />
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function PublicHeader({ onNavigate }: { onNavigate: (path: string) => void }) {
+  return (
+    <header className="publicHeader">
+      <button className="publicBrand" onClick={() => onNavigate("/")}>
+        <ShieldCheck size={20} />
+        <span>Ecommerce CS Agent</span>
+      </button>
+      <button className="publicLoginLink" onClick={() => onNavigate("/login")}>
+        客户登录
+      </button>
+    </header>
+  );
+}
+
+function CustomerLoginPage({ onNavigate, onLoggedIn, setToast }: {
+  onNavigate: (path: string) => void;
+  onLoggedIn: (session: JsonRecord) => void;
+  setToast: (toast: ToastState) => void;
+}) {
+  return (
+    <main className="publicShell loginPage">
+      <PublicHeader onNavigate={onNavigate} />
+      <section className="customerLoginLayout">
+        <div className="loginIntro">
+          <p className="publicEyebrow">CUSTOMER LOGIN</p>
+          <h1>登录客户后台</h1>
+          <p>继续维护组织、店铺、商品资料、知识审核、回复规则、动作能力和客户侧审计。</p>
+        </div>
+        <LoginPanel key="customer-login" target="customer" onLoggedIn={onLoggedIn} setToast={setToast} />
+      </section>
+    </main>
+  );
+}
+
+function CapabilityCard({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) {
+  return (
+    <article className="capabilityCard">
+      <span>{icon}</span>
+      <h3>{title}</h3>
+      <p>{text}</p>
+    </article>
   );
 }
 
