@@ -54,7 +54,42 @@
 | System Admin Web | `system-admin.ecommerce-cs-agent-dev.fcihome.com` | DNS -> `47.113.204.168`，HTTPS 可访问，`/health` 返回 `200 ok`；只承载系统后台登录页和系统后台 |
 | System Admin Web alias | `ops-admin.ecommerce-cs-agent-dev.fcihome.com` | 可选别名；只有在 DNS / 证书策略需要时启用 |
 
-FRP 继续复用 K3s 侧 `frp-system/bpg-frpc` 的 `cs-agent-dev-http` proxy，不新增 frpc，也不配置 `type=https`。外层 ai-agent Traefik / frps 已追加 API / Customer Admin / System Admin Host 并重启生效；公开 TLS 证书 SAN 已包含 API/Admin/root/System Admin dev 域名，HTTPS 校验通过。浏览器运行时验证显示 Customer Admin host 只请求 `/v1/admin/auth/me` 且不展示系统后台入口，System Admin host 只请求 `/v1/system-admin/auth/me` 且不复用客户登录页。
+FRP 继续复用 K3s 侧 `frp-system/bpg-frpc` 的 `cs-agent-dev-http` proxy，不新增 frpc，也不配置 `type=https`。外层 ai-agent Traefik / frps 已追加 API / Customer Admin / System Admin Host 并重启生效；公开 TLS 证书 SAN 已包含 API/Admin/root/System Admin dev 域名，HTTPS 校验通过。浏览器运行时验证显示 Customer Admin host 只请求 `/v1/admin/auth/me` 且不展示系统后台入口，System Admin host 只请求 `/v1/system-admin/auth/me` 且不复用客户登录页。cert-manager HTTP-01 如果出现公网 `404`，不要只查 K8s Ingress/TLS，还要同步检查外层 ai-agent Traefik `frps_vhost` Host rule 和 K3s `bpg-frpc` customDomains。
+
+## FRP / FRPC 公网入口
+
+`ecommerce-cs-agent-dev` 的公网入口由 ai-agent 外层 Traefik/FRPS 和 K3s 内部 frpc 共同组成：
+
+| 层级 | 配置 |
+| --- | --- |
+| 外层入口 | `ai-agent`，公网 IP `47.113.204.168` |
+| 外层 Traefik | Docker 容器 `erp_ai_agent_traefik`，负责公网 HTTPS 终止 |
+| 外层 FRPS | Docker 容器 `erp_ai_agent_frps`，HTTP vhost 端口 `8081` |
+| 外层配置来源 | ai-agent：`/root/open_erp_agent/deploy/ai-agent/docker-compose.yaml` |
+| 本地参考路径 | `/Users/huiliu/Documents/software/open_erp_agent/deploy/ai-agent/docker-compose.yaml` |
+| K3s frpc | namespace `frp-system`，现有 `bpg-frpc` |
+| FRP proxy | `cs-agent-dev-http` |
+| 类型 | HTTP vhost；不要新增 frpc，不要配置 `type=https` |
+
+`cs-agent-dev-http` 应注册的 ecommerce dev `customDomains`：
+
+```text
+cs-agent-dev.fcihome.com
+api.ecommerce-cs-agent-dev.fcihome.com
+admin.ecommerce-cs-agent-dev.fcihome.com
+system-admin.ecommerce-cs-agent-dev.fcihome.com
+```
+
+外层 ai-agent Traefik 的 `frps_vhost` router 也必须包含这些 Host，并转发到 `erp_ai_agent_frps` 的 HTTP vhost 端口 `8081`。公网 HTTPS 由 ai-agent Traefik 终止，K3s 侧只需要注册 HTTP vhost；不要为这些域名额外注册 frpc `type=https`。
+
+验证命令只记录结构，不输出密钥：
+
+```bash
+ssh ai-agent 'docker inspect erp_ai_agent_frps --format "{{json .Config.Labels}}"'
+ssh ai-agent 'docker logs erp_ai_agent_frps --tail=300 2>&1 | grep -E "cs-agent-dev-http|system-admin.ecommerce-cs-agent-dev.fcihome.com"'
+KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev get ingress,certificate,challenge,order
+curl -fsS https://system-admin.ecommerce-cs-agent-dev.fcihome.com/health
+```
 
 ## PostgreSQL
 

@@ -4,6 +4,10 @@
 
 ## 最近文档更新
 
+### 2026-06-22
+
+- 补充 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 的公网入口排障路径：系统后台域名复用 `frp-system/bpg-frpc` 的 `cs-agent-dev-http` HTTP vhost，需要同时检查 ai-agent 外层 Traefik `frps_vhost` Host rule、K3s frpc `customDomains`、Ingress host 和 TLS SAN。
+
 ### 2026-06-21
 
 - GitHub Actions 发布、部署、PR Helm 检查和 CodeQL 失败通知升级到 Node 24 运行时对应的 action 版本，不再依赖触发 Node.js 20 deprecation warning 的旧 action 主版本。
