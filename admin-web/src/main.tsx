@@ -35,6 +35,7 @@ type CustomerTab = "overview" | "products" | "knowledge" | "audit";
 type SystemTab = "home" | "tenants" | "traces" | "tasks" | "audit" | "health";
 type ToastState = { tone: "success" | "error" | "info"; text: string } | null;
 type SystemFiltersState = { organization_id: string; store_id: string; status: string; trace_id: string };
+type EmptyStateProps = { title?: string; description?: string; action?: React.ReactNode };
 
 type Page<T = JsonRecord> = {
   items?: T[];
@@ -80,6 +81,41 @@ const statusTone: Record<string, "ok" | "warn" | "bad" | "info"> = {
   blocked: "bad",
   error: "bad",
   frozen: "bad"
+};
+
+const statusLabel: Record<string, string> = {
+  active: "启用",
+  healthy: "健康",
+  ok: "正常",
+  completed: "已完成",
+  accepted: "已受理",
+  pending: "待处理",
+  waiting_context: "等待补充上下文",
+  failed: "失败",
+  blocked: "阻断",
+  error: "异常",
+  frozen: "冻结"
+};
+
+const fieldLabels: Record<string, string> = {
+  id: "ID",
+  name: "名称",
+  organization_id: "组织 ID",
+  store_id: "店铺 ID",
+  status: "状态",
+  reason: "原因",
+  platform: "平台",
+  created_at: "创建时间",
+  updated_at: "更新时间",
+  decision_id: "决策 ID",
+  risk_level: "风险等级",
+  task_id: "任务 ID",
+  task_type: "任务类型",
+  retryable: "可重试",
+  audit_log_id: "审计 ID",
+  action: "动作",
+  object_type: "对象类型",
+  message: "消息"
 };
 
 const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -711,8 +747,8 @@ function CustomerOverview({ session, data, setActiveTab }: { session: JsonRecord
         <Metric label="审计记录" value={String(arrayFrom(data.audit).length)} tone="warn" />
       </div>
       <div className="twoColumns">
-        <ListPanel title="组织" rows={arrayFrom(session.organizations)} fields={["id", "name", "status"]} />
-        <ListPanel title="店铺" rows={arrayFrom(session.stores)} fields={["id", "platform", "status"]} />
+        <ListPanel title="组织" rows={arrayFrom(session.organizations)} fields={["id", "name", "status"]} emptyState={{ title: "暂无可访问组织", description: "当前账号还没有可访问组织；请确认租户授权或联系系统管理员开通权限。" }} />
+        <ListPanel title="店铺" rows={arrayFrom(session.stores)} fields={["id", "platform", "status"]} emptyState={{ title: "暂无可访问店铺", description: "当前账号还没有可访问店铺；选择其他组织或完成店铺授权后会显示在这里。" }} />
       </div>
     </>
   );
@@ -975,8 +1011,8 @@ function SystemHome({ data, setActiveTab }: { data: Record<string, unknown>; set
         <Metric label="待处理任务" value={String(arrayFrom(data.tasks).length)} tone="bad" />
       </div>
       <div className="twoColumns">
-        <ListPanel title="上线阻断队列" rows={arrayFrom(data.readiness)} fields={["organization_id", "store_id", "status", "reason"]} />
-        <ListPanel title="最近消息决策" rows={arrayFrom(data.traces)} fields={["decision_id", "status", "risk_level", "created_at"]} />
+        <ListPanel title="上线阻断队列" rows={arrayFrom(data.readiness)} fields={["organization_id", "store_id", "status", "reason"]} emptyState={{ title: "未发现上线阻断", description: "当前筛选范围内没有阻断项；如需排查特定租户，请填写组织 ID 或店铺 ID 后查询。" }} />
+        <ListPanel title="最近消息决策" rows={arrayFrom(data.traces)} fields={["decision_id", "status", "risk_level", "created_at"]} emptyState={{ title: "暂无消息决策", description: "当前筛选范围内还没有决策记录；有新消息进入决策流程后会显示在这里。" }} />
       </div>
     </>
   );
@@ -1003,7 +1039,7 @@ function TraceTable({ rows, filters, setSelected }: { rows: JsonRecord[]; filter
   return (
     <>
       <SectionHeader label="TRACE" title="决策追踪" />
-      <DataTable title="消息决策" rows={filtered} fields={["decision_id", "organization_id", "store_id", "status", "risk_level", "created_at"]} onSelect={setSelected} />
+      <DataTable title="消息决策" rows={filtered} fields={["decision_id", "organization_id", "store_id", "status", "risk_level", "created_at"]} onSelect={setSelected} emptyState={{ title: filters.trace_id ? "未找到匹配决策" : "暂无消息决策", description: filters.trace_id ? "当前 Decision ID 没有匹配记录；请检查 ID 是否完整，或清空筛选后重新查询。" : "填写组织 ID、店铺 ID 或 Decision ID 后查询决策追踪记录。" }} />
     </>
   );
 }
@@ -1170,12 +1206,13 @@ function Metric({ label, value, tone }: { label: string; value: string; tone: "o
   );
 }
 
-function DataTable({ title, rows, fields, onSelect, action }: {
+function DataTable({ title, rows, fields, onSelect, action, emptyState }: {
   title: string;
   rows: JsonRecord[];
   fields: string[];
   onSelect?: (record: JsonRecord) => void;
   action?: (record: JsonRecord) => React.ReactNode;
+  emptyState?: EmptyStateProps;
 }) {
   return (
     <section className="tablePanel">
@@ -1184,19 +1221,19 @@ function DataTable({ title, rows, fields, onSelect, action }: {
         <div className="tableWrap">
           <table>
             <thead>
-              <tr>{fields.map((field) => <th key={field}>{field}</th>)}{action ? <th>操作</th> : null}</tr>
+              <tr>{fields.map((field) => <th key={field}>{fieldLabel(field)}</th>)}{action ? <th>操作</th> : null}</tr>
             </thead>
             <tbody>
               {rows.map((row, index) => (
                 <tr key={String(row.id || row.decision_id || row.task_id || index)} onClick={() => onSelect?.(row)}>
-                  {fields.map((field) => <td key={field}>{renderCell(row[field])}</td>)}
-                  {action ? <td onClick={(event) => event.stopPropagation()}>{action(row)}</td> : null}
+                  {fields.map((field) => <td key={field} data-label={fieldLabel(field)}>{renderCell(row[field])}</td>)}
+                  {action ? <td data-label="操作" onClick={(event) => event.stopPropagation()}>{action(row)}</td> : null}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      ) : <EmptyState />}
+      ) : <EmptyState {...(emptyState || tableEmptyState(title))} />}
     </section>
   );
 }
@@ -1205,8 +1242,8 @@ function AuditTable({ title, rows, onSelect }: { title: string; rows: JsonRecord
   return <DataTable title={title} rows={rows} fields={["audit_log_id", "action", "object_type", "reason", "created_at"]} onSelect={onSelect} />;
 }
 
-function ListPanel({ title, rows, fields }: { title: string; rows: JsonRecord[]; fields: string[] }) {
-  return <DataTable title={title} rows={rows} fields={fields} />;
+function ListPanel({ title, rows, fields, emptyState }: { title: string; rows: JsonRecord[]; fields: string[]; emptyState?: EmptyStateProps }) {
+  return <DataTable title={title} rows={rows} fields={fields} emptyState={emptyState} />;
 }
 
 function ContextPanel({ title, children }: { title: string; children: React.ReactNode }) {
@@ -1272,19 +1309,42 @@ function RecordSummary({ record }: { record: unknown }) {
   return <pre className="recordSummary">{JSON.stringify(record, null, 2)}</pre>;
 }
 
-function EmptyState() {
-  return <p className="emptyText">暂无记录</p>;
+function EmptyState({ title, description, action }: EmptyStateProps) {
+  return (
+    <div className="emptyState">
+      <strong>{title || "暂无记录"}</strong>
+      <p>{description || "当前没有可展示的数据；调整筛选条件或完成配置后再查看。"}</p>
+      {action ? <div className="emptyAction">{action}</div> : null}
+    </div>
+  );
 }
 
 function renderCell(value: unknown) {
   if (value === null || value === undefined || value === "") return "-";
   if (typeof value === "string") {
     const tone = toneFor(value);
-    return tone ? <span className={`status ${tone}`}>{value}</span> : <span>{value}</span>;
+    return tone ? <span className={`status ${tone}`} title={value}>{statusLabel[value] || value}</span> : <span>{value}</span>;
   }
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "object") return <code>{JSON.stringify(value)}</code>;
   return String(value);
+}
+
+function fieldLabel(field: string) {
+  return fieldLabels[field] || field;
+}
+
+function tableEmptyState(title: string): EmptyStateProps {
+  if (title.includes("审计")) {
+    return { title: "暂无审计记录", description: "当前筛选范围内还没有审计事件；执行管理操作或调整组织、店铺筛选后再查看。" };
+  }
+  if (title.includes("任务")) {
+    return { title: "暂无任务", description: "当前没有异步任务需要处理；失败或待重试任务出现后会在这里显示。" };
+  }
+  if (title.includes("组件检查")) {
+    return { title: "暂无检查项", description: "当前健康接口没有返回组件检查明细；请刷新系统健康数据后再查看。" };
+  }
+  return { title: `暂无${title}`, description: "当前没有可展示的数据；调整筛选条件或完成配置后再查看。" };
 }
 
 function arrayFrom(value: unknown): JsonRecord[] {

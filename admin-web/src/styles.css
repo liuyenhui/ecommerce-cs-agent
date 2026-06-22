@@ -845,6 +845,30 @@ tbody tr:hover {
   font-size: 13px;
 }
 
+.emptyState {
+  display: grid;
+  gap: 6px;
+  border: 1px dashed #c8d0d9;
+  border-radius: 4px;
+  background: #f8fafc;
+  padding: 14px;
+  color: #667489;
+  font-size: 13px;
+}
+
+.emptyState strong {
+  color: #334155;
+  font-size: 14px;
+}
+
+.emptyState p {
+  line-height: 1.55;
+}
+
+.emptyAction {
+  margin-top: 4px;
+}
+
 .recordSummary,
 .drawer pre {
   max-height: 280px;
@@ -1080,8 +1104,24 @@ tbody tr:hover {
   }
 
   td {
+    display: grid;
+    grid-template-columns: minmax(86px, 34%) minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
     max-width: none;
     border-top: 0;
     border-bottom: 1px solid #e5eaf0;
+  }
+
+  td::before {
+    content: attr(data-label);
+    color: #667489;
+    font-size: 12px;
+    font-weight: 720;
+  }
+
+  td:empty::after {
+    content: "-";
+    color: #667489;
   }
 }
