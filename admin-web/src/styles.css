@@ -61,17 +61,10 @@ textarea {
   padding: 8px 10px;
 }
 
-button:focus-visible,
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid #2563eb;
-  outline-offset: 2px;
-}
-
-input[aria-invalid="true"] {
+input[aria-invalid="true"],
+select[aria-invalid="true"],
+textarea[aria-invalid="true"] {
   border-color: #dc2626;
-  box-shadow: 0 0 0 1px #dc2626;
 }
 
 textarea {
@@ -597,19 +590,23 @@ pre {
   padding: 22px;
 }
 
-.formError {
-  border: 1px solid #f0a6a6;
+.loginError {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  border-left: 4px solid #dc2626;
   border-radius: 4px;
-  background: #fff1f1;
+  background: #fef2f2;
   color: #991b1b;
-  padding: 9px 10px;
+  padding: 10px 12px;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 700;
+  line-height: 1.45;
 }
 
-.loginSubmit {
-  min-width: 104px;
-  justify-self: start;
+.loginError svg {
+  margin-top: 1px;
 }
 
 .workGrid {
@@ -641,6 +638,51 @@ pre {
   display: grid;
   gap: 10px;
   padding: 14px;
+}
+
+.contextPanel > h2,
+.userSummary {
+  grid-column: 1 / -1;
+}
+
+.userSummary {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #e5eaf0;
+  border-radius: 4px;
+  background: #f7f9fb;
+  padding: 10px;
+  min-width: 0;
+}
+
+.userSummary h3 {
+  margin-bottom: 0;
+}
+
+.userSummary dl {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.userSummary div {
+  display: grid;
+  grid-template-columns: minmax(64px, 92px) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.userSummary dt {
+  color: #667489;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.userSummary dd {
+  margin: 0;
+  color: #1f2937;
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .filterBar {
