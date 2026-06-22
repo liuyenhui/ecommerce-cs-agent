@@ -117,7 +117,7 @@ OpenAPI 校验工具可后续选择 Redocly、Spectral 或等价 CLI；关键是
 | --- | --- |
 | 镜像构建 | 分别构建 API 和 Admin image，tag 使用 commit SHA、语义化版本或 `dev-YYYYMMDD-HHMM`。 |
 | 双 Registry 推送 | 同一 tag 推送到 GHCR 和阿里云 Registry；中国环境下 K8s 优先拉取阿里云 Registry，GHCR 保留为备份和发布记录。 |
-| SBOM / provenance | `docker/build-push-action@v6` 对 GHCR 和阿里云镜像启用 `sbom: true`、`provenance: mode=max`，在 registry 中保留供应链 attestation。 |
+| SBOM / provenance | `docker/build-push-action@v7` 对 GHCR 和阿里云镜像启用 `sbom: true`、`provenance: mode=max`，在 registry 中保留供应链 attestation。 |
 | 镜像漏洞扫描 | GHCR SHA 镜像由 Trivy 生成 SARIF 并上传 Code Scanning，同时生成 CycloneDX SBOM artifact；CRITICAL 漏洞作为发布阻断门禁。 |
 | GitOps tag 更新 | 更新 GitOps repo 或本仓库约定的 values/tag 文件，由 Flux 负责同步。 |
 | Admin Web 构建门禁 | `Publish Images` verify job 在镜像构建前运行 `admin-web` 的 `npm ci`、`npm test` 和 `npm run build`，并检查客户后台 host 不展示系统后台入口、系统后台 host 使用系统后台专用登录页和路由守卫。 |
