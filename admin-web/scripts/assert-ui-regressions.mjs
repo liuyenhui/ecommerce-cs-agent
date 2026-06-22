@@ -1,43 +1,35 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const main = readFileSync(join(root, "src", "main.tsx"), "utf8");
-const styles = readFileSync(join(root, "src", "styles.css"), "utf8");
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const adminRoot = path.resolve(scriptDir, '..');
+const root = path.resolve(adminRoot, '..');
+const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
+const main = read('admin-web/src/main.tsx');
+const styles = read('admin-web/src/styles.css');
+const packageJson = read('admin-web/package.json');
+const loginPanel = main.slice(main.indexOf('function LoginPanel'), main.indexOf('function CustomerWorkspace'));
 
 const checks = [
-  {
-    name: "DataTable cells expose mobile data-labels",
-    pass: /<td key=\{field\} data-label=\{fieldLabel\(field\)\}>/.test(main)
-  },
-  {
-    name: "field label map includes organization_id",
-    pass: /organization_id:\s*"组织 ID"/.test(main)
-  },
-  {
-    name: "status badges render localized status text",
-    pass: /const statusLabel/.test(main) && /title=\{value\}/.test(main)
-  },
-  {
-    name: "EmptyState accepts title, description, and optional action",
-    pass: /function EmptyState\(\{ title, description, action \}/.test(main)
-  },
-  {
-    name: "mobile cells render labels with CSS before content",
-    pass: /td::before/.test(styles) && /content:\s*attr\(data-label\)/.test(styles)
-  }
+  ['Admin Web regression guard is wired into npm test', packageJson.includes('assert-ui-regressions.mjs')],
+  ['Login auth failures render inline form error', loginPanel.includes('loginError') && loginPanel.includes('role="alert"') && styles.includes('.loginError')],
+  ['Login 401 auth failures use user-facing credential copy', main.includes('message.startsWith("401 ")') && loginPanel.includes('邮箱或密码不正确，请检查后重试。')],
+  ['Login auth failures are not shown through global toast', !loginPanel.includes('setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });')],
+  ['Login fields are empty by default on live builds', loginPanel.includes('React.useState("")') && !loginPanel.includes('admin@example.test') && !loginPanel.includes('system-admin@example.test') && !loginPanel.includes('React.useState("org-001")')],
+  ['Login validates required fields before requesting auth', loginPanel.includes('请填写邮箱、密码和组织 ID') && loginPanel.includes('请填写邮箱和密码') && loginPanel.includes('return;')],
+  ['Login submits trimmed identifiers', loginPanel.includes('email: email.trim()') && loginPanel.includes('organization_id: organizationId.trim()')],
+  ['DataTable cells expose mobile data labels', main.includes('data-label={fieldLabel(field)}') && main.includes('data-label="操作"')],
+  ['Field label map includes organization_id', main.includes('organization_id: "组织 ID"')],
+  ['Status badges render localized status text', main.includes('const statusLabel') && main.includes('title={value}>{statusLabel[value] || value}</span>')],
+  ['EmptyState accepts title, description, and optional action', main.includes('function EmptyState({ title, description, action }: EmptyStateProps)')],
+  ['Mobile table cells render labels before content', styles.includes('td::before') && styles.includes('content: attr(data-label)')]
 ];
 
-const failed = checks.filter((check) => !check.pass);
-
-if (failed.length > 0) {
-  for (const check of failed) {
-    console.error(`FAIL ${check.name}`);
-  }
+const failures = checks.filter(([, ok]) => !ok);
+if (failures.length) {
+  console.error('Admin UI regression guard failed:');
+  for (const [name] of failures) console.error(`- ${name}`);
   process.exit(1);
 }
-
-for (const check of checks) {
-  console.log(`PASS ${check.name}`);
-}
+console.log(`Admin UI regression guard passed (${checks.length} checks).`);

@@ -519,6 +519,7 @@ function Navigation(props: {
 
 function TopBar({ workspace, session, onRefresh, onLogout }: { workspace: Workspace; session: JsonRecord | null; onRefresh: () => void; onLogout: () => void }) {
   const user = readRecord(session, "user") || {};
+  const userBadge = formatUserBadge(workspace, user);
   const title = workspace === "customer" ? "客户资料与知识运营" : "平台运维与发布治理";
   const subtitle = workspace === "customer" ? "组织、店铺、商品资料、知识审核和审计" : "租户开通、决策追踪、任务、健康和安全审计";
   return (
@@ -534,7 +535,7 @@ function TopBar({ workspace, session, onRefresh, onLogout }: { workspace: Worksp
         </button>
         {session ? (
           <>
-            <span className="userBadge">{String(user.display_name || user.email || "已登录")}</span>
+            <span className="userBadge">{userBadge}</span>
             <button className="iconButton" onClick={onLogout} title="退出登录">
               <LogOut size={16} />退出
             </button>
@@ -546,23 +547,46 @@ function TopBar({ workspace, session, onRefresh, onLogout }: { workspace: Worksp
 }
 
 function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLoggedIn: (session: JsonRecord) => void; setToast: (toast: ToastState) => void }) {
-  const [email, setEmail] = React.useState(target === "customer" ? "admin@example.test" : "system-admin@example.test");
+  const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
-  const [organizationId, setOrganizationId] = React.useState("org-001");
+  const [organizationId, setOrganizationId] = React.useState("");
+  const [loginError, setLoginError] = React.useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = React.useState<Partial<Record<"email" | "password" | "organizationId", boolean>>>({});
   const [loading, setLoading] = React.useState(false);
+  const loginErrorId = `${target}-login-error`;
+  const authErrorText = target === "customer" ? "邮箱、密码或组织 ID 不正确，请检查后重试。" : "邮箱或密码不正确，请检查后重试。";
+
+  function clearLoginError() {
+    if (loginError) setLoginError(null);
+    if (Object.keys(fieldErrors).length) setFieldErrors({});
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    setLoginError(null);
+    const nextFieldErrors = {
+      email: !email.trim(),
+      password: !password,
+      organizationId: target === "customer" && !organizationId.trim()
+    };
+    if (nextFieldErrors.email || nextFieldErrors.password || nextFieldErrors.organizationId) {
+      setFieldErrors(nextFieldErrors);
+      setLoginError(target === "customer" ? "请填写邮箱、密码和组织 ID" : "请填写邮箱和密码");
+      return;
+    }
+    setFieldErrors({});
     setLoading(true);
     try {
       const path = target === "customer" ? "/v1/admin/auth/login" : "/v1/system-admin/auth/login";
-      const body = target === "customer" ? { email, password, organization_id: organizationId } : { email, password };
+      const body = target === "customer"
+        ? { email: email.trim(), password, organization_id: organizationId.trim() }
+        : { email: email.trim(), password };
       await requestJson(path, { method: "POST", body: JSON.stringify(body) });
       const session = await requestJson(target === "customer" ? "/v1/admin/auth/me" : "/v1/system-admin/auth/me");
       onLoggedIn(session);
       setToast({ tone: "success", text: "登录成功" });
     } catch (error) {
-      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+      setLoginError(loginFailureMessage(error, authErrorText));
     } finally {
       setLoading(false);
     }
@@ -575,17 +599,54 @@ function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLog
         <h2>{target === "customer" ? "客户后台登录" : "系统后台登录"}</h2>
         <label>
           邮箱
-          <input value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" />
+          <input
+            value={email}
+            onChange={(event) => {
+              setEmail(event.target.value);
+              clearLoginError();
+            }}
+            autoComplete="username"
+            inputMode="email"
+            placeholder="name@example.com"
+            aria-invalid={Boolean(fieldErrors.email)}
+            aria-describedby={loginError && fieldErrors.email ? loginErrorId : undefined}
+          />
         </label>
         <label>
           密码
-          <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" />
+          <input
+            value={password}
+            onChange={(event) => {
+              setPassword(event.target.value);
+              clearLoginError();
+            }}
+            type="password"
+            autoComplete="current-password"
+            aria-invalid={Boolean(fieldErrors.password)}
+            aria-describedby={loginError && fieldErrors.password ? loginErrorId : undefined}
+          />
         </label>
         {target === "customer" ? (
           <label>
             组织 ID
-            <input value={organizationId} onChange={(event) => setOrganizationId(event.target.value)} />
+            <input
+              value={organizationId}
+              onChange={(event) => {
+                setOrganizationId(event.target.value);
+                clearLoginError();
+              }}
+              autoComplete="off"
+              placeholder="输入当前组织 ID"
+              aria-invalid={Boolean(fieldErrors.organizationId)}
+              aria-describedby={loginError && fieldErrors.organizationId ? loginErrorId : undefined}
+            />
           </label>
+        ) : null}
+        {loginError ? (
+          <div className="loginError" id={loginErrorId} role="alert">
+            <AlertTriangle size={16} />
+            <span>{loginError}</span>
+          </div>
         ) : null}
         <button className="primaryButton" type="submit" disabled={loading}>
           {loading ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
@@ -594,6 +655,12 @@ function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLog
       </form>
     </section>
   );
+}
+
+function loginFailureMessage(error: unknown, authErrorText: string): string {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (message.startsWith("401 ")) return authErrorText;
+  return "登录失败，请稍后重试。";
 }
 
 function CustomerWorkspace({ session, activeTab, setActiveTab, setToast }: {
@@ -925,7 +992,7 @@ function SystemWorkspace({ session, activeTab, setActiveTab, setToast }: {
         <Metric label="店铺" value={String(arrayFrom(data.stores).length)} tone="info" />
         <Metric label="Trace" value={String(arrayFrom(data.traces).length)} tone="warn" />
         <Metric label="任务" value={String(arrayFrom(data.tasks).length)} tone="bad" />
-        <RecordSummary record={readRecord(session, "user")} />
+        <SystemUserSummary user={readRecord(session, "user")} />
       </ContextPanel>
       {selected ? <Drawer title="详情" record={selected} onClose={() => setSelected(null)} /> : null}
       {modal ? <SystemCreateModal type={modal} onClose={() => setModal(null)} setToast={setToast} refresh={refresh} /> : null}
@@ -1188,6 +1255,26 @@ function ContextPanel({ title, children }: { title: string; children: React.Reac
   );
 }
 
+type SummaryItem = { label: string; value: string };
+
+function SystemUserSummary({ user }: { user: JsonRecord }) {
+  const items = buildSystemUserSummary(user);
+  if (!items.length) return <p className="emptyText">暂无账号摘要</p>;
+  return (
+    <section className="userSummary" aria-label="当前系统账号摘要">
+      <h3>当前账号</h3>
+      <dl>
+        {items.map((item) => (
+          <div key={item.label}>
+            <dt>{item.label}</dt>
+            <dd>{item.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
 function Drawer({ title, record, onClose }: { title: string; record: JsonRecord; onClose: () => void }) {
   return (
     <aside className="drawer">
@@ -1268,6 +1355,56 @@ function readRecord(source: unknown, key: string): JsonRecord {
   if (!source || typeof source !== "object") return {};
   const value = (source as JsonRecord)[key];
   return value && typeof value === "object" ? value as JsonRecord : {};
+}
+
+function formatUserBadge(workspace: Workspace, user: JsonRecord) {
+  const displayName = safeText(user.display_name) || safeText(user.name);
+  if (displayName) return displayName;
+  if (workspace === "customer") return safeText(user.email) || "已登录";
+  return firstText(user.role, user.roles) || "系统账号";
+}
+
+export function buildSystemUserSummary(user: JsonRecord): SummaryItem[] {
+  const items: SummaryItem[] = [];
+  const displayName = safeText(user.display_name) || safeText(user.name);
+  const roles = stringList(user.roles || user.role);
+  const status = safeText(user.status);
+  const capabilitiesCount = countCapabilities(user.capabilities);
+  const lastLoginAt = safeText(user.last_login_at);
+
+  if (displayName) items.push({ label: "名称", value: displayName });
+  if (roles.length) items.push({ label: "角色", value: roles.join(", ") });
+  if (status) items.push({ label: "状态", value: status });
+  if (capabilitiesCount > 0) items.push({ label: "能力", value: `${capabilitiesCount} 项` });
+  if (lastLoginAt) items.push({ label: "最近登录", value: lastLoginAt });
+
+  return items;
+}
+
+function safeText(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function firstText(...values: unknown[]) {
+  for (const value of values) {
+    const list = stringList(value);
+    if (list.length) return list[0];
+    const text = safeText(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+function stringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => safeText(item)).filter(Boolean);
+  const text = safeText(value);
+  return text ? [text] : [];
+}
+
+function countCapabilities(value: unknown) {
+  if (Array.isArray(value)) return value.length;
+  if (value && typeof value === "object") return Object.keys(value).length;
+  return 0;
 }
 
 function firstId(value: unknown, fallback: string) {

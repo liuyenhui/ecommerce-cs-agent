@@ -12,24 +12,24 @@
 | context | `default` |
 | namespace | `ecommerce-cs-agent-dev` |
 | 部署方式 | FluxCD GitOps |
-| GitOps 状态 | `fhg-gitops-repo` 已应用 `main@sha1:6574dd21fbb69f057129cdb27cd27734fb9a5089` |
+| GitOps 状态 | `fhg-gitops-repo` 已由 Deploy Dev GitOps 更新到 `main@sha1:e6f4b294910ff6b114f183e96775aedde9b140c1` |
 | Ingress controller | Traefik |
 | TLS | cert-manager `letsencrypt-http01` ClusterIssuer Ready |
 
-节点状态由 Deploy 项目确认：`master`、`agent-0` 均为 Ready。Codex 本机可通过公网 kubeconfig 访问集群。
+节点状态由 Deploy 项目确认：`master`、`agent-0` 均为 Ready。Codex 本机执行 kubectl 前必须先确认 context 指向 dev K3s；当前公开验证可用 DNS / HTTPS / release gate 证据确认。
 
 ## 当前部署快照
 
-更新时间：`2026-06-17`
+更新时间：`2026-06-18`
 
 | 项目 | 值 |
 | --- | --- |
 | Helm release | `ecommerce-cs-agent` |
 | Namespace | `ecommerce-cs-agent-dev` |
 | Helm status | `deployed` |
-| Helm revision | `6` |
-| API image | `registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-api:dev-20260616-1459` |
-| Admin image | `registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-admin:dev-20260616-1459` |
+| Helm revision | Deploy Dev GitOps 已应用 `0.1.0+fe6162288c6d` |
+| API image | `registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-api:sha-fe6162288c6d` |
+| Admin image | `registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-admin:sha-fe6162288c6d` |
 | API Deployment | `1/1 Running` |
 | Admin Deployment | `1/1 Running` |
 | imagePullSecrets | `aliyun-registry-auth`、`ghcr-auth` |
@@ -39,11 +39,11 @@
 
 | 检查项 | 结果 |
 | --- | --- |
-| `https://api.ecommerce-cs-agent-dev.fcihome.com/health` | `200`，返回 `{"status":"ok","service":"ecommerce-cs-agent-api","environment":"development"}` |
+| `https://api.ecommerce-cs-agent-dev.fcihome.com/health` | `200`，返回 `{"status":"ok","service":"ecommerce-cs-agent-api","environment":"production"}` |
 | `https://admin.ecommerce-cs-agent-dev.fcihome.com/health` | `200`，返回 `ok` |
-| `https://system-admin.ecommerce-cs-agent-dev.fcihome.com/health` | `2026-06-18` DNS 已解析到 `47.113.204.168`；当前 HTTPS 到达 Traefik default cert，`/health` 返回 `404`，待发布新 Ingress/TLS 后复验 |
-| `cs-agent-dev-tls` | `READY=True` |
-| live quick eval | 本地 `evals.cli` 已恢复；未传 `AGENT_API_TOKEN` 时只能安全验证 `/health`，完整 quick eval 需从 Secret 读取 token 后执行 |
+| `https://system-admin.ecommerce-cs-agent-dev.fcihome.com/health` | `200`，返回 `ok`；DNS 解析到 `47.113.204.168` |
+| 公开 TLS | `system-admin.ecommerce-cs-agent-dev.fcihome.com` 证书由 Let's Encrypt 签发，SAN 覆盖 `api.ecommerce-cs-agent-dev.fcihome.com`、`admin.ecommerce-cs-agent-dev.fcihome.com`、`system-admin.ecommerce-cs-agent-dev.fcihome.com` |
+| live quick eval | Deploy Dev release gate 已在 GitHub runner 中通过 quick live eval；本机未传 `AGENT_API_TOKEN` 时只能安全验证 `/health` |
 
 ## 域名
 
@@ -51,10 +51,45 @@
 | --- | --- | --- |
 | Agent API | `api.ecommerce-cs-agent-dev.fcihome.com` | DNS -> `47.113.204.168`，HTTPS 可访问，Ingress 已创建 |
 | Customer Admin Web | `admin.ecommerce-cs-agent-dev.fcihome.com` | DNS -> `47.113.204.168`，HTTPS 可访问，Ingress 已创建；只承载公开宣传页、客户登录页和客户后台 |
-| System Admin Web | `system-admin.ecommerce-cs-agent-dev.fcihome.com` | DNS -> `47.113.204.168`；应用 chart / Admin Web 已按此 host 实现拆站，当前线上仍需发布 Ingress/TLS 后完成 HTTPS 和 `/health` 验证 |
+| System Admin Web | `system-admin.ecommerce-cs-agent-dev.fcihome.com` | DNS -> `47.113.204.168`，HTTPS 可访问，`/health` 返回 `200 ok`；只承载系统后台登录页和系统后台 |
 | System Admin Web alias | `ops-admin.ecommerce-cs-agent-dev.fcihome.com` | 可选别名；只有在 DNS / 证书策略需要时启用 |
 
-FRP 日志已确认 `cs-agent-dev-http` API/Admin/root 三个 Host 注册成功。TLS 证书 SAN 已包含 API/Admin/root dev 域名，HTTPS 校验通过。`system-admin.ecommerce-cs-agent-dev.fcihome.com` 的 DNS 已生效，但当前线上证书仍是 Traefik default cert；发布新 Helm/GitOps 目标状态后，需要确认 Ingress host、`cs-agent-dev-tls` SAN、system Admin `/health` 和登录页均已独立可访问。
+FRP 继续复用 K3s 侧 `frp-system/bpg-frpc` 的 `cs-agent-dev-http` proxy，不新增 frpc，也不配置 `type=https`。外层 ai-agent Traefik / frps 已追加 API / Customer Admin / System Admin Host 并重启生效；公开 TLS 证书 SAN 已包含 API/Admin/root/System Admin dev 域名，HTTPS 校验通过。浏览器运行时验证显示 Customer Admin host 只请求 `/v1/admin/auth/me` 且不展示系统后台入口，System Admin host 只请求 `/v1/system-admin/auth/me` 且不复用客户登录页。cert-manager HTTP-01 如果出现公网 `404`，不要只查 K8s Ingress/TLS，还要同步检查外层 ai-agent Traefik `frps_vhost` Host rule 和 K3s `bpg-frpc` customDomains。
+
+## FRP / FRPC 公网入口
+
+`ecommerce-cs-agent-dev` 的公网入口由 ai-agent 外层 Traefik/FRPS 和 K3s 内部 frpc 共同组成：
+
+| 层级 | 配置 |
+| --- | --- |
+| 外层入口 | `ai-agent`，公网 IP `47.113.204.168` |
+| 外层 Traefik | Docker 容器 `erp_ai_agent_traefik`，负责公网 HTTPS 终止 |
+| 外层 FRPS | Docker 容器 `erp_ai_agent_frps`，HTTP vhost 端口 `8081` |
+| 外层配置来源 | ai-agent：`/root/open_erp_agent/deploy/ai-agent/docker-compose.yaml` |
+| 本地参考路径 | `/Users/huiliu/Documents/software/open_erp_agent/deploy/ai-agent/docker-compose.yaml` |
+| K3s frpc | namespace `frp-system`，现有 `bpg-frpc` |
+| FRP proxy | `cs-agent-dev-http` |
+| 类型 | HTTP vhost；不要新增 frpc，不要配置 `type=https` |
+
+`cs-agent-dev-http` 应注册的 ecommerce dev `customDomains`：
+
+```text
+cs-agent-dev.fcihome.com
+api.ecommerce-cs-agent-dev.fcihome.com
+admin.ecommerce-cs-agent-dev.fcihome.com
+system-admin.ecommerce-cs-agent-dev.fcihome.com
+```
+
+外层 ai-agent Traefik 的 `frps_vhost` router 也必须包含这些 Host，并转发到 `erp_ai_agent_frps` 的 HTTP vhost 端口 `8081`。公网 HTTPS 由 ai-agent Traefik 终止，K3s 侧只需要注册 HTTP vhost；不要为这些域名额外注册 frpc `type=https`。
+
+验证命令只记录结构，不输出密钥：
+
+```bash
+ssh ai-agent 'docker inspect erp_ai_agent_frps --format "{{json .Config.Labels}}"'
+ssh ai-agent 'docker logs erp_ai_agent_frps --tail=300 2>&1 | grep -E "cs-agent-dev-http|system-admin.ecommerce-cs-agent-dev.fcihome.com"'
+KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev get ingress,certificate,challenge,order
+curl -fsS https://system-admin.ecommerce-cs-agent-dev.fcihome.com/health
+```
 
 ## PostgreSQL
 
