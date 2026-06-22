@@ -61,6 +61,12 @@ textarea {
   padding: 8px 10px;
 }
 
+input[aria-invalid="true"],
+select[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: #dc2626;
+}
+
 textarea {
   min-height: 106px;
   resize: vertical;
@@ -246,6 +252,25 @@ pre {
   border-radius: 6px;
   background: #ffffff;
   padding: 22px;
+}
+
+.loginError {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  border-left: 4px solid #dc2626;
+  border-radius: 4px;
+  background: #fef2f2;
+  color: #991b1b;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.loginError svg {
+  margin-top: 1px;
 }
 
 .workGrid {
