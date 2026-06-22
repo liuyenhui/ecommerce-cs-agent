@@ -12,6 +12,7 @@ from ecommerce_cs_agent.services.admin_auth import (
     PostgresAdminAuthService,
     PostgresSystemAdminAuthService,
     SystemAdminSession,
+    _password_matches,
     admin_auth_service_for,
     system_admin_auth_service_for,
 )
@@ -32,6 +33,14 @@ def test_system_admin_auth_service_uses_postgres_when_database_url_is_configured
     service = system_admin_auth_service_for(settings)
 
     assert isinstance(service, PostgresSystemAdminAuthService)
+
+
+def test_admin_auth_password_matches_bcrypt_hashes() -> None:
+    bcrypt_hash = "$2b$12$L6BD2bTFvmSDL.o8ItsGrOAyTY5SCUOpHFvqMKr/pOBDa3cGWPvNG"
+
+    assert _password_matches("admin@example.test", "password", "admin@example.test", bcrypt_hash)
+    assert not _password_matches("admin@example.test", "wrong", "admin@example.test", bcrypt_hash)
+    assert not _password_matches("other@example.test", "password", "admin@example.test", bcrypt_hash)
 
 
 def test_postgres_admin_auth_login_bootstraps_user_and_persists_hashed_session() -> None:
