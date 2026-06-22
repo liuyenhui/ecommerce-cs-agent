@@ -87,6 +87,26 @@ node docs/scripts/validate-business-flow-x6-labels.mjs
 - When changing public landing pages, login pages, Admin shell, tables, forms, review queues, or configuration screens, update `docs/customer-admin-design.md` in the same change and keep architecture summaries consistent when they mention UI/UX rules.
 - External websites and `DESIGN.md` files are reference material only. Do not copy their brands, Logo, licensed fonts, assets, copywriting, rounded-corner language, or brand-specific semantics into this project.
 
+### Admin Web live hosts and UI/UX review rules
+
+- Customer Admin live host is `https://admin.ecommerce-cs-agent-dev.fcihome.com`; System Admin live host is `https://system-admin.ecommerce-cs-agent-dev.fcihome.com`.
+- Customer Admin route guards must only call `/v1/admin/auth/me`; System Admin route guards must only call `/v1/system-admin/auth/me`.
+- Customer Admin uses `agent_admin_session`; System Admin uses `agent_system_admin_session`. Do not make either site probe, reuse, or accept the other site's session.
+- Dev public routing currently reuses the existing K3s `frp-system/bpg-frpc` `cs-agent-dev-http` proxy. Do not add a second frpc proxy or configure `type=https` for this split unless the deployment architecture changes deliberately.
+- The outer ai-agent Traefik / frps layer is expected to route API, Customer Admin, and System Admin hostnames. If System Admin health or TLS fails publicly while in-cluster service health passes, check the outer host route before changing the app chart.
+- For professional UI/UX review or remediation, inspect both Admin hosts at desktop `1440x900` and mobile `390x844`, and record whether evidence came from live inspection, screenshots, or code review.
+- Use `docs/admin-web-ui-ux-audit.md` as the current Admin Web UI/UX remediation backlog when present. If a branch does not contain it yet, preserve the same priorities: customer public landing, isolated login pages without live test defaults, mobile navigation, and accessibility/state polish.
+- Before claiming an Admin Web UI change is done, verify no horizontal overflow on mobile, no Customer/System cross-entry appears, and the relevant host still calls only its own auth/me endpoint.
+
+### Admin login test credentials and storage state
+
+- Never print, paste, commit, or put in docs real live Admin passwords, Cookie values, Secret values, kubeconfig content, Authorization headers, or generated browser storage state.
+- Admin initial account values come from runtime Secret keys: customer uses `ADMIN_INITIAL_EMAIL` and `ADMIN_INITIAL_PASSWORD_HASH`; system uses `SYSTEM_ADMIN_INITIAL_EMAIL` and `SYSTEM_ADMIN_INITIAL_PASSWORD_HASH`, with code-level fallback to the customer initial account only when system-specific keys are absent.
+- A stored password hash is not a recoverable password. Only `plain:<password>` values can be converted to a plaintext password for local smoke tests. If the runtime Secret stores a hash, obtain the plaintext through an approved Secret channel and pass it via environment variables for that one command.
+- Use `scripts/admin_web_login_state.mjs` when available to create Playwright-compatible login state for UI testing. It must write only local `0600` files under `/tmp` or another ignored path, and those files must be deleted after testing.
+- When using curl or Playwright for Admin login tests, write cookies to temporary files or browser storage state; do not print `Set-Cookie`, raw Cookie headers, passwords, or token-bearing JSON to chat, logs, docs, PR descriptions, or test snapshots.
+- If an Admin login helper is unavailable on the current branch, follow the same behavior: read Secret key names only, keep plaintext in environment variables, validate `/v1/admin/auth/me` and `/v1/system-admin/auth/me`, and redact all credential-bearing outputs.
+
 ### System independence rules
 
 - The customer service Agent is an independent system. Any external system can integrate through the public Agent APIs without depending on `open_erp_agent`.

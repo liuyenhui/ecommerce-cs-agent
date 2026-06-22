@@ -16,6 +16,7 @@
 
 ### 2026-06-18
 
+- `AGENTS.md` 增补 Admin Web live host、Customer/System auth 边界、FRP/TLS 排查顺序、UI/UX 审计视口和 Admin 登录测试凭据 / storageState 安全规则，作为后续开发线程的项目级操作约束。
 - 新增 [Admin Web UI/UX 审计与整改计划](admin-web-ui-ux-audit.md)，记录客户 Admin / 系统 Admin live 未登录页的桌面与移动端审计结论、登录信息安全边界、整改优先级和可分发给 Codex 开发线程的 prompts。
 - 复验 dev 公开入口：`system-admin.ecommerce-cs-agent-dev.fcihome.com` 已解析到 `47.113.204.168`，HTTPS 证书 SAN 已覆盖 API / Customer Admin / System Admin，`/health` 返回 `200 ok`；Playwright 运行时验证 customer host 只请求 `/v1/admin/auth/me`，system host 只请求 `/v1/system-admin/auth/me`。
 - 外层 ai-agent Traefik / frps 已追加 system-admin Host 并重启生效；K3s 侧继续复用 `frp-system/bpg-frpc` 的 `cs-agent-dev-http` proxy，不新增 frpc，也不配置 `type=https`。
