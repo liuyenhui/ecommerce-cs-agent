@@ -26,7 +26,7 @@ describe("LoginPanel", () => {
   });
 
   test("renders customer login fields empty by default", async () => {
-    await renderApp("/");
+    await renderApp("/login");
 
     expect(await screen.findByRole("heading", { name: "客户后台登录" })).toBeInTheDocument();
     expect(screen.getByLabelText("邮箱")).toHaveValue("");
@@ -46,7 +46,7 @@ describe("LoginPanel", () => {
   });
 
   test("shows inline customer validation errors without sending invalid requests", async () => {
-    const fetchMock = await renderApp("/");
+    const fetchMock = await renderApp("/login");
     await screen.findByRole("heading", { name: "客户后台登录" });
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     fetchMock.mockClear();
@@ -75,7 +75,7 @@ describe("LoginPanel", () => {
   });
 
   test("uses customer auth endpoints and disables submit while login is pending", async () => {
-    const fetchMock = await renderApp("/");
+    const fetchMock = await renderApp("/login");
     await screen.findByRole("heading", { name: "客户后台登录" });
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     fetchMock.mockClear();

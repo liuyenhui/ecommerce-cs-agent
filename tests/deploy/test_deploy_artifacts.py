@@ -40,7 +40,10 @@ def test_admin_web_splits_customer_and_system_sites_by_host() -> None:
     assert "setWorkspace" not in app
     assert "/v1/admin/auth/me" in app
     assert "/v1/system-admin/auth/me" in app
-    assert 'void refreshSession(workspace)' in app
+    assert 'workspace === "system" ? <SystemSite /> : <CustomerSite' in app
+    assert "function CustomerSite(" in app
+    assert "function SystemSite()" in app
+    assert 'void refreshSession(workspace)' not in app
     assert 'void refreshSession("customer").catch' not in app
     assert 'void refreshSession("system").catch' not in app
 
@@ -150,7 +153,7 @@ def test_publish_workflow_generates_sbom_and_scans_images() -> None:
         "trivy-${{ matrix.component }}.sarif",
         "format: cyclonedx",
         "sbom-${{ matrix.component }}.cdx.json",
-        "actions/upload-artifact@v4",
+        "actions/upload-artifact@v7",
         "Enforce image vulnerability gate",
         "severity: CRITICAL",
         'exit-code: "1"',
@@ -169,7 +172,7 @@ def test_deploy_workflow_archives_dev_release_gate_report() -> None:
         "Initialize release gate report",
         "python scripts/run_dev_release_gate.py",
         "--image-tag \"${{ needs.update-gitops.outputs.image_tag }}\"",
-        "actions/upload-artifact@v4",
+        "actions/upload-artifact@v7",
         "dev-release-gate-${{ needs.update-gitops.outputs.image_tag }}",
     ]:
         assert snippet in workflow
