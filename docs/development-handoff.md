@@ -10,6 +10,10 @@
 - 更新客户公开首页方向：`admin.ecommerce-cs-agent-dev.fcihome.com` 的 `/` 是公开宣传页和客户登录入口，对外统一使用“AI / AI 客服”白话叙事，不把 Agent 概念、系统后台入口或 ERP 身份源暴露给客户。
 - 公开首页首屏、产品演示轮播和“怎么工作”动效围绕“商品信息管好了，AI 客服才答得准。”以及“上传商品说明书 → AI 学习 → 模拟问答 → AI 自动回复”主流程实现；客户 Admin 登录后仍保持 IBM / Carbon 式密集企业控制台。
 
+### 2026-06-19
+
+- 新增 [Admin Web UI/UX 审计与整改拆分](admin-ui-ux-audit.md)：基于 Chrome live 登录检查 customer/system Admin 的桌面与移动页面，记录 P0/P1/P2 UI/UX 问题，并拆分为可分发给开发线程的整改 prompts。
+
 ### 2026-06-18
 
 - 复验 dev 公开入口：`system-admin.ecommerce-cs-agent-dev.fcihome.com` 已解析到 `47.113.204.168`，HTTPS 证书 SAN 已覆盖 API / Customer Admin / System Admin，`/health` 返回 `200 ok`；Playwright 运行时验证 customer host 只请求 `/v1/admin/auth/me`，system host 只请求 `/v1/system-admin/auth/me`。
