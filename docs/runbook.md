@@ -37,6 +37,21 @@ curl -i https://system-admin.ecommerce-cs-agent-dev.fcihome.com/health
 | 500 | 查应用日志和运行时环境变量。 |
 | 连接超时 | 检查公网入口、FRP/Traefik、NetworkPolicy 或集群节点状态。 |
 
+公网 FRP/Traefik 快速判断：
+
+- `system-admin.ecommerce-cs-agent-dev.fcihome.com` 返回外层 `404` 时，优先检查 ai-agent 上 `erp_ai_agent_frps` 的 Traefik `frps_vhost.rule` 是否包含该 Host。
+- `frps` 日志必须出现 `cs-agent-dev-http` listen for host `system-admin.ecommerce-cs-agent-dev.fcihome.com`；如果没有，检查 K3s `frp-system/bpg-frpc` 的 `cs-agent-dev-http` customDomains。
+- K8s Ingress 已包含 host 但公网仍 `404`，通常是外层 FRP/Traefik 路由未放行，或 K3s frpc customDomains 未注册。
+- `system-admin.ecommerce-cs-agent-dev.fcihome.com` 使用现有 `cs-agent-dev-http` HTTP vhost；不要新建 frpc，不要配置 `type=https`。
+
+参考命令：
+
+```bash
+ssh ai-agent 'docker inspect erp_ai_agent_frps --format "{{json .Config.Labels}}"'
+ssh ai-agent 'docker logs erp_ai_agent_frps --tail=300 2>&1 | grep -E "cs-agent-dev-http|system-admin.ecommerce-cs-agent-dev.fcihome.com"'
+KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev get ingress,certificate,challenge,order
+```
+
 Admin 入口排查额外检查：
 
 - `admin.ecommerce-cs-agent-dev.fcihome.com` 只能承载公开宣传页、客户登录页和客户后台；如果左侧导航出现“系统后台”入口，应按路由守卫或构建错误处理。

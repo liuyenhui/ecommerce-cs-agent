@@ -4,6 +4,10 @@
 
 ## 最近文档更新
 
+### 2026-06-22
+
+- 补充 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 的公网入口排障路径：系统后台域名复用 `frp-system/bpg-frpc` 的 `cs-agent-dev-http` HTTP vhost，需要同时检查 ai-agent 外层 Traefik `frps_vhost` Host rule、K3s frpc `customDomains`、Ingress host 和 TLS SAN。
+
 ### 2026-06-18
 
 - 固定客户后台和系统后台的 Web 站点边界：客户后台使用 `admin.ecommerce-cs-agent-dev.fcihome.com`，系统后台使用 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 作为目标域名，`ops-admin.ecommerce-cs-agent-dev.fcihome.com` 仅作为可选别名。
