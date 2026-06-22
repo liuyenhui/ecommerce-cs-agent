@@ -4,7 +4,17 @@
 
 ## 最近文档更新
 
+### 2026-06-21
+
+- GitHub Actions 发布、部署、PR Helm 检查和 CodeQL 失败通知升级到 Node 24 运行时对应的 action 版本，不再依赖触发 Node.js 20 deprecation warning 的旧 action 主版本。
+- 更新客户公开首页方向：`admin.ecommerce-cs-agent-dev.fcihome.com` 的 `/` 是公开宣传页和客户登录入口，对外统一使用“AI / AI 客服”白话叙事，不把 Agent 概念、系统后台入口或 ERP 身份源暴露给客户。
+- 公开首页首屏、产品演示轮播和“怎么工作”动效围绕“商品信息管好了，AI 客服才答得准。”以及“上传商品说明书 → AI 学习 → 模拟问答 → AI 自动回复”主流程实现；客户 Admin 登录后仍保持 IBM / Carbon 式密集企业控制台。
+
 ### 2026-06-18
+
+- 实现客户后台 / 系统后台拆站基础：Admin Web 按 Host 固定 customer / system 模式，不再提供站内后台类型切换；客户 host 只刷新 `/v1/admin/auth/me`，系统 host 只刷新 `/v1/system-admin/auth/me`。
+- Helm chart / dev values 已显式表达 `admin.ecommerce-cs-agent-dev.fcihome.com` 和 `system-admin.ecommerce-cs-agent-dev.fcihome.com`，Admin Ingress 同一 TLS secret 下渲染两个 host；release gate 报告拆分 API、Customer Admin、System Admin 三路 health。
+- 现场 DNS 验证显示 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 已解析到 `47.113.204.168`，但当前线上 HTTPS 仍返回 Traefik default cert 且 `/health` 为 404；不能把 DNS 已配置误判为 Ingress/TLS 已上线。
 
 - 固定客户后台和系统后台的 Web 站点边界：客户后台使用 `admin.ecommerce-cs-agent-dev.fcihome.com`，系统后台使用 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 作为目标域名，`ops-admin.ecommerce-cs-agent-dev.fcihome.com` 仅作为可选别名。
 - 两个后台必须使用不同登录页、Cookie / session 名、路由守卫和 API 鉴权域；客户后台 UI 不展示“系统后台”入口，系统后台不得伪装客户用户调用客户 Admin API。

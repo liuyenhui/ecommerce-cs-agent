@@ -9,11 +9,11 @@
 - 第一版同步优先：外部系统调用 `POST /v1/reply-decisions` 获取候选回复或自动回复决策。
 - 第一版请求只要求最小问答字段：消息、会话、租户、店铺、平台和模式；商品、订单、物流、规则按需可选传入或通过 typed context refill 补齐。
 - 内部决策编排采用 LangGraph 设计：用 StateGraph 表达意图识别、缺上下文判断、RAG、生成、规则闸门、动作等待和人工介入；对外 API 不暴露 LangGraph 概念。
-- 第一版提供 Agent 自有客户后台站点 `admin.ecommerce-cs-agent-dev.fcihome.com`，承载公开宣传页 `/`、客户登录页 `/login` 和受保护客户后台 `/admin`；宣传页只作为产品介绍和登录入口，不承载租户业务数据。
+- 第一版提供 Agent 自有客户后台站点 `admin.ecommerce-cs-agent-dev.fcihome.com`，承载公开宣传页 `/`、客户登录页 `/login` 和受保护客户后台 `/admin`；宣传页对外使用“AI / AI 客服”白话叙事，只作为产品介绍和登录入口，不承载租户业务数据。
 - 第一版提供独立系统后台站点 `system-admin.ecommerce-cs-agent-dev.fcihome.com`，承载系统管理员登录、跨租户 readiness、决策排障、任务、审计和健康检查；`ops-admin.ecommerce-cs-agent-dev.fcihome.com` 仅作为可选别名。
 - 第一版包含 Agent 自有客户 Admin 后台，用于登录、组织/店铺切换、商品资料维护、知识审核、规则配置、动作能力配置和审计查询，不由外部系统承载。
 - 客户后台和系统后台使用不同登录页、Cookie / session 名、路由守卫和 API 鉴权域；客户后台 UI 不展示系统后台入口，系统后台不得伪装客户用户调用客户 Admin API。
-- 公开宣传页 UI 由 Notion 主导：黑白中性基调、大留白、AI Agent 叙事、产品预览和黑色主 CTA；Admin Web UI 仍采用 IBM / Carbon 企业后台结构，Ant Design 只是组件能力层，不是视觉风格来源。
+- 公开宣传页 UI 采用黑白中性、大留白、Apple 式轻量产品展示、产品演示轮播和黑色主 CTA，围绕“商品信息管好了，AI 客服才答得准。”表达；Admin Web UI 仍采用 IBM / Carbon 企业后台结构，Ant Design 只是组件能力层，不是视觉风格来源。
 - 后续预留 Connector、异步事件、回调、规则灰度和学习评估闭环。
 
 ## 1. 总体架构
@@ -453,7 +453,7 @@ sequenceDiagram
 
 ## 7. 商品资料与知识审核流
 
-客户销售的商品会持续变化，说明书、产品照片、SKU 规格和价格不能只作为聊天上下文临时传入。第一版应建立公开宣传页、客户 Admin 后台和商品资料中心，由客户从 `admin.ecommerce-cs-agent-dev.fcihome.com` 登录进入后台后维护资料、知识审核、规则和动作能力；Agent 只使用结构化资料、审核通过知识和当前有效价格快照。系统后台另在 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 提供跨租户治理和排障，不出现在客户后台导航中。后台登录、权限、设置项和审计设计见 [Customer Admin Design](customer-admin-design.md) 和 [System Admin Design](system-admin-design.md)。
+客户销售的商品会持续变化，说明书、产品照片、SKU 规格和价格不能只作为聊天上下文临时传入。第一版应建立公开宣传页、客户 Admin 后台和商品资料中心；公开宣传页用“商品信息管好了，AI 客服才答得准。”把上传商品说明书、AI 学习、模拟问答和 AI 自动回复讲清楚，客户从 `admin.ecommerce-cs-agent-dev.fcihome.com` 登录进入后台后维护资料、知识审核、规则和动作能力；Agent 只使用结构化资料、审核通过知识和当前有效价格快照。系统后台另在 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 提供跨租户治理和排障，不出现在客户后台导航中。后台登录、权限、设置项和审计设计见 [Customer Admin Design](customer-admin-design.md) 和 [System Admin Design](system-admin-design.md)。
 
 ```mermaid
 sequenceDiagram

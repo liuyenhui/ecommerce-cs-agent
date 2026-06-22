@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import {
   Activity,
   AlertTriangle,
+  ArrowRight,
+  Bot,
   Boxes,
   CheckCircle2,
   ClipboardList,
@@ -14,12 +16,15 @@ import {
   ListFilter,
   Loader2,
   LogOut,
+  MessageSquareText,
   PackagePlus,
   PlayCircle,
   RefreshCw,
   Search,
   ShieldCheck,
+  SlidersHorizontal,
   Store,
+  UploadCloud,
   Users
 } from "lucide-react";
 import "./styles.css";
@@ -54,6 +59,15 @@ const systemTabs: Array<{ key: SystemTab; label: string; group: string; icon: Re
   { key: "health", label: "系统健康", group: "发布安全", icon: <HeartPulse size={17} /> }
 ];
 
+const CUSTOMER_ADMIN_HOST = "admin.ecommerce-cs-agent-dev.fcihome.com";
+const SYSTEM_ADMIN_HOST = "system-admin.ecommerce-cs-agent-dev.fcihome.com";
+
+export function detectWorkspaceFromLocation(location: Pick<Location, "hostname" | "pathname">): Workspace {
+  if (location.hostname === SYSTEM_ADMIN_HOST || location.hostname.startsWith("system-admin.")) return "system";
+  if (location.hostname === CUSTOMER_ADMIN_HOST || location.hostname.startsWith("admin.")) return "customer";
+  return location.pathname.startsWith("/system-admin") ? "system" : "customer";
+}
+
 const statusTone: Record<string, "ok" | "warn" | "bad" | "info"> = {
   active: "ok",
   healthy: "ok",
@@ -69,6 +83,12 @@ const statusTone: Record<string, "ok" | "warn" | "bad" | "info"> = {
 };
 
 const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+
+function normalizePath() {
+  if (typeof window === "undefined") return "/";
+  const path = window.location.pathname || "/";
+  return path.endsWith("/") && path !== "/" ? path.slice(0, -1) : path;
+}
 
 async function requestJson<T = JsonRecord>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
@@ -91,40 +111,292 @@ async function requestJson<T = JsonRecord>(path: string, options: RequestInit = 
 }
 
 function App() {
-  const [workspace, setWorkspace] = React.useState<Workspace>("customer");
+  const [workspace] = React.useState<Workspace>(() => detectWorkspaceFromLocation(window.location));
+  const [path, setPath] = React.useState(() => normalizePath());
+
+  React.useEffect(() => {
+    const syncPath = () => setPath(normalizePath());
+    window.addEventListener("popstate", syncPath);
+    return () => window.removeEventListener("popstate", syncPath);
+  }, []);
+
+  function navigate(nextPath: string) {
+    window.history.pushState({}, "", nextPath);
+    setPath(normalizePath());
+  }
+
+  return workspace === "system" ? <SystemSite /> : <CustomerSite path={path} navigate={navigate} />;
+}
+
+function CustomerSite({ path, navigate }: { path: string; navigate: (path: string) => void }) {
   const [customerTab, setCustomerTab] = React.useState<CustomerTab>("overview");
-  const [systemTab, setSystemTab] = React.useState<SystemTab>("home");
   const [customerSession, setCustomerSession] = React.useState<JsonRecord | null>(null);
+  const [toast, setToast] = React.useState<ToastState>(null);
+  const demoSlides = [
+    {
+      title: "商品信息统一管理",
+      text: "说明书、SKU、价格、常见问题和适用范围统一维护，避免客服和 AI 各看各的资料。",
+      icon: <UploadCloud size={20} />
+    },
+    {
+      title: "AI 自动学习商品知识",
+      text: "资料先转成可审核的知识和模拟问答，让 AI 学习前后都有依据可查。",
+      icon: <Bot size={20} />
+    },
+    {
+      title: "AI 客服回复可控",
+      text: "自动回复前经过规则、风险、上下文完整性和模拟问答检查，高风险场景先转人工。",
+      icon: <SlidersHorizontal size={20} />
+    }
+  ];
+  const flowSteps = ["上传商品说明书", "AI 学习", "模拟问答", "AI 自动回复"];
+
+  const customerAuthed = Boolean(customerSession);
+
+  async function refreshSession() {
+    const me = await requestJson("/v1/admin/auth/me");
+    setCustomerSession(me);
+  }
+
+  async function logout() {
+    try {
+      await requestJson("/v1/admin/auth/logout", { method: "POST" });
+    } catch {
+      // Session may already be gone; local state still needs clearing.
+    }
+    setCustomerSession(null);
+    setToast({ tone: "info", text: "已退出当前后台" });
+    navigate("/login");
+  }
+
+  React.useEffect(() => {
+    void refreshSession().catch(() => undefined);
+  }, []);
+
+  if (path === "/login") {
+    return (
+      <main className="customerLoginShell">
+        <button className="textButton" onClick={() => navigate("/")}>
+          <ArrowRight size={15} className="flipIcon" />返回首页
+        </button>
+        <LoginPanel key="customer-login" target="customer" onLoggedIn={(session) => {
+          setCustomerSession(session);
+          navigate("/admin");
+        }} setToast={setToast} />
+        {toast ? <Toast toast={toast} onClose={() => setToast(null)} /> : null}
+      </main>
+    );
+  }
+
+  if (path.startsWith("/admin")) {
+    return (
+      <CustomerAdminShell
+        customerSession={customerSession}
+        customerTab={customerTab}
+        setCustomerTab={setCustomerTab}
+        refreshSession={refreshSession}
+        logout={logout}
+        setToast={setToast}
+        toast={toast}
+      />
+    );
+  }
+
+  return (
+    <main className="landingPage">
+      <header className="landingHeader">
+        <button className="landingBrand" onClick={() => navigate("/")} aria-label="回到首页">
+          <MessageSquareText size={18} />
+          <span>AI 客服资料中台</span>
+        </button>
+        <nav aria-label="公开页导航">
+          <button className="textButton" onClick={() => document.getElementById("demo-flow")?.scrollIntoView({ behavior: "smooth" })}>
+            查看演示流程
+          </button>
+          <button className="darkButton" onClick={() => navigate(customerAuthed ? "/admin" : "/login")}>
+            客户登录
+          </button>
+        </nav>
+      </header>
+
+      <section className="heroSection">
+        <div className="heroCopy">
+          <p className="landingEyebrow">AI 客服上线前，先把商品资料管好</p>
+          <h1>商品信息管好了，AI 客服才答得准。</h1>
+          <p className="heroSubtitle">
+            上传商品说明书、价格和常见问题，让 AI 先学习，再通过模拟问答检查效果。真正自动回复前，还能用规则控制范围和风险。
+          </p>
+          <div className="heroActions">
+            <button className="darkButton" onClick={() => navigate(customerAuthed ? "/admin" : "/login")}>
+              进入客户后台 <ArrowRight size={16} />
+            </button>
+            <button className="textButton" onClick={() => document.getElementById("demo-flow")?.scrollIntoView({ behavior: "smooth" })}>
+              查看演示流程
+            </button>
+          </div>
+        </div>
+        <div className="heroPreview" aria-label="客户后台产品预览">
+          <div className="previewTopbar">
+            <span />
+            <span />
+            <span />
+          </div>
+          <div className="previewGrid">
+            <div className="previewNav" />
+            <div className="previewContent">
+              <div className="previewLine wide" />
+              <div className="previewLine" />
+              <div className="previewTable">
+                <span />
+                <span />
+                <span />
+                <span />
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="demoCarousel" aria-label="产品演示轮播">
+        <div className="sectionIntro">
+          <p className="landingEyebrow">产品演示</p>
+          <h2>从资料到回复，一条线看清楚。</h2>
+        </div>
+        <div className="demoViewport">
+          <div className="demoTrack">
+            {demoSlides.map((slide) => (
+              <article className="demoSlide" key={slide.title}>
+                <div className="slideIcon">{slide.icon}</div>
+                <h3>{slide.title}</h3>
+                <p>{slide.text}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="flowSection" id="demo-flow">
+        <div className="sectionIntro">
+          <p className="landingEyebrow">怎么工作</p>
+          <h2>上传商品说明书 → AI 学习 → 模拟问答 → AI 自动回复</h2>
+        </div>
+        <ol className="flowRail" aria-label="上传商品说明书到 AI 自动回复流程">
+          {flowSteps.map((step, index) => (
+            <li key={step}>
+              <span className="flowIndex">{index + 1}</span>
+              <strong>{step}</strong>
+              {index < flowSteps.length - 1 ? <ChevronConnector /> : null}
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <section className="controlSection">
+        <div>
+          <p className="landingEyebrow">可控自动化</p>
+          <h2>AI 先学习，规则再放行。</h2>
+          <p>
+            商品知识通过审核后才进入可用资料；模拟问答先检查效果；自动回复还要经过规则、风险和上下文完整性判断。
+          </p>
+        </div>
+        <div className="controlList">
+          <span>资料缺口提醒</span>
+          <span>知识审核状态</span>
+          <span>价格过期提示</span>
+          <span>高风险转人工</span>
+        </div>
+      </section>
+
+      <section className="finalCta">
+        <h2>先管好商品资料，再让 AI 自动回复。</h2>
+        <button className="darkButton" onClick={() => navigate(customerAuthed ? "/admin" : "/login")}>
+          进入客户后台 <ArrowRight size={16} />
+        </button>
+      </section>
+    </main>
+  );
+}
+
+function CustomerAdminShell({
+  customerSession,
+  customerTab,
+  setCustomerTab,
+  refreshSession,
+  logout,
+  setToast,
+  toast
+}: {
+  customerSession: JsonRecord | null;
+  customerTab: CustomerTab;
+  setCustomerTab: (tab: CustomerTab) => void;
+  refreshSession: () => Promise<void>;
+  logout: () => Promise<void>;
+  setToast: (toast: ToastState) => void;
+  toast: ToastState;
+}) {
+  return (
+    <main className="appShell">
+      <aside className="rail">
+        <div className="brandMark">
+          <ShieldCheck size={22} />
+          <span>AI 客服客户后台</span>
+        </div>
+        <Navigation
+          workspace="customer"
+          customerTab={customerTab}
+          systemTab="home"
+          setCustomerTab={setCustomerTab}
+          setSystemTab={() => undefined}
+        />
+      </aside>
+
+      <section className="mainPane">
+        <TopBar
+          workspace="customer"
+          session={customerSession}
+          onRefresh={() => refreshSession().then(() => setToast({ tone: "success", text: "会话已刷新" })).catch((error) => setToast({ tone: "error", text: error.message }))}
+          onLogout={() => void logout()}
+        />
+
+        {customerSession ? (
+          <CustomerWorkspace
+            session={customerSession}
+            activeTab={customerTab}
+            setActiveTab={setCustomerTab}
+            setToast={setToast}
+          />
+        ) : (
+          <LoginPanel key="customer-login" target="customer" onLoggedIn={() => void refreshSession()} setToast={setToast} />
+        )}
+      </section>
+
+      {toast ? <Toast toast={toast} onClose={() => setToast(null)} /> : null}
+    </main>
+  );
+}
+
+function SystemSite() {
+  const [systemTab, setSystemTab] = React.useState<SystemTab>("home");
   const [systemSession, setSystemSession] = React.useState<JsonRecord | null>(null);
   const [toast, setToast] = React.useState<ToastState>(null);
 
-  const customerAuthed = Boolean(customerSession);
-  const systemAuthed = Boolean(systemSession);
-
-  async function refreshSession(target: Workspace) {
-    if (target === "customer") {
-      const me = await requestJson("/v1/admin/auth/me");
-      setCustomerSession(me);
-      return;
-    }
+  async function refreshSession() {
     const me = await requestJson("/v1/system-admin/auth/me");
     setSystemSession(me);
   }
 
-  async function logout(target: Workspace) {
+  async function logout() {
     try {
-      await requestJson(target === "customer" ? "/v1/admin/auth/logout" : "/v1/system-admin/auth/logout", { method: "POST" });
+      await requestJson("/v1/system-admin/auth/logout", { method: "POST" });
     } catch {
       // Session may already be gone; local state still needs clearing.
     }
-    if (target === "customer") setCustomerSession(null);
-    if (target === "system") setSystemSession(null);
+    setSystemSession(null);
     setToast({ tone: "info", text: "已退出当前后台" });
   }
 
   React.useEffect(() => {
-    void refreshSession("customer").catch(() => undefined);
-    void refreshSession("system").catch(() => undefined);
+    void refreshSession().catch(() => undefined);
   }, []);
 
   return (
@@ -132,47 +404,28 @@ function App() {
       <aside className="rail">
         <div className="brandMark">
           <ShieldCheck size={22} />
-          <span>Ecommerce CS Agent</span>
-        </div>
-        <div className="workspaceSwitch" role="tablist" aria-label="后台类型">
-          <button className={workspace === "customer" ? "active" : ""} onClick={() => setWorkspace("customer")}>
-            <Store size={16} />客户后台
-          </button>
-          <button className={workspace === "system" ? "active" : ""} onClick={() => setWorkspace("system")}>
-            <Database size={16} />系统后台
-          </button>
+          <span>Ecommerce CS System Admin</span>
         </div>
         <Navigation
-          workspace={workspace}
-          customerTab={customerTab}
+          workspace="system"
+          customerTab="overview"
           systemTab={systemTab}
-          setCustomerTab={setCustomerTab}
+          setCustomerTab={() => undefined}
           setSystemTab={setSystemTab}
         />
       </aside>
 
       <section className="mainPane">
         <TopBar
-          workspace={workspace}
-          session={workspace === "customer" ? customerSession : systemSession}
-          onRefresh={() => refreshSession(workspace).then(() => setToast({ tone: "success", text: "会话已刷新" })).catch((error) => setToast({ tone: "error", text: error.message }))}
-          onLogout={() => logout(workspace)}
+          workspace="system"
+          session={systemSession}
+          onRefresh={() => refreshSession().then(() => setToast({ tone: "success", text: "会话已刷新" })).catch((error) => setToast({ tone: "error", text: error.message }))}
+          onLogout={() => void logout()}
         />
 
-        {workspace === "customer" ? (
-          customerAuthed ? (
-            <CustomerWorkspace
-              session={customerSession!}
-              activeTab={customerTab}
-              setActiveTab={setCustomerTab}
-              setToast={setToast}
-            />
-          ) : (
-            <LoginPanel key="customer-login" target="customer" onLoggedIn={(session) => setCustomerSession(session)} setToast={setToast} />
-          )
-        ) : systemAuthed ? (
+        {systemSession ? (
           <SystemWorkspace
-            session={systemSession!}
+            session={systemSession}
             activeTab={systemTab}
             setActiveTab={setSystemTab}
             setToast={setToast}
@@ -185,6 +438,10 @@ function App() {
       {toast ? <Toast toast={toast} onClose={() => setToast(null)} /> : null}
     </main>
   );
+}
+
+function ChevronConnector() {
+  return <ArrowRight className="flowArrow" size={18} aria-hidden="true" />;
 }
 
 function Navigation(props: {

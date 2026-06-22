@@ -30,6 +30,30 @@ def test_customer_admin_session_cannot_call_system_admin():
     assert response.json()["error"]["code"] == "forbidden"
 
 
+def test_system_admin_session_cannot_call_customer_admin():
+    client = TestClient(create_app())
+
+    response = client.get(
+        "/v1/admin/auth/me",
+        headers={"Cookie": "agent_system_admin_session=test-system-session"},
+    )
+
+    assert response.status_code in {401, 403}
+    assert response.json()["error"]["code"] in {"unauthorized", "forbidden"}
+
+
+def test_external_api_token_cannot_call_system_admin():
+    client = TestClient(create_app())
+
+    response = client.get(
+        "/v1/system-admin/auth/me",
+        headers={"Authorization": "Bearer test-agent-token"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "forbidden"
+
+
 def test_customer_admin_me_and_core_lists():
     client = TestClient(create_app())
     headers = {"Cookie": "agent_admin_session=test-admin-session"}

@@ -18,7 +18,8 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 DEFAULT_NAMESPACE = "ecommerce-cs-agent-dev"
 DEFAULT_API_URL = "https://api.ecommerce-cs-agent-dev.fcihome.com"
-DEFAULT_ADMIN_URL = "https://admin.ecommerce-cs-agent-dev.fcihome.com"
+DEFAULT_CUSTOMER_ADMIN_URL = "https://admin.ecommerce-cs-agent-dev.fcihome.com"
+DEFAULT_SYSTEM_ADMIN_URL = "https://system-admin.ecommerce-cs-agent-dev.fcihome.com"
 
 
 @dataclass(frozen=True)
@@ -58,7 +59,8 @@ class DevReleaseGateConfig:
     image_tag: str
     gitops_commit: str | None = None
     target_url: str = DEFAULT_API_URL
-    admin_url: str = DEFAULT_ADMIN_URL
+    customer_admin_url: str = DEFAULT_CUSTOMER_ADMIN_URL
+    system_admin_url: str = DEFAULT_SYSTEM_ADMIN_URL
     namespace: str = DEFAULT_NAMESPACE
     flux_namespace: str = "flux-system"
     flux_root_source: str = "flux-system"
@@ -124,7 +126,8 @@ def run_dev_release_gate(
         checks.append(_check_schema_migrations(config, runner, secrets))
 
     checks.append(_check_http_health("api health", config.target_url, getter, config, secrets))
-    checks.append(_check_http_health("admin health", config.admin_url, getter, config, secrets))
+    checks.append(_check_http_health("customer admin health", config.customer_admin_url, getter, config, secrets))
+    checks.append(_check_http_health("system admin health", config.system_admin_url, getter, config, secrets))
 
     if config.run_live_eval:
         checks.append(_run_live_eval(config, runner, secrets))
@@ -589,7 +592,8 @@ def _format_report(report: ReleaseGateReport, secrets: tuple[str, ...]) -> str:
         f"- gitops_commit: `{config.gitops_commit or 'unknown'}`",
         f"- namespace: `{config.namespace}`",
         f"- api_url: `{config.target_url}`",
-        f"- admin_url: `{config.admin_url}`",
+        f"- customer_admin_url: `{config.customer_admin_url}`",
+        f"- system_admin_url: `{config.system_admin_url}`",
         "",
         "## Checks",
         "",
@@ -610,7 +614,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-tag", required=True)
     parser.add_argument("--gitops-commit")
     parser.add_argument("--target-url", default=DEFAULT_API_URL)
-    parser.add_argument("--admin-url", default=DEFAULT_ADMIN_URL)
+    parser.add_argument("--customer-admin-url", "--admin-url", dest="customer_admin_url", default=DEFAULT_CUSTOMER_ADMIN_URL)
+    parser.add_argument("--system-admin-url", default=DEFAULT_SYSTEM_ADMIN_URL)
     parser.add_argument("--namespace", default=DEFAULT_NAMESPACE)
     parser.add_argument("--output", default="reports/release-gate/dev-release-gate.md")
     parser.add_argument("--skip-reconcile", action="store_true")
@@ -629,7 +634,8 @@ def main(argv: list[str] | None = None) -> int:
             image_tag=args.image_tag,
             gitops_commit=args.gitops_commit,
             target_url=args.target_url,
-            admin_url=args.admin_url,
+            customer_admin_url=args.customer_admin_url,
+            system_admin_url=args.system_admin_url,
             namespace=args.namespace,
             output=Path(args.output),
             reconcile=not args.skip_reconcile,

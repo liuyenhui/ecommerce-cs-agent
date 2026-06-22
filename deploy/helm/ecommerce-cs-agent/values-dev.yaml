@@ -30,9 +30,12 @@ admin:
     pullPolicy: IfNotPresent
   service:
     port: 8080
+  customer:
+    host: admin.ecommerce-cs-agent-dev.fcihome.com
+  system:
+    host: system-admin.ecommerce-cs-agent-dev.fcihome.com
   ingress:
     enabled: true
-    host: admin.ecommerce-cs-agent-dev.fcihome.com
     tlsSecretName: cs-agent-dev-tls
 
 migration:
