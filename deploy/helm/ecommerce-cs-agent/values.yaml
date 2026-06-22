@@ -70,9 +70,12 @@ admin:
     enabled: true
   service:
     port: 8080
+  customer:
+    host: ""
+  system:
+    host: ""
   ingress:
     enabled: false
-    host: ""
     tlsSecretName: ""
 
 migration:

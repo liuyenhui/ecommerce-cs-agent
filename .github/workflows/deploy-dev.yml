@@ -131,7 +131,7 @@ jobs:
         run: python -m pip install -e ".[dev]"
 
       - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@v5
 
       - name: Configure kubeconfig
         shell: bash
@@ -157,7 +157,7 @@ jobs:
 
       - name: Upload release gate report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dev-release-gate-${{ needs.update-gitops.outputs.image_tag }}
           path: reports/release-gate/dev-release-gate.md

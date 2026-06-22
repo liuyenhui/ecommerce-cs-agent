@@ -70,7 +70,8 @@ def test_release_gate_runs_rollout_health_eval_and_writes_redacted_report(
             image_tag="sha-abc123456789",
             gitops_commit="gitops123",
             target_url="https://api.example.test",
-            admin_url="https://admin.example.test",
+            customer_admin_url="https://admin.example.test",
+            system_admin_url="https://system-admin.example.test",
             output=report_path,
             reconcile=False,
         ),
@@ -84,6 +85,10 @@ def test_release_gate_runs_rollout_health_eval_and_writes_redacted_report(
     assert "gitops123" in report_text
     assert "quick suite PASS" in report_text
     assert "001_initial.sql" in report_text
+    assert "- customer_admin_url: `https://admin.example.test`" in report_text
+    assert "- system_admin_url: `https://system-admin.example.test`" in report_text
+    assert any(check.name == "customer admin health" for check in report.checks)
+    assert any(check.name == "system admin health" for check in report.checks)
     assert secret not in report_text
     assert any(command[:4] == ["kubectl", "-n", "ecommerce-cs-agent-dev", "rollout"] for command in commands)
 
