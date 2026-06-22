@@ -69,7 +69,7 @@ jobs:
       }}
     steps:
       - name: Send blocked deployment email
-        uses: dawidd6/action-send-mail@v6
+        uses: dawidd6/action-send-mail@v17
         with:
           server_address: ${{ secrets.SMTP_HOST }}
           server_port: ${{ secrets.SMTP_PORT }}
