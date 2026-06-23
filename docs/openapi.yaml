@@ -59,9 +59,12 @@ paths:
                 summary: 缺订单和物流上下文
                 value:
                   request_id: external-idempotency-key
-                  organization_id: org-001
                   platform: pdd
-                  store_id: store-001
+                  external_store_id: pdd-store-001
+                  platform_account_ref: pdd-account-main
+                  listing_ref: pdd-listing-001
+                  external_product_id: pdd-product-001
+                  external_sku_id: pdd-sku-001
                   message:
                     external_message_id: msg-001
                     sender_type: buyer
@@ -998,6 +1001,48 @@ paths:
           $ref: "#/components/responses/ValidationError"
 
   /v1/product-content/products:
+    get:
+      tags: [Product Content]
+      operationId: listProductContentProducts
+      summary: 查询商品资料列表
+      description: 客户 Admin 按当前 session 的内部租户和店铺权限查询商品主数据；客户 UI 不展示或要求输入组织 ID。
+      security:
+        - AdminSession: []
+      parameters:
+        - name: store_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 当前客户 Admin 可访问的店铺 ID。
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: 商品资料列表。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
     post:
       tags: [Product Content]
       operationId: upsertProductContentProduct
@@ -1022,6 +1067,79 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/product-content/product-import-drafts:
+    post:
+      tags: [Product Content]
+      operationId: createProductImportDraft
+      summary: 上传商品文档并生成导入草稿
+      description: 客户上传说明书、资料文档或文本后，系统保存原始对象并调用商品文档分析服务生成可编辑草稿；草稿确认前不创建正式商品。
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductImportDraftCreateRequest"
+      responses:
+        "201":
+          description: 商品导入草稿已生成。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductImportDraftResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "503":
+          $ref: "#/components/responses/ObjectStorageUnavailable"
+
+  /v1/product-content/product-import-drafts/{draft_id}/confirm:
+    post:
+      tags: [Product Content]
+      operationId: confirmProductImportDraft
+      summary: 确认商品导入草稿
+      description: 用户确认或修正 AI 抽取字段后才创建 / 更新商品，并把上传文件归档为商品资产。重复幂等键返回同一结果。
+      security:
+        - AdminSession: []
+      parameters:
+        - name: draft_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 商品导入草稿 ID。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductImportDraftConfirmRequest"
+      responses:
+        "200":
+          description: 重复幂等确认请求返回已保存结果。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductImportDraftConfirmResponse"
+        "201":
+          description: 商品导入草稿已确认。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductImportDraftConfirmResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/ValidationError"
 
@@ -1854,19 +1972,37 @@ components:
   schemas:
     ReplyDecisionCreateRequest:
       type: object
-      required: [request_id, organization_id, store_id, platform, message, conversation, mode]
+      required: [request_id, platform, external_store_id, message, conversation, mode]
       properties:
         request_id:
           type: string
           description: 外部请求幂等键。
+        tenant_id:
+          type: string
+          description: 内部租户边界；通常由 API Key / Connector Token 映射，外部系统不需要传。
         organization_id:
           type: string
-          description: 租户组织 ID。
+          description: 旧版兼容字段；外部接入不应依赖或公开展示该字段，服务端会映射为内部 tenant。
         store_id:
           type: string
-          description: 店铺 ID。
+          description: 旧版兼容字段；外部接入优先使用 `external_store_id`。
         platform:
           $ref: "#/components/schemas/Platform"
+        external_store_id:
+          type: string
+          description: 外部系统里的店铺或业务单元引用；接入 API 的公开店铺定位字段。
+        platform_account_ref:
+          type: string
+          description: 平台账号或 Connector 引用，用于把请求映射到内部 `platform_account`。
+        listing_ref:
+          type: string
+          description: 某平台、某店铺下的销售实例引用；用于区分同一商品在多个平台或店铺售卖。
+        external_product_id:
+          type: string
+          description: 外部平台商品 ID。缺少完整商品上下文时仅作为补上下文查询条件，不能让 Agent 猜测商品资料。
+        external_sku_id:
+          type: string
+          description: 外部平台 SKU ID。缺少完整 SKU 上下文时仅作为补上下文查询条件。
         message:
           $ref: "#/components/schemas/IncomingMessage"
         conversation:
@@ -2449,9 +2585,6 @@ components:
           type: string
           format: password
           writeOnly: true
-        organization_id:
-          type: string
-          description: 多组织用户可在登录后或登录时选择组织上下文。
 
     AdminAuthResponse:
       type: object
@@ -3283,6 +3416,154 @@ components:
           items:
             type: string
 
+    ProductListResponse:
+      type: object
+      required: [items, page_info]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductListItem"
+        page_info:
+          $ref: "#/components/schemas/PageInfo"
+
+    ProductListItem:
+      type: object
+      required: [product_id, store_id, external_product_id, title, status, health_status, updated_at]
+      properties:
+        product_id:
+          type: string
+        store_id:
+          type: string
+        external_product_id:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+        health_status:
+          type: string
+          enum: [healthy, warning, blocked]
+        updated_at:
+          type: string
+          format: date-time
+
+    ProductImportDraftCreateRequest:
+      type: object
+      required: [file_name, mime_type, content_base64, idempotency_key]
+      properties:
+        store_id:
+          type: string
+          description: 当前客户 Admin 可访问的店铺 ID；省略时使用当前 session 店铺。
+        file_name:
+          type: string
+        mime_type:
+          type: string
+        content_base64:
+          type: string
+          description: 上传文件内容；服务端不得写入审计明文。
+        idempotency_key:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/Metadata"
+
+    ProductDraftProduct:
+      type: object
+      required: [external_product_id, title, status, attributes]
+      properties:
+        external_product_id:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive, archived]
+        attributes:
+          $ref: "#/components/schemas/Metadata"
+
+    ProductImportDraftResponse:
+      type: object
+      required: [draft_id, store_id, status, file_name, mime_type, object_key, object_hash, storage_status, analysis_status, draft_product]
+      properties:
+        draft_id:
+          type: string
+        store_id:
+          type: string
+        status:
+          type: string
+          enum: [draft, confirmed]
+        file_name:
+          type: string
+        mime_type:
+          type: string
+        object_key:
+          type: string
+        object_hash:
+          type: string
+        size_bytes:
+          type:
+            - integer
+            - "null"
+        storage_status:
+          type: string
+          enum: [referenced, stored, failed]
+        analysis_status:
+          type: string
+          enum: [completed, fallback, failed]
+        analysis_model:
+          type:
+            - string
+            - "null"
+        analysis_error:
+          type:
+            - string
+            - "null"
+        draft_product:
+          $ref: "#/components/schemas/ProductDraftProduct"
+        markdown_text:
+          type: string
+        source_map:
+          $ref: "#/components/schemas/Metadata"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        confirmed_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+
+    ProductImportDraftConfirmRequest:
+      type: object
+      required: [idempotency_key, draft_product]
+      properties:
+        idempotency_key:
+          type: string
+        draft_product:
+          $ref: "#/components/schemas/ProductDraftProduct"
+
+    ProductImportDraftConfirmResponse:
+      type: object
+      required: [draft_id, product_id, asset_id, status, analysis_status, draft_product]
+      properties:
+        draft_id:
+          type: string
+        product_id:
+          type: string
+        asset_id:
+          type: string
+        status:
+          type: string
+          enum: [confirmed]
+        analysis_status:
+          type: string
+          enum: [completed, fallback, failed]
+        draft_product:
+          $ref: "#/components/schemas/ProductUpsertResponse"
+
     ProductAssetCreateRequest:
       type: object
       required: [product_id, asset_type, file_ref, file_hash, version]
@@ -3496,8 +3777,24 @@ components:
     ProductSnapshot:
       type: object
       properties:
+        product_master_ref:
+          type: string
+          description: 通用商品主数据引用；同一真实商品可被多个平台、店铺和 listing 复用。
+        listing_ref:
+          type: string
+          description: 平台/店铺/销售链接/SKU 维度的销售实例引用。
+        external_store_id:
+          type: string
+          description: 外部店铺引用，和 `platform` 一起定位销售上下文。
+        platform_account_ref:
+          type: string
+          description: 平台账号或 Connector 引用。
         external_product_id:
           type: string
+          description: 外部平台商品 ID。
+        external_sku_id:
+          type: string
+          description: 外部平台 SKU ID。
         title:
           type: string
         sku:

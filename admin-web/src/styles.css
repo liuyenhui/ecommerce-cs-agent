@@ -667,6 +667,10 @@ pre {
   align-items: start;
 }
 
+.workGrid.singlePane {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .contentPane {
   min-width: 0;
   display: grid;
@@ -742,6 +746,20 @@ pre {
   gap: 8px;
   align-items: center;
   padding: 10px;
+}
+
+.workGrid.singlePane .filterBar {
+  grid-template-columns: auto minmax(180px, 320px) auto;
+  justify-content: start;
+}
+
+.inlineStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #667489;
+  font-size: 13px;
+  font-weight: 680;
 }
 
 .sectionHeader {
@@ -972,6 +990,26 @@ tbody tr:hover {
   border-radius: 6px;
   background: #ffffff;
   padding: 18px;
+}
+
+.uploadModal {
+  width: min(620px, 100%);
+}
+
+.modalHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.modalHeader h2 {
+  margin: 0;
+}
+
+.draftFields {
+  display: grid;
+  gap: 12px;
 }
 
 .toast {

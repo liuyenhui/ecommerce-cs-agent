@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
+
 from fastapi.testclient import TestClient
 
 from ecommerce_cs_agent.api.app import create_app
+from ecommerce_cs_agent.core.config import Settings
 
 
 def _admin_cookie(client: TestClient) -> str:
@@ -86,6 +89,134 @@ def test_product_asset_markdown_price_snapshot_and_review_flow_are_persisted() -
     assert review.json()["knowledge_entry_id"].startswith("knowledge-")
     assert health.status_code == 200
     assert health.json()["status"] == "healthy"
+
+
+def test_product_list_is_scoped_to_current_customer_store() -> None:
+    client = TestClient(create_app())
+    cookie = _admin_cookie(client)
+    headers = {"Cookie": cookie}
+
+    first = client.post(
+        "/v1/product-content/products",
+        headers=headers,
+        json={
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "external_product_id": "sku-visible",
+            "title": "可见商品",
+        },
+    )
+    client.post(
+        "/v1/product-content/products",
+        headers=headers,
+        json={
+            "organization_id": "org-001",
+            "store_id": "store-other",
+            "external_product_id": "sku-hidden",
+            "title": "其他店铺商品",
+        },
+    )
+
+    response = client.get("/v1/product-content/products?store_id=store-001", headers=headers)
+
+    assert first.status_code == 201
+    assert response.status_code == 200
+    assert response.json()["page_info"]["total"] == 1
+    assert response.json()["items"] == [
+        {
+            "product_id": first.json()["product_id"],
+            "store_id": "store-001",
+            "external_product_id": "sku-visible",
+            "title": "可见商品",
+            "status": "active",
+            "health_status": "healthy",
+            "updated_at": response.json()["items"][0]["updated_at"],
+        }
+    ]
+
+
+def test_product_import_draft_upload_analyzes_without_creating_product() -> None:
+    client = TestClient(create_app(Settings(environment="test", object_storage_backend="memory")))
+    cookie = _admin_cookie(client)
+    headers = {"Cookie": cookie}
+    content = "标题: AI 提取商品\n外部商品ID: sku-ai-draft\n材质为棉。"
+
+    response = client.post(
+        "/v1/product-content/product-import-drafts",
+        headers=headers,
+        json={
+            "store_id": "store-001",
+            "file_name": "manual.txt",
+            "mime_type": "text/plain",
+            "content_base64": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+            "idempotency_key": "draft-upload-001",
+        },
+    )
+    products = client.get("/v1/product-content/products?store_id=store-001", headers=headers)
+    audit = client.get("/v1/admin/audit-logs", headers=headers)
+
+    assert response.status_code == 201
+    assert response.json()["draft_id"].startswith("draft-")
+    assert response.json()["status"] == "draft"
+    assert response.json()["analysis_status"] == "fallback"
+    assert response.json()["draft_product"]["external_product_id"] == "sku-ai-draft"
+    assert response.json()["draft_product"]["title"] == "AI 提取商品"
+    assert products.status_code == 200
+    assert products.json()["items"] == []
+    assert "content_base64" not in str(audit.json()["items"])
+
+
+def test_product_import_draft_confirm_creates_product_asset_idempotently() -> None:
+    client = TestClient(create_app(Settings(environment="test", object_storage_backend="memory")))
+    cookie = _admin_cookie(client)
+    headers = {"Cookie": cookie}
+    upload = client.post(
+        "/v1/product-content/product-import-drafts",
+        headers=headers,
+        json={
+            "store_id": "store-001",
+            "file_name": "manual.txt",
+            "mime_type": "text/plain",
+            "content_base64": base64.b64encode("标题: 草稿商品\n外部商品ID: sku-confirm".encode("utf-8")).decode("ascii"),
+            "idempotency_key": "draft-upload-002",
+        },
+    )
+
+    first = client.post(
+        f"/v1/product-content/product-import-drafts/{upload.json()['draft_id']}/confirm",
+        headers=headers,
+        json={
+            "idempotency_key": "confirm-001",
+            "draft_product": {
+                "external_product_id": "sku-confirm",
+                "title": "确认后商品",
+                "status": "active",
+                "attributes": {"material": "cotton"},
+            },
+        },
+    )
+    second = client.post(
+        f"/v1/product-content/product-import-drafts/{upload.json()['draft_id']}/confirm",
+        headers=headers,
+        json={
+            "idempotency_key": "confirm-001",
+            "draft_product": {
+                "external_product_id": "sku-confirm",
+                "title": "确认后商品",
+                "status": "active",
+                "attributes": {"material": "cotton"},
+            },
+        },
+    )
+    products = client.get("/v1/product-content/products?store_id=store-001", headers=headers)
+
+    assert first.status_code == 201
+    assert second.status_code == 200
+    assert second.json()["product_id"] == first.json()["product_id"]
+    assert first.json()["asset_id"].startswith("asset-")
+    assert first.json()["analysis_status"] == "fallback"
+    assert products.json()["page_info"]["total"] == 1
+    assert products.json()["items"][0]["title"] == "确认后商品"
 
 
 def test_product_asset_storage_unavailable_returns_503_contract_error() -> None:

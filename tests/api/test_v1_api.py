@@ -36,6 +36,31 @@ def minimal_reply_request(request_id: str = "req-001", content: str = "这个订
     }
 
 
+def platform_listing_reply_request(request_id: str = "req-listing", content: str = "这个商品有哪些尺寸？") -> dict:
+    return {
+        "request_id": request_id,
+        "platform": "pdd",
+        "external_store_id": "pdd-store-001",
+        "platform_account_ref": "pdd-account-main",
+        "listing_ref": "pdd-listing-001",
+        "external_product_id": "pdd-product-001",
+        "external_sku_id": "pdd-sku-001",
+        "message": {
+            "external_message_id": f"msg-{request_id}",
+            "sender_type": "buyer",
+            "content": content,
+            "sent_at": "2026-06-12T10:15:00+08:00",
+        },
+        "conversation": {
+            "external_conversation_id": f"conv-{request_id}",
+            "buyer_ref": "buyer-hash-001",
+            "messages": [],
+        },
+        "mode": "assist_first",
+        "context": {"orders": [], "logistics": [], "rules": []},
+    }
+
+
 def test_health_is_public_and_stateless():
     response = client().get("/health")
 
@@ -73,6 +98,31 @@ def test_reply_decision_requests_missing_order_and_logistics_context_and_is_idem
     assert [item["type"] for item in body["context_requests"]] == ["orders", "logistics"]
     assert body["trace"]["graph_version"] == "reply-decision-graph-v1"
     assert body["trace"]["steps"]
+
+
+def test_reply_decision_accepts_platform_store_listing_context_without_public_organization_id():
+    response = client().post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=platform_listing_reply_request(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["action"] == "context_request"
+    assert body["missing_context"] == ["products"]
+    assert body["context_requests"][0]["type"] == "products"
+    assert body["context_requests"][0]["query"] == {
+        "platform": "pdd",
+        "external_store_id": "pdd-store-001",
+        "platform_account_ref": "pdd-account-main",
+        "listing_ref": "pdd-listing-001",
+        "external_product_id": "pdd-product-001",
+        "external_sku_id": "pdd-sku-001",
+        "buyer_ref": "buyer-hash-001",
+        "conversation_id": "conv-req-listing",
+    }
+    assert body["trace"]["tenant_id"].startswith("tenant-")
 
 
 def test_reply_decision_trace_contains_replayable_graph_steps():

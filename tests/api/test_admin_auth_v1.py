@@ -10,7 +10,7 @@ def test_customer_admin_login_creates_server_session_and_me_matches_openapi_shap
 
     login = client.post(
         "/v1/admin/auth/login",
-        json={"email": "admin@example.test", "password": "admin-password", "organization_id": "org-001"},
+        json={"email": "admin@example.test", "password": "admin-password"},
     )
     assert login.status_code == 200
     assert "agent_admin_session=" in login.headers["set-cookie"]

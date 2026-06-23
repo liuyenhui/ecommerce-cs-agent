@@ -30,9 +30,10 @@
 
 - 客服 Agent 是独立系统，任何外部客服、ERP、订单、仓储或平台接入系统都应通过标准 HTTP API 单独接入。
 - 客户 Admin 后台属于客服 Agent 自身，不由任何外部系统承载，也不依赖外部系统登录态、组织表、店铺表、用户表、session、token 或 Admin。
-- 外部系统只能作为数据来源或动作执行方，通过 `organization.external_ref`、`store.external_store_id`、`platform_account.external_account_id`、`platform_account.auth_ref` 等通用引用字段建立映射。
+- 外部系统只能作为数据来源或动作执行方，通过 API Key / Connector Token、`store.external_store_id`、`platform_account.external_account_id`、`platform_account.auth_ref`、`listing_ref`、`external_product_id`、`external_sku_id` 等通用引用字段建立映射；公开接入不要求对方传或理解 `organization_id`。
 - 外部系统数据库主键、账号 ID 或登录态不能直接作为客服 Agent 的权限来源；进入 Agent 后必须映射到 Agent 自有 `organization`、`store` 和 Admin 成员权限。
 - ERP 只能作为外部系统的一种实现示例，不能成为默认身份源、默认上游或必需部署组件。
+- Customer Admin UI 面向客户时不展示“组织 / organization / org-xxx”口径；内部仍使用 `organization_id` 做租户隔离、权限校验和审计归属，页面只呈现店铺、商品资料、知识审核和审计等客户能直接理解的对象。
 
 边界规则：
 
@@ -114,7 +115,7 @@
 - Admin 后台不做 Notion 化，应继续采用 IBM / Carbon 式密集、可扫描、低阴影、1px hairline、表格 / 队列 / 配置表单优先的企业操作台规则。
 - Linear 的暗色处理只用于宣传页局部产品预览或截图容器，不把整个 Admin 做成暗色系统。
 - 组件库可以使用 Ant Design，但 Ant Design 是组件能力层，不是视觉风格来源；最终视觉由项目主题 token、自定义 CSS 和上述分工控制。
-- 移动端未登录状态不得渲染后台左侧导航或后台菜单，登录页首屏必须优先展示邮箱、密码、组织 ID 和提交按钮。
+- 移动端未登录状态不得渲染后台左侧导航或后台菜单，登录页首屏必须优先展示邮箱、密码和提交按钮；组织 / 店铺上下文在登录成功后从 `GET /v1/admin/auth/me` 返回的可访问列表中选择。
 - 移动端登录后保留桌面左侧 rail 的信息架构，但通过顶部应用栏的菜单按钮打开抽屉式导航；导航项点击后关闭抽屉，按钮触控高度不小于 44px，长中文标签可截断或换行且不得造成横向溢出。
 - Admin 后台预览仍采用 IBM / Carbon 式密集企业控制台，只作为产品演示截图或轮播内容，不让整个公开页变成后台。
 - 字体使用 PingFang SC / system-ui / Inter / JetBrains Mono 等可用替代字体；不得使用外部品牌授权字体。
@@ -126,11 +127,11 @@
 | 页面 | 核心能力 |
 | --- | --- |
 | 公开宣传页 | 产品介绍、能力摘要、后台产品预览和登录按钮；Hero 下方展示商品信息、AI 自学习、AI 客服回复可控 3 张产品演示轮播；“怎么工作”段落使用短 GIF 或等效动效展示上传商品说明书 → AI 学习 → 模拟问答 → AI 自动回复；不展示租户数据。 |
-| 登录页 | 用户登录、会话续期、退出登录、登录失败提示。 |
-| 组织 / 店铺选择 | 显示当前用户可访问组织和店铺，切换后刷新所有配置上下文。 |
+| 登录页 | 用户使用邮箱和密码登录、会话续期、退出登录、登录失败提示；不要求或展示组织 ID。 |
+| 店铺选择 | 显示当前用户可访问店铺；内部租户归属由 session 和权限模型确定，不在客户 UI 中展示组织 ID。 |
 | 首页概览 | 展示资料缺口、待审核知识、价格过期、规则未启用、动作能力异常和最近变更。 |
-| 商品资料 | 创建和编辑商品、SKU、属性、适用范围、状态；查看资料体检结果。 |
-| 资料上传 | 上传说明书、照片、视频，查看转换状态、Markdown 审稿稿件、版本和对象存储引用。 |
+| 商品资料 | 以商品主数据列表为第一入口，展示商品名称、外部商品 ID、店铺、状态、资料健康和更新时间。 |
+| 资料上传 | 在商品资料页右上角通过“上传商品”弹窗上传说明书、照片、视频或文本；系统先保存原始对象并调用 AI 分析必要字段，生成导入草稿，用户确认后才创建 / 更新正式商品和资料资产。 |
 | 价格快照 | 查看当前有效价格、活动价、生效时间、失效时间、来源和冲突提示。 |
 | 知识审核 | 对 `product_knowledge_candidate`、`knowledge_candidate`、`knowledge_eval_case` 执行批准、拒绝、改写、脱敏和标注。 |
 | 规则配置 | 维护 `rule_set`，包括规则类型、优先级、条件、动作、启用状态、版本和生效时间。 |
@@ -140,12 +141,13 @@
 关键工作流：
 
 1. 用户从公开宣传页点击登录，进入 Agent 自有登录页。
-2. 用户登录后台，选择组织和店铺。
-3. 资料维护员上传或编辑商品资料，系统保存原始资产、版本、hash 和适用 SKU。
-4. 系统将可解析资料转换为 Markdown 审稿稿件，并抽取知识候选和模拟问答。
-5. 知识审核员对照原文审核，批准后才写入 `knowledge_entry` 并生成 `knowledge_embedding`。
-6. 规则运营配置店铺规则和动作能力，系统写入版本、审计和生效时间。
-7. Agent 决策时只读取当前有效的商品资料、审核知识、价格快照、规则和动作能力。
+2. 用户登录后台，选择店铺；组织只作为内部租户隔离，不在客户 UI 中展示。
+3. 资料维护员在商品资料页上传商品文档，系统保存原始对象、版本、hash 和对象引用，并调用 AI 分析标题、外部商品 ID、属性等必要字段。
+4. 系统返回可编辑导入草稿；用户确认后才创建 / 更新商品主数据和资料资产。
+5. 系统将可解析资料转换为 Markdown 审稿稿件，并抽取知识候选和模拟问答。
+6. 知识审核员对照原文审核，批准后才写入 `knowledge_entry` 并生成 `knowledge_embedding`。
+7. 规则运营配置店铺规则和动作能力，系统写入版本、审计和生效时间。
+8. Agent 决策时只读取当前有效的商品资料、审核知识、价格快照、规则和动作能力。
 
 ## 5. 后台 API 分组
 
@@ -157,7 +159,7 @@
 | 登录与会话 | `POST /v1/admin/auth/login`、`POST /v1/admin/auth/logout`、`GET /v1/admin/auth/me` | 登录、退出、读取当前用户、组织、店铺和角色。 |
 | 组织与店铺 | `GET /v1/admin/organizations`、`GET /v1/admin/stores`、`PATCH /v1/admin/stores/{store_id}/settings` | 查看可访问组织/店铺，维护店铺设置。 |
 | 用户与权限 | `GET /v1/admin/users`、`POST /v1/admin/invitations`、`PATCH /v1/admin/users/{user_id}/roles` | 组织管理员维护成员、邀请和角色。 |
-| 商品资料 | `POST /v1/product-content/products`、`POST /v1/product-content/assets`、`POST /v1/product-content/assets/{asset_id}/markdown` | 维护商品、SKU、资料资产和 Markdown 审稿稿件。 |
+| 商品资料 | `GET /v1/product-content/products`、`POST /v1/product-content/products`、`POST /v1/product-content/product-import-drafts`、`POST /v1/product-content/product-import-drafts/{draft_id}/confirm`、`POST /v1/product-content/assets`、`POST /v1/product-content/assets/{asset_id}/markdown` | 查询商品主数据列表；上传商品资料生成 AI 导入草稿；用户确认后维护商品、SKU、资料资产和 Markdown 审稿稿件。 |
 | 知识审核 | `POST /v1/product-content/knowledge-candidates/{candidate_id}/reviews`、`POST /v1/knowledge/entries` | 审核候选片段，批准后形成可召回知识。 |
 | 价格快照 | `POST /v1/product-content/price-snapshots`、`GET /v1/product-content/products/{product_id}/health` | 维护价格快照并检查资料健康状态。 |
 | 规则配置 | `POST /v1/rules/store-rules`、`POST /v1/rules/platform-rules` | 维护店铺级和平台级规则。 |
@@ -171,6 +173,7 @@
 - 后台接口只信任 Agent 自有 Admin session 和成员权限；外部系统 token 只能用于外部系统接入 API，不能直接访问 Admin API。
 - 客户后台路由守卫只能调用 `/v1/admin/auth/me`；不得调用 `/v1/system-admin/auth/me` 探测或复用系统后台登录态。
 - 后台批量导入可以复用同一接口语义，但必须返回每条记录的成功、失败和错误原因。
+- 商品导入草稿确认前不得创建正式商品；上传正文、`content_base64`、Cookie、Authorization 和临时对象存储凭证不得进入审计明文。
 - 同步问答接口 `POST /v1/reply-decisions` 不接收说明书、照片、视频或完整 SKU 资料；这些长期资料必须通过后台 API 维护。
 - 规则、动作能力、价格快照和知识审核结果都应保留版本或审计记录，支持决策回放。
 

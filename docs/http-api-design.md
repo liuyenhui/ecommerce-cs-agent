@@ -37,7 +37,7 @@ GET https://system-admin.ecommerce-cs-agent-dev.fcihome.com/
 ```
 
 - `admin.ecommerce-cs-agent-dev.fcihome.com` 只承载公开宣传页、客户 Admin 登录页和客户后台 shell，不展示“系统后台”入口。
-- 客户后台登录成功后建立客户 Admin session，例如 `agent_admin_session`，并跳转 `/admin`；客户后台路由守卫只调用 `GET /v1/admin/auth/me`。
+- 客户后台登录只提交邮箱和密码，登录成功后建立客户 Admin session，例如 `agent_admin_session`，并跳转 `/admin`；组织 / 店铺上下文来自 `GET /v1/admin/auth/me` 返回的可访问列表，客户后台路由守卫只调用该接口。
 - `system-admin.ecommerce-cs-agent-dev.fcihome.com` 承载系统 Admin 登录页和系统后台 shell，`ops-admin.ecommerce-cs-agent-dev.fcihome.com` 只作为可选别名。
 - 系统后台登录成功后建立系统 Admin session，例如 `agent_system_admin_session`；系统后台路由守卫只调用 `GET /v1/system-admin/auth/me`。
 - 客户 Admin session、系统 Admin session 和外部系统 API token 互不互认；服务端 session 状态必须保存在数据库、Redis 或等价外部存储，不能依赖单容器内存。
@@ -79,11 +79,17 @@ POST <external_callback_url>
 同步决策请求必填字段只保留：
 
 - `request_id`：外部请求幂等键。
-- `organization_id` / `store_id`：租户和店铺隔离字段。
 - `platform`：平台标识。
+- `external_store_id`：外部系统里的店铺或业务单元引用；服务端映射到内部 `tenant` / `store`。
 - `message`：买家当前消息、平台消息 ID、发送时间。
 - `conversation`：最小会话上下文，至少包含外部会话 ID、买家脱敏引用和可选最近消息。
 - `mode`：决策模式，例如 `assist_first`、`auto_when_safe`。
+
+可选定位字段用于多平台、多店铺和同商品多销售实例：
+
+- `platform_account_ref`：平台账号或 Connector 引用。
+- `listing_ref`：某平台、某店铺、某商品链接或 SKU 的销售实例引用。
+- `external_product_id` / `external_sku_id`：外部平台商品和 SKU 引用，只能作为补上下文查询条件；缺少可信商品资料时不能让 Agent 猜测。
 
 商品、订单、物流和规则都是可选上下文。外部系统如果已经有低成本、可信的上下文，可以随主请求传入；如果没有，Agent 先做轻量意图和上下文需求判断，一次性返回当前可判断出的 `context_requests[]`。客户端按类型并行调用补充接口，服务端用同一个 `decision_id` 聚合上下文，直到返回明确可答复内容、动作请求或人工介入。
 
@@ -114,9 +120,12 @@ POST /v1/reply-decisions
 ```json
 {
   "request_id": "external-idempotency-key",
-  "organization_id": "org-001",
   "platform": "pdd",
-  "store_id": "store-001",
+  "external_store_id": "pdd-store-001",
+  "platform_account_ref": "pdd-account-main",
+  "listing_ref": "pdd-listing-001",
+  "external_product_id": "pdd-product-001",
+  "external_sku_id": "pdd-sku-001",
   "message": {
     "external_message_id": "msg-001",
     "sender_type": "buyer",
@@ -740,14 +749,16 @@ POST /v1/admin/rules/rule-sets/{rule_set_id}/releases
 
 ### 7. 多租户和权限
 
-后续要把组织、店铺、平台账号和客服账号分开：
+后续要把内部租户、店铺、平台账号、销售实例和客服账号分开：
 
-- 一个组织可有多个店铺。
-- 一个店铺可接多个平台账号。
+- 外部接入 API 不要求集成方传 `organization_id`；API Key / Connector Token 和 `external_store_id`、`platform_account_ref` 映射到内部 `tenant` / `store`。
+- 一个内部 `tenant` 可有多个 `store`。
+- 一个 `store` 可接多个 `platform_account`。
+- 同一个 `product_master` 可通过多个 `listing` 在不同平台、不同店铺、不同链接或 SKU 售卖。
 - 不同店铺的知识、规则、订单和会话必须隔离。
-- API Key 应绑定组织或店铺权限。
+- API Key 应绑定 tenant、store 或 Connector 权限，不能直接访问 Admin API。
 
-第一版即使不完整实现，也应在字段设计中保留 `organization_id`、`store_id` 和 `platform`。
+第一版外部字段应保留 `platform`、`external_store_id`、`platform_account_ref` 和 `listing_ref`；内部仍可用 `organization` 表承载 tenant 兼容实现，但不把它暴露成集成方必须理解的身份源。
 
 ## 第一版落地边界
 

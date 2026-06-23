@@ -21,6 +21,8 @@ REQUIRED_PATHS = {
     "/v1/admin/auth/me",
     "/v1/admin/audit-logs",
     "/v1/product-content/products",
+    "/v1/product-content/product-import-drafts",
+    "/v1/product-content/product-import-drafts/{draft_id}/confirm",
     "/v1/product-content/assets",
     "/v1/product-content/price-snapshots",
     "/v1/system-admin/auth/login",
@@ -35,6 +37,8 @@ CORE_JSON_REQUESTS = {
     ("post", "/v1/reply-decisions"): "#/components/schemas/ReplyDecisionCreateRequest",
     ("post", "/v1/admin/auth/login"): "#/components/schemas/AdminLoginRequest",
     ("post", "/v1/product-content/products"): "#/components/schemas/ProductUpsertRequest",
+    ("post", "/v1/product-content/product-import-drafts"): "#/components/schemas/ProductImportDraftCreateRequest",
+    ("post", "/v1/product-content/product-import-drafts/{draft_id}/confirm"): "#/components/schemas/ProductImportDraftConfirmRequest",
     ("post", "/v1/product-content/assets"): "#/components/schemas/ProductAssetCreateRequest",
     ("post", "/v1/product-content/price-snapshots"): "#/components/schemas/ProductPriceSnapshotRequest",
     ("post", "/v1/system-admin/auth/login"): "#/components/schemas/SystemAdminLoginRequest",
@@ -48,6 +52,9 @@ CORE_JSON_RESPONSES = {
     ("get", "/v1/admin/users", "200"): "#/components/schemas/AdminUserListResponse",
     ("get", "/v1/admin/audit-logs", "200"): "#/components/schemas/AuditLogListResponse",
     ("post", "/v1/product-content/products", "201"): "#/components/schemas/ProductUpsertResponse",
+    ("get", "/v1/product-content/products", "200"): "#/components/schemas/ProductListResponse",
+    ("post", "/v1/product-content/product-import-drafts", "201"): "#/components/schemas/ProductImportDraftResponse",
+    ("post", "/v1/product-content/product-import-drafts/{draft_id}/confirm", "201"): "#/components/schemas/ProductImportDraftConfirmResponse",
     ("post", "/v1/product-content/assets", "201"): "#/components/schemas/ProductAssetResponse",
     ("post", "/v1/product-content/price-snapshots", "201"): "#/components/schemas/ProductPriceSnapshotResponse",
     ("get", "/v1/system-admin/auth/me", "200"): "#/components/schemas/SystemAdminMeResponse",
@@ -61,6 +68,7 @@ CORE_JSON_RESPONSES = {
 PAGINATED_SCHEMAS = {
     "AdminUserListResponse",
     "AuditLogListResponse",
+    "ProductListResponse",
     "SystemMessageTraceListResponse",
     "TaskListResponse",
 }
@@ -268,6 +276,40 @@ class OpenApiContractTest(unittest.TestCase):
                 failures.append(f"{schema_name}.page_info must reference PageInfo")
 
         self.assertEqual(failures, [], "\n".join(failures))
+
+    def test_external_reply_decision_contract_uses_platform_store_listing_context(self):
+        schema = self.document["components"]["schemas"]["ReplyDecisionCreateRequest"]
+        required = set(schema["required"])
+        properties = schema["properties"]
+
+        self.assertNotIn("organization_id", required)
+        self.assertIn("platform", required)
+        self.assertIn("external_store_id", required)
+        self.assertIn("platform_account_ref", properties)
+        self.assertIn("listing_ref", properties)
+        self.assertIn("external_product_id", properties)
+        self.assertIn("external_sku_id", properties)
+
+        example = self.document["paths"]["/v1/reply-decisions"]["post"]["requestBody"]["content"]["application/json"]["examples"]["waitingContext"]["value"]
+        self.assertNotIn("organization_id", example)
+        self.assertEqual(example["external_store_id"], "pdd-store-001")
+        self.assertEqual(example["platform_account_ref"], "pdd-account-main")
+
+    def test_customer_admin_login_contract_does_not_use_organization_id(self):
+        schema = self.document["components"]["schemas"]["AdminLoginRequest"]
+
+        self.assertEqual(set(schema["required"]), {"email", "password"})
+        self.assertNotIn("organization_id", schema["properties"])
+
+    def test_product_snapshot_contract_separates_master_product_and_listing_context(self):
+        schema = self.document["components"]["schemas"]["ProductSnapshot"]
+        properties = schema["properties"]
+
+        self.assertIn("product_master_ref", properties)
+        self.assertIn("listing_ref", properties)
+        self.assertIn("external_store_id", properties)
+        self.assertIn("platform_account_ref", properties)
+        self.assertIn("external_sku_id", properties)
 
 
 if __name__ == "__main__":

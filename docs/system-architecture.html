@@ -1529,17 +1529,17 @@
       badges: ['REST', 'HTTP/JSON', 'OpenAPI', 'API Key / Bearer Token', 'Idempotency-Key'],
       quickStart: {
         title: '快速开始',
-        description: '外部客服系统先申请 API Token，并在每次主请求中传入租户、店铺、平台、消息、最小会话、模式和幂等键。第一版同步调用 reply decision；缺上下文时按 context_requests[] 并行调用 products / orders / logistics / rules 回填接口。',
+        description: '外部客服系统先申请 API Token，并在每次主请求中传入平台、外部店铺、平台账号、listing / 商品 / SKU 引用、消息、最小会话、模式和幂等键。第一版同步调用 reply decision；缺上下文时按 context_requests[] 并行调用 products / orders / logistics / rules 回填接口。',
         steps: [
           '准备 Authorization: Bearer token，并为每次请求生成稳定的 Idempotency-Key。',
-          '调用 POST /v1/reply-decisions 时只必填 request_id、organization_id/store_id、platform、message、最小 conversation 和 mode；已有商品、订单、物流、规则可以作为可选上下文传入。',
+          '调用 POST /v1/reply-decisions 时只必填 request_id、platform、external_store_id、message、最小 conversation 和 mode；platform_account_ref、listing_ref、商品 / SKU 引用用于定位销售上下文。',
           '如果返回 context_requests[]，按 type 并行调用 /contexts/products、/contexts/orders、/contexts/logistics 或 /contexts/rules，服务端聚合同一 decision_id。',
           '根据 action 和 decision_status 渲染候选、自动回复、转人工原因、补上下文字段或外部动作确认；总等待预算最高 5 秒。',
           '客服最终回复后调用 POST /v1/feedback/human-replies，形成反馈和待审核知识候选；商品说明书上传后先形成 Markdown 审稿稿件和片段候选。',
           '排障或客服解释时调用 GET /v1/message-traces/{decision_id} 查询处理过程。'
         ],
         businessFlow: [
-          ['1. 接收买家消息', '外部客服系统负责接收平台买家消息、维护会话归属、展示客服工作台和执行真实发送动作。接入客服 Agent(客服智能体) 前，外部系统只需准备 tenant(租户)、store(店铺)、platform(电商平台)、message(消息)、conversation(最小会话) 和 mode(模式)。'],
+          ['1. 接收买家消息', '外部客服系统负责接收平台买家消息、维护会话归属、展示客服工作台和执行真实发送动作。接入客服 Agent(客服智能体) 前，外部系统只需准备 platform(电商平台)、external_store_id(外部店铺)、platform_account_ref(平台账号)、listing_ref(销售实例)、message(消息)、conversation(最小会话) 和 mode(模式)。'],
           ['2. 调用决策接口', '外部系统使用 Authorization(授权凭证) 和 Idempotency-Key(幂等键) 调用 POST(提交) /v1/reply-decisions(创建回复决策)，把本次消息、最小会话和可选已有上下文提交给客服 Agent(客服智能体)。客服 Agent(客服智能体) 对外是黑盒，接入方只依赖接口协议和返回字段。'],
           ['3. 读取返回动作', '客服 Agent(客服智能体) 返回 decision_id(决策编号)、decision_status(决策状态)、action(处理动作)、confidence(置信度)、reply_text(回复文本)、context_requests(补上下文请求列表)、action_request(动作执行请求) 和 trace_summary(追踪摘要)。外部系统只根据 action(处理动作) 处理结果，不依赖客服 Agent(客服智能体) 的实现细节。'],
           ['4. 展示、发送或转人工', '当 action(处理动作) 是 auto_reply(自动回复) 时，外部系统决定是否自动发送；当 action(处理动作) 是 candidate(候选回复) 时，外部系统展示给客服确认或编辑；当 action(处理动作) 是 handoff(转人工) 时，外部系统转人工并展示原因。'],
@@ -1558,8 +1558,11 @@
           purpose: '同步生成单条买家消息的回复决策。',
           request: [
             ['request_id', 'string', '必填，外部请求幂等键。'],
-            ['organization_id / store_id', 'string', '必填，租户和店铺隔离字段。'],
             ['platform', 'string', '必填，pdd / taobao / jd / douyin 等。'],
+            ['external_store_id', 'string', '必填，外部系统店铺或业务单元引用；服务端映射到内部 tenant / store。'],
+            ['platform_account_ref', 'string', '可选，平台账号或 Connector 引用。'],
+            ['listing_ref', 'string', '可选，某平台、某店铺、某商品链接或 SKU 的销售实例引用。'],
+            ['external_product_id / external_sku_id', 'string', '可选，外部平台商品 / SKU 引用；缺可信商品资料时只作为补上下文查询条件。'],
             ['mode', 'enum', '必填，assist_first / auto_when_safe / evaluate_only 等决策模式。'],
             ['message', 'object', '必填，外部消息 ID、内容、发送方和时间。', [
               ['external_message_id', 'string', '必填，外部客服系统或平台消息 ID，用于幂等去重。'],
@@ -1990,9 +1993,12 @@
         '  -H "Idempotency-Key: msg_20260612_0001" \\',
         '  -d \'{',
         '    "request_id": "msg_20260612_0001",',
-        '    "organization_id": "org_001",',
-        '    "store_id": "store_pdd_001",',
         '    "platform": "pdd",',
+        '    "external_store_id": "pdd-store-001",',
+        '    "platform_account_ref": "pdd-account-main",',
+        '    "listing_ref": "pdd-listing-001",',
+        '    "external_product_id": "pdd-product-001",',
+        '    "external_sku_id": "pdd-sku-001",',
         '    "message": {',
         '      "external_message_id": "m_10086",',
         '      "sender_type": "buyer",',
@@ -2285,7 +2291,7 @@
         points: [
           'decision_record.trace 保存规则命中、知识来源、商品资料版本、价格快照、模型版本、缺失上下文和 selected_snapshot_refs。',
           'decision_graph_checkpoint 保存 LangGraph thread state、node_name、resume_token、graph_version 和 decision_status，生产环境不能依赖 API 容器内存。',
-          'product_profile / product_sku_profile / product_asset 记录客户后台维护的商品主资料、SKU 和原始资产。',
+          'product_master / product_profile 记录通用商品主资料，listing / store_product 记录平台、店铺、链接和 SKU 售卖实例。',
           'product_asset_markdown 是可读审稿稿件，不直接作为自动回复知识源。',
           'product_knowledge_candidate 是从 Markdown 抽取的待审核知识片段，批准后才进入 knowledge_entry。',
           'knowledge_eval_case 保存 LLM 生成并经人工确认的模拟问答，用于覆盖率检查和回归评测。',
@@ -2297,9 +2303,9 @@
           'Admin 审核台必须支持脱敏、改写、批准和拒绝，批准后才写 knowledge_entry / embedding。'
         ],
         metrics: [
-          ['主租户字段', 'organization_id / store_id'],
+          ['主租户字段', 'tenant_id / store_id'],
           ['平台隔离字段', 'platform / external_*_id'],
-          ['商品资料', 'product_profile / product_asset'],
+          ['商品资料', 'product_master / listing / product_asset'],
           ['价格权威', 'product_price_snapshot'],
           ['编排状态', 'decision_graph_checkpoint'],
           ['动作契约', 'action_type / payload_schema'],
@@ -2330,7 +2336,7 @@
     const databaseSchema = [
       {
         table: 'organization',
-        purpose: '组织 / 租户根实体。',
+        purpose: '内部 tenant / 租户根实体；外部接入不要求传 organization_id。',
         key: 'id PK',
         relations: '-',
         fields: 'name, status, metadata JSONB, created_at, updated_at'
@@ -2350,9 +2356,16 @@
         fields: 'platform, external_account_id, auth_ref, capabilities JSONB, status'
       },
       {
+        table: 'listing',
+        purpose: '某平台、某店铺、某商品链接或 SKU 的销售实例。',
+        key: 'id PK; UNIQUE(store_id, platform, listing_ref)',
+        relations: 'store_id FK -> store.id, platform_account_id FK, product_profile_id FK',
+        fields: 'listing_ref, external_product_id, external_sku_id, title, status, metadata JSONB'
+      },
+      {
         table: 'product_profile',
-        purpose: '客户后台维护的商品主资料，作为说明书、SKU、价格和知识的归属根。',
-        key: 'id PK; UNIQUE(store_id, external_product_id)',
+        purpose: '客户后台维护的通用商品主资料，作为说明书、SKU、价格和知识的归属根。',
+        key: 'id PK; product_master_ref 或 UNIQUE(store_id, external_product_id)',
         relations: 'store_id FK -> store.id',
         fields: 'external_product_id, title, category, status, description, metadata JSONB, updated_at'
       },
@@ -2684,11 +2697,12 @@
       dataModel: {
         layout: 'LayeredDigraph',
         nodes: [
-          { key: 'org', text: '组织\nORGANIZATION', sub: 'PK id / metadata JSONB', kind: 'external' },
-          { key: 'store', text: '店铺\nSTORE', sub: 'FK organization_id / platform', kind: 'external' },
+          { key: 'org', text: '租户\nORGANIZATION', sub: '内部 tenant boundary / metadata JSONB', kind: 'external' },
+          { key: 'store', text: '店铺\nSTORE', sub: 'FK tenant / platform', kind: 'external' },
           { key: 'platform', text: '平台账号\nPLATFORM_ACCOUNT', sub: 'FK store_id / external_account_id', kind: 'external' },
-          { key: 'productProfile', text: '商品资料\nPRODUCT_PROFILE', sub: 'external_product_id / status', kind: 'data' },
-          { key: 'skuProfile', text: 'SKU 资料\nPRODUCT_SKU_PROFILE', sub: 'sku_code / attributes', kind: 'data' },
+          { key: 'productProfile', text: '商品主资料\nPRODUCT_PROFILE', sub: 'product_master_ref / status', kind: 'data' },
+          { key: 'listing', text: '销售实例\nLISTING', sub: 'listing_ref / external_store_id / platform', kind: 'data' },
+          { key: 'skuProfile', text: 'SKU 资料\nPRODUCT_SKU_PROFILE', sub: 'external_sku_id / attributes', kind: 'data' },
           { key: 'asset', text: '商品资产\nPRODUCT_ASSET', sub: 'manual / photo / video / version', kind: 'data' },
           { key: 'assetMarkdown', text: 'Markdown 审稿\nPRODUCT_ASSET_MARKDOWN', sub: 'source_map / conversion_status', kind: 'data' },
           { key: 'priceSnapshot', text: '价格快照\nPRODUCT_PRICE_SNAPSHOT', sub: 'source / effective_at / expires_at', kind: 'data' },
@@ -2714,11 +2728,12 @@
         ],
         links: [
           ['org', 'store', 'owns'], ['store', 'platform', 'connects'], ['store', 'conversation', 'has'],
-          ['store', 'productProfile', 'maintains'], ['productProfile', 'skuProfile', 'has'],
+          ['store', 'productProfile', 'maintains'], ['store', 'listing', 'sells'], ['platform', 'listing', 'publishes'],
+          ['productProfile', 'listing', '多渠道售卖'], ['productProfile', 'skuProfile', 'has'], ['listing', 'skuProfile', '售卖 SKU'],
           ['productProfile', 'asset', 'uploads'], ['skuProfile', 'asset', 'applies'],
           ['asset', 'assetMarkdown', '转 Markdown'], ['assetMarkdown', 'productKnowledgeCandidate', '抽取片段'],
           ['productProfile', 'priceSnapshot', '外部价格'],
-          ['productProfile', 'product', '引用资料'], ['skuProfile', 'product', '引用 SKU'], ['priceSnapshot', 'product', '引用价格'],
+          ['productProfile', 'product', '引用资料'], ['listing', 'product', '销售上下文'], ['skuProfile', 'product', '引用 SKU'], ['priceSnapshot', 'product', '引用价格'],
           ['conversation', 'message', 'contains'], ['message', 'product', 'references'],
           ['message', 'order', 'references'], ['conversation', 'decision', 'produces'],
           ['decision', 'checkpoint', 'checkpoints'],
@@ -2878,10 +2893,11 @@
         store: [1, 1],
         platform: [0, 2],
         productProfile: [3, 1],
+        listing: [3, 2],
         skuProfile: [4, 1],
-        asset: [3, 2],
-        assetMarkdown: [4, 2],
-        priceSnapshot: [4, 3],
+        asset: [4, 2],
+        assetMarkdown: [5, 2],
+        priceSnapshot: [5, 3],
         conversation: [1, 2],
         rules: [2, 2],
         message: [1, 3],

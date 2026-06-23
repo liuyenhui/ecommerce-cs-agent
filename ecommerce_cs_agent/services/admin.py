@@ -14,11 +14,21 @@ from ecommerce_cs_agent.services.object_storage import (
     InMemoryObjectStorage,
     ObjectStorage,
     ReferenceObjectStorage,
+    S3ObjectStorage,
 )
 
 
 class AdminRepository(Protocol):
+    def list_products(self, organization_id: str, store_id: str, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+        raise NotImplementedError
+
     def upsert_product(self, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def create_product_import_draft(self, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def confirm_product_import_draft(self, draft_id: str, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
         raise NotImplementedError
 
     def review_knowledge_candidate(self, candidate_id: str, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
@@ -55,6 +65,7 @@ class InMemoryAdminRepository:
         self.assets: dict[str, dict[str, Any]] = {}
         self.markdowns: dict[str, dict[str, Any]] = {}
         self.price_snapshots: dict[str, dict[str, Any]] = {}
+        self.product_import_drafts: dict[str, dict[str, Any]] = {}
         self.knowledge_candidates: dict[str, dict[str, Any]] = {}
         self.knowledge_entries: dict[str, dict[str, Any]] = {}
         self.knowledge_embeddings: dict[str, dict[str, Any]] = {}
@@ -62,11 +73,116 @@ class InMemoryAdminRepository:
         self._object_storage = object_storage or InMemoryObjectStorage()
         self._embedding_provider = embedding_provider or DeterministicEmbeddingProvider()
 
+    def list_products(self, organization_id: str, store_id: str, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+        rows = [
+            _product_list_item(product, self.product_health(str(product["product_id"])))
+            for product in self.products.values()
+            if product.get("organization_id") == organization_id and product.get("store_id") == store_id
+        ]
+        rows.sort(key=lambda item: str(item.get("updated_at", "")), reverse=True)
+        start = max(page - 1, 0) * page_size
+        end = start + page_size
+        return {"items": rows[start:end], "page_info": _page_info(page, page_size, len(rows))}
+
     def upsert_product(self, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
         product = _product_from_payload(payload)
+        existing = self.products.get(product["product_id"])
+        product["created_at"] = existing.get("created_at", _now()) if existing else _now()
+        product["updated_at"] = _now()
         self.products[product["product_id"]] = product
         self._audit("admin", product["organization_id"], product["store_id"], actor_id, "product.upsert", "product", product["product_id"], _safe_diff_summary(payload))
         return product
+
+    def create_product_import_draft(self, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
+        organization_id = str(payload.get("organization_id", "org-001"))
+        store_id = str(payload.get("store_id", "store-001"))
+        idempotency_key = str(payload.get("idempotency_key") or "")
+        existing = _find_by_idempotency(self.product_import_drafts.values(), idempotency_key)
+        if existing:
+            return existing
+        draft_id = _draft_id(organization_id, store_id, idempotency_key or str(payload.get("file_hash", payload.get("file_name", "upload"))))
+        file_name = str(payload.get("file_name") or "product-document")
+        storage_payload = {
+            **payload,
+            "file_ref": payload.get("file_ref") or f"product-import-drafts/{draft_id}/{file_name}",
+            "mime_type": payload.get("mime_type", payload.get("content_type", "application/octet-stream")),
+        }
+        stored = self._object_storage.put_or_reference(asset_id=draft_id, payload=storage_payload)
+        draft = {
+            "draft_id": draft_id,
+            "organization_id": organization_id,
+            "store_id": store_id,
+            "status": "draft",
+            "idempotency_key": idempotency_key,
+            "file_name": file_name,
+            "mime_type": stored.mime_type,
+            "object_key": stored.object_key,
+            "object_hash": stored.object_hash,
+            "size_bytes": stored.size_bytes,
+            "storage_status": stored.storage_status,
+            "analysis_status": str(payload.get("analysis_status", "fallback")),
+            "analysis_model": str(payload.get("analysis_model", "")),
+            "analysis_error": payload.get("analysis_error"),
+            "draft_product": payload.get("draft_product", {}),
+            "markdown_text": str(payload.get("markdown_text", "")),
+            "source_map": payload.get("source_map", {}),
+            "created_by": actor_id,
+            "created_at": _now(),
+            "updated_at": _now(),
+            "confirmed_at": None,
+            "confirm_idempotency_key": None,
+            "confirm_response": None,
+        }
+        self.product_import_drafts[draft_id] = draft
+        self._audit("admin", organization_id, store_id, actor_id, "product_import_draft.create", "product_import_draft", draft_id, _draft_audit_summary(payload))
+        return _public_draft(draft)
+
+    def confirm_product_import_draft(self, draft_id: str, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
+        draft = self.product_import_drafts.get(draft_id)
+        if not draft:
+            raise KeyError("draft not found")
+        idempotency_key = str(payload.get("idempotency_key") or "")
+        if draft.get("confirm_idempotency_key") == idempotency_key and draft.get("confirm_response"):
+            return dict(draft["confirm_response"], replayed=True)
+        draft_product = payload.get("draft_product") if isinstance(payload.get("draft_product"), dict) else draft.get("draft_product", {})
+        product = self.upsert_product(
+            {
+                "organization_id": draft["organization_id"],
+                "store_id": draft["store_id"],
+                **draft_product,
+            },
+            actor_id,
+        )
+        asset = self.create_asset(
+            {
+                "organization_id": draft["organization_id"],
+                "store_id": draft["store_id"],
+                "product_id": product["product_id"],
+                "asset_type": "manual",
+                "file_ref": draft["object_key"],
+                "file_hash": draft["object_hash"],
+                "mime_type": draft["mime_type"],
+                "size_bytes": draft["size_bytes"],
+                "version": "v1",
+                "metadata": {"import_draft_id": draft_id, "file_name": draft["file_name"]},
+            },
+            actor_id,
+        )
+        response = {
+            "draft_id": draft_id,
+            "product_id": product["product_id"],
+            "asset_id": asset["asset_id"],
+            "status": "confirmed",
+            "analysis_status": draft["analysis_status"],
+            "draft_product": product,
+        }
+        draft["status"] = "confirmed"
+        draft["updated_at"] = _now()
+        draft["confirmed_at"] = _now()
+        draft["confirm_idempotency_key"] = idempotency_key
+        draft["confirm_response"] = response
+        self._audit("admin", draft["organization_id"], draft["store_id"], actor_id, "product_import_draft.confirm", "product_import_draft", draft_id, _safe_diff_summary(payload))
+        return response
 
     def review_knowledge_candidate(self, candidate_id: str, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
         accepted = payload.get("accepted")
@@ -269,6 +385,37 @@ class PostgresAdminRepository:
         self._object_storage = object_storage or ReferenceObjectStorage()
         self._embedding_provider = embedding_provider or DeterministicEmbeddingProvider()
 
+    def list_products(self, organization_id: str, store_id: str, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT product_id, organization_id, store_id, external_product_id,
+                           title, status, attributes, updated_at
+                    FROM app_product
+                    WHERE organization_id = %s AND store_id = %s
+                    ORDER BY updated_at DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (organization_id, store_id, page_size, max(page - 1, 0) * page_size),
+                )
+                rows = cur.fetchall()
+                cur.execute(
+                    """
+                    SELECT count(*)
+                    FROM app_product
+                    WHERE organization_id = %s AND store_id = %s
+                    """,
+                    (organization_id, store_id),
+                )
+                total_row = cur.fetchone()
+        items = [
+            _product_list_item(_product_from_row(row), self.product_health(str(row[0])))
+            for row in rows
+        ]
+        total = int(total_row[0]) if total_row else len(items)
+        return {"items": items, "page_info": _page_info(page, page_size, total)}
+
     def upsert_product(self, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
         product = _product_from_payload(payload)
         with self._connect(self._database_url) as conn:
@@ -339,6 +486,160 @@ class PostgresAdminRepository:
                 self._canonical_audit(cur, saved["organization_id"], saved["store_id"], actor_id, "product.upsert", "product", saved["product_id"], payload)
                 self._audit(cur, "admin", saved["organization_id"], saved["store_id"], actor_id, "product.upsert", "product", saved["product_id"], payload)
                 return saved
+
+    def create_product_import_draft(self, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
+        organization_id = str(payload.get("organization_id", "org-001"))
+        store_id = str(payload.get("store_id", "store-001"))
+        idempotency_key = str(payload.get("idempotency_key") or "")
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT draft_id, organization_id, store_id, status, idempotency_key,
+                           file_name, mime_type, object_key, object_hash, size_bytes,
+                           storage_status, analysis_status, analysis_model, analysis_error,
+                           draft_product, markdown_text, source_map, created_by, created_at,
+                           updated_at, confirmed_at, confirm_idempotency_key, confirm_response
+                    FROM product_import_draft
+                    WHERE organization_id = %s AND store_id = %s AND idempotency_key = %s
+                    """,
+                    (organization_id, store_id, idempotency_key),
+                )
+                existing = cur.fetchone()
+                if existing:
+                    return _public_draft(_draft_from_row(existing))
+        draft_id = _draft_id(organization_id, store_id, idempotency_key or str(payload.get("file_name", "upload")))
+        file_name = str(payload.get("file_name") or "product-document")
+        storage_payload = {
+            **payload,
+            "file_ref": payload.get("file_ref") or f"product-import-drafts/{draft_id}/{file_name}",
+            "mime_type": payload.get("mime_type", payload.get("content_type", "application/octet-stream")),
+        }
+        stored = self._object_storage.put_or_reference(asset_id=draft_id, payload=storage_payload)
+        draft = {
+            "draft_id": draft_id,
+            "organization_id": organization_id,
+            "store_id": store_id,
+            "status": "draft",
+            "idempotency_key": idempotency_key,
+            "file_name": file_name,
+            "mime_type": stored.mime_type,
+            "object_key": stored.object_key,
+            "object_hash": stored.object_hash,
+            "size_bytes": stored.size_bytes,
+            "storage_status": stored.storage_status,
+            "analysis_status": str(payload.get("analysis_status", "fallback")),
+            "analysis_model": str(payload.get("analysis_model", "")),
+            "analysis_error": payload.get("analysis_error"),
+            "draft_product": payload.get("draft_product", {}),
+            "markdown_text": str(payload.get("markdown_text", "")),
+            "source_map": payload.get("source_map", {}),
+            "created_by": actor_id,
+        }
+        try:
+            with self._connect(self._database_url) as conn:
+                with conn.cursor() as cur:
+                    self._upsert_tenant_store(cur, organization_id, store_id, str(payload.get("platform", "pdd")))
+                    cur.execute(
+                        """
+                        INSERT INTO product_import_draft (
+                            draft_id, organization_id, store_id, status, idempotency_key,
+                            file_name, mime_type, object_key, object_hash, size_bytes,
+                            storage_status, analysis_status, analysis_model, analysis_error,
+                            draft_product, markdown_text, source_map, created_by
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (organization_id, store_id, idempotency_key)
+                        DO UPDATE SET updated_at = product_import_draft.updated_at
+                        RETURNING draft_id, organization_id, store_id, status, idempotency_key,
+                                  file_name, mime_type, object_key, object_hash, size_bytes,
+                                  storage_status, analysis_status, analysis_model, analysis_error,
+                                  draft_product, markdown_text, source_map, created_by, created_at,
+                                  updated_at, confirmed_at, confirm_idempotency_key, confirm_response
+                        """,
+                        (
+                            draft["draft_id"],
+                            organization_id,
+                            store_id,
+                            draft["status"],
+                            idempotency_key,
+                            draft["file_name"],
+                            draft["mime_type"],
+                            draft["object_key"],
+                            draft["object_hash"],
+                            draft["size_bytes"],
+                            draft["storage_status"],
+                            draft["analysis_status"],
+                            draft["analysis_model"],
+                            draft["analysis_error"],
+                            Jsonb(draft["draft_product"]),
+                            draft["markdown_text"],
+                            Jsonb(draft["source_map"]),
+                            actor_id,
+                        ),
+                    )
+                    row = cur.fetchone()
+                    saved = _draft_from_row(row) if row else draft
+                    self._audit(cur, "admin", organization_id, store_id, actor_id, "product_import_draft.create", "product_import_draft", draft_id, _draft_audit_summary(payload))
+        except Exception:
+            if stored.storage_status == "stored":
+                self._object_storage.delete(stored.object_key)
+            raise
+        return _public_draft(saved)
+
+    def confirm_product_import_draft(self, draft_id: str, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
+        draft = self._get_product_import_draft(draft_id)
+        idempotency_key = str(payload.get("idempotency_key") or "")
+        if draft.get("confirm_idempotency_key") == idempotency_key and isinstance(draft.get("confirm_response"), dict):
+            return dict(draft["confirm_response"], replayed=True)
+        draft_product = payload.get("draft_product") if isinstance(payload.get("draft_product"), dict) else draft.get("draft_product", {})
+        product = self.upsert_product(
+            {
+                "organization_id": draft["organization_id"],
+                "store_id": draft["store_id"],
+                **draft_product,
+            },
+            actor_id,
+        )
+        asset = self.create_asset(
+            {
+                "organization_id": draft["organization_id"],
+                "store_id": draft["store_id"],
+                "product_id": product["product_id"],
+                "asset_type": "manual",
+                "file_ref": draft["object_key"],
+                "file_hash": draft["object_hash"],
+                "mime_type": draft["mime_type"],
+                "size_bytes": draft["size_bytes"],
+                "version": "v1",
+                "metadata": {"import_draft_id": draft_id, "file_name": draft["file_name"]},
+            },
+            actor_id,
+        )
+        response = {
+            "draft_id": draft_id,
+            "product_id": product["product_id"],
+            "asset_id": asset["asset_id"],
+            "status": "confirmed",
+            "analysis_status": draft["analysis_status"],
+            "draft_product": product,
+        }
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE product_import_draft
+                    SET status = 'confirmed',
+                        confirmed_at = now(),
+                        updated_at = now(),
+                        confirm_idempotency_key = %s,
+                        confirm_response = %s
+                    WHERE draft_id = %s
+                    """,
+                    (idempotency_key, Jsonb(response), draft_id),
+                )
+                self._audit(cur, "admin", draft["organization_id"], draft["store_id"], actor_id, "product_import_draft.confirm", "product_import_draft", draft_id, _safe_diff_summary(payload))
+        return response
 
     def review_knowledge_candidate(self, candidate_id: str, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
         accepted = payload.get("accepted")
@@ -901,6 +1202,26 @@ class PostgresAdminRepository:
             "candidate_text": str(row[3] or ""),
         }
 
+    def _get_product_import_draft(self, draft_id: str) -> dict[str, Any]:
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT draft_id, organization_id, store_id, status, idempotency_key,
+                           file_name, mime_type, object_key, object_hash, size_bytes,
+                           storage_status, analysis_status, analysis_model, analysis_error,
+                           draft_product, markdown_text, source_map, created_by, created_at,
+                           updated_at, confirmed_at, confirm_idempotency_key, confirm_response
+                    FROM product_import_draft
+                    WHERE draft_id = %s
+                    """,
+                    (draft_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise KeyError("draft not found")
+        return _draft_from_row(row)
+
     def _canonical_audit(
         self,
         cur: Any,
@@ -988,6 +1309,21 @@ def _object_storage_for(settings: Settings) -> ObjectStorage:
         return FilesystemObjectStorage(getattr(settings, "object_storage_root", ".object-storage"))
     if backend == "memory":
         return InMemoryObjectStorage()
+    if backend == "s3" or (
+        backend == "reference"
+        and settings.object_storage_endpoint
+        and settings.object_storage_bucket
+        and settings.object_storage_access_key_id
+        and settings.object_storage_secret_access_key
+    ):
+        return S3ObjectStorage(
+            endpoint=str(settings.object_storage_endpoint),
+            bucket=str(settings.object_storage_bucket),
+            region=settings.object_storage_region,
+            access_key_id=str(settings.object_storage_access_key_id),
+            secret_access_key=str(settings.object_storage_secret_access_key),
+            path_style=settings.object_storage_path_style,
+        )
     return ReferenceObjectStorage()
 
 
@@ -1008,6 +1344,8 @@ def _product_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "status": str(payload.get("status", "active")),
         "attributes": payload.get("attributes", {}),
         "sku_ids": payload.get("sku_ids", []),
+        "created_at": payload.get("created_at", _now()),
+        "updated_at": payload.get("updated_at", _now()),
     }
 
 
@@ -1022,9 +1360,19 @@ def _safe_diff_summary(payload: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def _draft_audit_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    omitted = {"content_base64", "content", "raw_payload", "markdown_text"}
+    return _safe_diff_summary({key: value for key, value in payload.items() if key.lower() not in omitted})
+
+
 def _stable_product_suffix(organization_id: str, store_id: str, external_product_id: str) -> str:
     digest = hashlib.sha256(f"{organization_id}|{store_id}|{external_product_id}".encode("utf-8")).hexdigest()
     return digest[:16]
+
+
+def _draft_id(organization_id: str, store_id: str, key: str) -> str:
+    digest = hashlib.sha256(f"{organization_id}|{store_id}|{key}".encode("utf-8")).hexdigest()
+    return f"draft-{digest[:16]}"
 
 
 def _product_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -1037,6 +1385,84 @@ def _product_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         "status": row[5],
         "attributes": row[6],
         "sku_ids": [],
+        "created_at": _iso(row[7]) if len(row) > 7 else _now(),
+        "updated_at": _iso(row[7]) if len(row) > 7 else _now(),
+    }
+
+
+def _product_list_item(product: dict[str, Any], health: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "product_id": product["product_id"],
+        "store_id": product["store_id"],
+        "external_product_id": product["external_product_id"],
+        "title": product["title"],
+        "status": product["status"],
+        "health_status": health.get("status", "warning"),
+        "updated_at": str(product.get("updated_at") or _now()),
+    }
+
+
+def _page_info(page: int, page_size: int, total: int) -> dict[str, int]:
+    return {"page": page, "page_size": page_size, "total": total}
+
+
+def _find_by_idempotency(rows: Any, idempotency_key: str) -> dict[str, Any] | None:
+    if not idempotency_key:
+        return None
+    for row in rows:
+        if row.get("idempotency_key") == idempotency_key:
+            return _public_draft(row)
+    return None
+
+
+def _public_draft(draft: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "draft_id": draft["draft_id"],
+        "store_id": draft["store_id"],
+        "status": draft["status"],
+        "file_name": draft["file_name"],
+        "mime_type": draft["mime_type"],
+        "object_key": draft["object_key"],
+        "object_hash": draft["object_hash"],
+        "size_bytes": draft["size_bytes"],
+        "storage_status": draft["storage_status"],
+        "analysis_status": draft["analysis_status"],
+        "analysis_model": draft.get("analysis_model"),
+        "analysis_error": draft.get("analysis_error"),
+        "draft_product": draft.get("draft_product", {}),
+        "markdown_text": draft.get("markdown_text", ""),
+        "source_map": draft.get("source_map", {}),
+        "created_at": str(draft.get("created_at") or _now()),
+        "updated_at": str(draft.get("updated_at") or _now()),
+        "confirmed_at": draft.get("confirmed_at"),
+    }
+
+
+def _draft_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "draft_id": row[0],
+        "organization_id": row[1],
+        "store_id": row[2],
+        "status": row[3],
+        "idempotency_key": row[4],
+        "file_name": row[5],
+        "mime_type": row[6],
+        "object_key": row[7],
+        "object_hash": row[8],
+        "size_bytes": row[9],
+        "storage_status": row[10],
+        "analysis_status": row[11],
+        "analysis_model": row[12],
+        "analysis_error": row[13],
+        "draft_product": row[14] or {},
+        "markdown_text": row[15] or "",
+        "source_map": row[16] or {},
+        "created_by": row[17],
+        "created_at": _iso(row[18]),
+        "updated_at": _iso(row[19]),
+        "confirmed_at": _iso(row[20]) if row[20] else None,
+        "confirm_idempotency_key": row[21],
+        "confirm_response": row[22],
     }
 
 

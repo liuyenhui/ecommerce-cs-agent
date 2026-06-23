@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import base64
+from datetime import datetime, timezone
 import hashlib
+import hmac
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import parse_qsl, urlsplit
+from urllib import request as urllib_request
+from urllib.error import URLError
+from urllib.parse import parse_qsl, quote, urlsplit
+
+from ecommerce_cs_agent.services.outbound_http import validate_public_https_url
 
 
 class ObjectStorageError(RuntimeError):
@@ -126,6 +132,111 @@ class FilesystemObjectStorage:
         return target
 
 
+class S3ObjectStorage:
+    def __init__(
+        self,
+        *,
+        endpoint: str,
+        bucket: str,
+        region: str,
+        access_key_id: str,
+        secret_access_key: str,
+        path_style: bool = True,
+    ) -> None:
+        try:
+            self.endpoint = validate_public_https_url(endpoint, field="object storage endpoint")
+        except ValueError as exc:
+            raise ObjectStorageValidationError(str(exc)) from exc
+        self.bucket = bucket
+        self.region = region
+        self.access_key_id = access_key_id
+        self.secret_access_key = secret_access_key
+        self.path_style = path_style
+
+    def put_or_reference(self, *, asset_id: str, payload: dict[str, Any]) -> StoredObject:
+        _ensure_payload_refs(payload)
+        content = _content_bytes(payload)
+        if content is None:
+            return ReferenceObjectStorage().put_or_reference(asset_id=asset_id, payload=payload)
+        object_key = str(payload.get("file_ref") or f"product-assets/{asset_id}")
+        url, canonical_uri, host = self._target_for(object_key)
+        payload_hash = hashlib.sha256(content).hexdigest()
+        now = datetime.now(timezone.utc)
+        amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+        date_stamp = now.strftime("%Y%m%d")
+        content_type = str(payload.get("mime_type", payload.get("content_type", "application/octet-stream")))
+        headers = {
+            "content-type": content_type,
+            "host": host,
+            "x-amz-content-sha256": payload_hash,
+            "x-amz-date": amz_date,
+        }
+        signed_headers = ";".join(sorted(headers))
+        canonical_headers = "".join(f"{name}:{headers[name]}\n" for name in sorted(headers))
+        canonical_request = "\n".join(["PUT", canonical_uri, "", canonical_headers, signed_headers, payload_hash])
+        credential_scope = f"{date_stamp}/{self.region}/s3/aws4_request"
+        string_to_sign = "\n".join([
+            "AWS4-HMAC-SHA256",
+            amz_date,
+            credential_scope,
+            hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+        ])
+        signature = hmac.new(
+            self._signing_key(date_stamp),
+            string_to_sign.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        authorization = (
+            "AWS4-HMAC-SHA256 "
+            f"Credential={self.access_key_id}/{credential_scope}, "
+            f"SignedHeaders={signed_headers}, Signature={signature}"
+        )
+        request = urllib_request.Request(
+            url,
+            data=content,
+            headers={**headers, "Authorization": authorization},
+            method="PUT",
+        )
+        try:
+            with urllib_request.urlopen(request, timeout=20) as response:
+                if response.status < 200 or response.status >= 300:
+                    raise ObjectStorageUnavailable("object storage is unavailable")
+        except URLError as exc:
+            raise ObjectStorageUnavailable("object storage is unavailable") from exc
+        return StoredObject(
+            object_key=object_key,
+            object_hash=str(payload.get("file_hash") or "sha256:" + payload_hash),
+            mime_type=content_type,
+            size_bytes=len(content),
+            storage_status="stored",
+        )
+
+    def delete(self, object_key: str) -> None:
+        return None
+
+    def _target_for(self, object_key: str) -> tuple[str, str, str]:
+        _ensure_safe_object_key(object_key)
+        parsed = urlsplit(self.endpoint)
+        if not parsed.scheme or not parsed.netloc:
+            raise ObjectStorageValidationError("invalid object storage endpoint")
+        quoted_key = "/".join(quote(part, safe="") for part in object_key.split("/"))
+        if self.path_style:
+            canonical_uri = f"/{quote(self.bucket, safe='')}/{quoted_key}"
+            host = parsed.netloc
+            url = f"{parsed.scheme}://{host}{canonical_uri}"
+        else:
+            host = f"{self.bucket}.{parsed.netloc}"
+            canonical_uri = f"/{quoted_key}"
+            url = f"{parsed.scheme}://{host}{canonical_uri}"
+        return url, canonical_uri, host
+
+    def _signing_key(self, date_stamp: str) -> bytes:
+        key = ("AWS4" + self.secret_access_key).encode("utf-8")
+        for value in (date_stamp, self.region, "s3", "aws4_request"):
+            key = hmac.new(key, value.encode("utf-8"), hashlib.sha256).digest()
+        return key
+
+
 def _content_bytes(payload: dict[str, Any]) -> bytes | None:
     if "content_base64" in payload:
         try:
@@ -152,6 +263,15 @@ def _ensure_payload_refs(payload: dict[str, Any]) -> None:
         value = payload.get(field)
         if value:
             _ensure_public_object_ref(str(value), field)
+    file_ref = payload.get("file_ref")
+    if file_ref and not urlsplit(str(file_ref)).scheme:
+        _ensure_safe_object_key(str(file_ref))
+
+
+def _ensure_safe_object_key(object_key: str) -> None:
+    relative = Path(object_key)
+    if relative.is_absolute() or ".." in relative.parts or any("\x00" in part for part in relative.parts):
+        raise ObjectStorageValidationError("invalid object key")
 
 
 def _ensure_public_object_ref(object_ref: str, field: str) -> None:

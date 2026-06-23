@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -18,6 +19,7 @@ from ecommerce_cs_agent.services.admin import admin_repository_for
 from ecommerce_cs_agent.services.admin_auth import admin_auth_service_for, system_admin_auth_service_for
 from ecommerce_cs_agent.services.decision import DecisionService
 from ecommerce_cs_agent.services.object_storage import ObjectStorageUnavailable, ObjectStorageValidationError
+from ecommerce_cs_agent.services.product_analysis import product_document_analyzer_for
 from ecommerce_cs_agent.services.system_admin import system_admin_repository_for
 
 
@@ -26,6 +28,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="ecommerce-cs-agent", version="0.1.0")
     decisions = DecisionService(settings)
     admin_data = admin_repository_for(settings)
+    product_analyzer = product_document_analyzer_for(settings)
     admin_auth = admin_auth_service_for(settings)
     system_admin_auth = system_admin_auth_service_for(settings)
     system_admin_data = system_admin_repository_for(settings)
@@ -96,7 +99,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _principal: Principal = Depends(agent_principal),
     ) -> dict[str, Any]:
         payload = await request.json()
-        _require_fields(payload, ["request_id", "organization_id", "store_id", "platform", "message", "conversation", "mode"])
+        _require_fields(payload, ["request_id", "platform", "message", "conversation", "mode"])
+        payload = _normalize_reply_decision_payload(payload)
         return decisions.create_reply_decision(payload)
 
     def context_endpoint(context_type: str) -> Callable[..., Any]:
@@ -229,6 +233,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def upsert_product_content_product(request: Request, _principal: Principal = Depends(admin_principal)) -> JSONResponse:
         payload = await request.json()
         return JSONResponse(status_code=201, content=admin_data.upsert_product(payload, _principal.user_id or "admin-001"))
+
+    @app.get("/v1/product-content/products")
+    def list_product_content_products(request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
+        organization_id = _principal.organization_id or "org-001"
+        store_id = request.query_params.get("store_id") or _principal.store_id or "store-001"
+        if _principal.store_id and store_id != _principal.store_id:
+            raise api_error(403, "forbidden", "store is not available for current admin session")
+        page = _positive_int(request.query_params.get("page"), default=1, maximum=10_000)
+        page_size = _positive_int(request.query_params.get("page_size"), default=20, maximum=100)
+        return admin_data.list_products(organization_id, store_id, page=page, page_size=page_size)
+
+    @app.post("/v1/product-content/product-import-drafts")
+    async def create_product_import_draft(request: Request, _principal: Principal = Depends(admin_principal)) -> JSONResponse:
+        payload = await request.json()
+        _require_fields(payload, ["file_name", "mime_type", "content_base64", "idempotency_key"])
+        store_id = str(payload.get("store_id") or _principal.store_id or "store-001")
+        if _principal.store_id and store_id != _principal.store_id:
+            raise api_error(403, "forbidden", "store is not available for current admin session")
+        try:
+            text = _decode_upload_text(payload)
+            analysis = product_analyzer.analyze(
+                text=text,
+                file_name=str(payload["file_name"]),
+                mime_type=str(payload["mime_type"]),
+            )
+            draft = admin_data.create_product_import_draft(
+                {
+                    **payload,
+                    **analysis,
+                    "organization_id": _principal.organization_id or "org-001",
+                    "store_id": store_id,
+                },
+                _principal.user_id or "admin-001",
+            )
+        except ObjectStorageValidationError as exc:
+            raise api_error(422, "object_storage_error", str(exc)) from exc
+        except ObjectStorageUnavailable as exc:
+            raise api_error(503, "object_storage_unavailable", "object storage is unavailable") from exc
+        return JSONResponse(status_code=201, content=draft)
+
+    @app.post("/v1/product-content/product-import-drafts/{draft_id}/confirm")
+    async def confirm_product_import_draft(draft_id: str, request: Request, _principal: Principal = Depends(admin_principal)) -> JSONResponse:
+        payload = await request.json()
+        _require_fields(payload, ["idempotency_key", "draft_product"])
+        try:
+            response = admin_data.confirm_product_import_draft(draft_id, payload, _principal.user_id or "admin-001")
+        except KeyError as exc:
+            raise api_error(404, "not_found", "draft not found") from exc
+        status_code = 200 if response.pop("replayed", False) else 201
+        return JSONResponse(status_code=status_code, content=response)
 
     @app.post("/v1/product-content/assets")
     async def create_product_asset(request: Request, _principal: Principal = Depends(admin_principal)) -> JSONResponse:
@@ -402,6 +456,51 @@ def _require_fields(payload: dict[str, Any], fields: list[str]) -> None:
     missing = [field for field in fields if field not in payload]
     if missing:
         raise api_error(422, "validation_error", f"missing required fields: {', '.join(missing)}")
+
+
+def _positive_int(raw: str | None, *, default: int, maximum: int) -> int:
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise api_error(422, "validation_error", "invalid pagination parameter") from exc
+    if value < 1:
+        raise api_error(422, "validation_error", "pagination parameter must be positive")
+    return min(value, maximum)
+
+
+def _decode_upload_text(payload: dict[str, Any]) -> str:
+    try:
+        content = base64.b64decode(str(payload.get("content_base64", "")), validate=True)
+    except ValueError as exc:
+        raise api_error(422, "validation_error", "invalid content_base64") from exc
+    if not content:
+        raise api_error(422, "validation_error", "uploaded content is empty")
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content.decode("utf-8", errors="ignore")
+
+
+def _normalize_reply_decision_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    external_store_id = normalized.get("external_store_id") or normalized.get("store_id")
+    if not external_store_id:
+        raise api_error(422, "validation_error", "missing required fields: external_store_id")
+
+    platform_account_ref = normalized.get("platform_account_ref") or normalized.get("platform_account_id")
+    tenant_ref = normalized.get("tenant_id") or normalized.get("organization_id")
+    tenant_id = str(tenant_ref) if tenant_ref is not None else str(platform_account_ref or external_store_id)
+    if tenant_ref is None and not tenant_id.startswith("tenant-"):
+        tenant_id = f"tenant-{tenant_id}"
+
+    normalized.setdefault("tenant_id", tenant_id)
+    # Existing persistence and Admin surfaces still use organization_id internally.
+    normalized.setdefault("organization_id", tenant_id)
+    normalized.setdefault("store_id", str(external_store_id))
+    normalized.setdefault("external_store_id", str(external_store_id))
+    return normalized
 
 
 def _now() -> str:
