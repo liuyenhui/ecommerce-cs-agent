@@ -79,6 +79,18 @@ def test_s3_object_storage_rejects_private_endpoint() -> None:
         )
 
 
+def test_s3_object_storage_allows_kubernetes_service_endpoint() -> None:
+    storage = S3ObjectStorage(
+        endpoint="http://minio.ecommerce-cs-agent-dev.svc.cluster.local:9000",
+        bucket="bucket",
+        region="us-east-1",
+        access_key_id="access",
+        secret_access_key="secret",
+    )
+
+    assert storage.endpoint == "http://minio.ecommerce-cs-agent-dev.svc.cluster.local:9000"
+
+
 def test_llm_analyzer_rejects_private_endpoint() -> None:
     with pytest.raises(ValueError, match="public https"):
         OpenAICompatibleProductDocumentAnalyzer(

@@ -143,10 +143,7 @@ class S3ObjectStorage:
         secret_access_key: str,
         path_style: bool = True,
     ) -> None:
-        try:
-            self.endpoint = validate_public_https_url(endpoint, field="object storage endpoint")
-        except ValueError as exc:
-            raise ObjectStorageValidationError(str(exc)) from exc
+        self.endpoint = _validate_object_storage_endpoint(endpoint)
         self.bucket = bucket
         self.region = region
         self.access_key_id = access_key_id
@@ -272,6 +269,25 @@ def _ensure_safe_object_key(object_key: str) -> None:
     relative = Path(object_key)
     if relative.is_absolute() or ".." in relative.parts or any("\x00" in part for part in relative.parts):
         raise ObjectStorageValidationError("invalid object key")
+
+
+def _validate_object_storage_endpoint(endpoint: str) -> str:
+    try:
+        return validate_public_https_url(endpoint, field="object storage endpoint")
+    except ValueError as exc:
+        parsed = urlsplit(endpoint.strip())
+        if parsed.username or parsed.password:
+            raise ObjectStorageValidationError("object storage endpoint must not contain credentials") from exc
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if parsed.scheme in {"http", "https"} and _is_kubernetes_service_host(host):
+            return endpoint.rstrip("/")
+        raise ObjectStorageValidationError(
+            "object storage endpoint must be a public https URL or Kubernetes service URL"
+        ) from exc
+
+
+def _is_kubernetes_service_host(host: str) -> bool:
+    return host.endswith(".svc") or ".svc." in host
 
 
 def _ensure_public_object_ref(object_ref: str, field: str) -> None:
