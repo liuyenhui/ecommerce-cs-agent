@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const source = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
+const source = readFileSync(new URL("../customer-admin/src/App.tsx", import.meta.url), "utf8");
 
 function extractFunction(name) {
   const start = source.indexOf(`function ${name}`);
@@ -12,7 +12,7 @@ function extractFunction(name) {
 }
 
 test("customer landing page uses the approved public narrative", () => {
-  const customerSite = extractFunction("CustomerSite");
+  const customerSite = extractFunction("CustomerLanding");
   const expectedText = [
     "商品信息管好了，AI 客服才答得准。",
     "上传商品说明书、价格和常见问题，让 AI 先学习，再通过模拟问答检查效果。真正自动回复前，还能用规则控制范围和风险。",
@@ -35,7 +35,7 @@ test("customer landing page uses the approved public narrative", () => {
 });
 
 test("customer site does not expose a system admin entrance", () => {
-  const customerSite = extractFunction("CustomerSite");
+  const customerSite = extractFunction("CustomerLanding");
   assert.equal(customerSite.includes("系统后台"), false);
   assert.equal(customerSite.includes("system-admin"), false);
   assert.equal(customerSite.includes("/v1/system-admin"), false);

@@ -17,35 +17,55 @@ def test_api_and_admin_dockerfiles_exist() -> None:
 
 def test_admin_web_is_vite_react_app() -> None:
     package = yaml.safe_load(Path("admin-web/package.json").read_text(encoding="utf-8"))
-    app = Path("admin-web/src/main.tsx").read_text(encoding="utf-8")
+    customer_app = Path("admin-web/customer-admin/src/App.tsx").read_text(encoding="utf-8")
+    system_app = Path("admin-web/system-admin/src/App.tsx").read_text(encoding="utf-8")
+    shared_api = Path("admin-web/shared/api.ts").read_text(encoding="utf-8")
     nginx = Path("admin-web/nginx.conf").read_text(encoding="utf-8")
 
-    assert package["scripts"]["build"] == "vite build"
-    assert "客户后台" in app
-    assert "系统后台" in app
-    assert "fetch(" in app
-    assert "/v1/admin/auth/login" in app
-    assert "/v1/system-admin/message-traces" in app
-    assert "password: \"admin-password\"" not in app
+    assert package["scripts"]["build"] == "npm run build:customer && npm run build:system"
+    assert package["scripts"]["build:customer"] == "vite build --mode customer"
+    assert package["scripts"]["build:system"] == "vite build --mode system"
+    assert "客户后台" in customer_app
+    assert "系统后台" in system_app
+    assert "fetch(" in shared_api
+    assert "/v1/admin/auth/login" in customer_app
+    assert "/v1/system-admin/message-traces" in system_app
+    assert "password: \"admin-password\"" not in customer_app
+    assert "password: \"admin-password\"" not in system_app
     assert "proxy_pass http://ecommerce-cs-agent-api:8000" in nginx
 
 
 def test_admin_web_splits_customer_and_system_sites_by_host() -> None:
-    app = Path("admin-web/src/main.tsx").read_text(encoding="utf-8")
+    customer_app = Path("admin-web/customer-admin/src/App.tsx").read_text(encoding="utf-8")
+    system_app = Path("admin-web/system-admin/src/App.tsx").read_text(encoding="utf-8")
+    shared = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in [
+            Path("admin-web/shared/api.ts"),
+            Path("admin-web/shared/components.tsx"),
+            Path("admin-web/shared/data.tsx"),
+        ]
+    )
+    nginx = Path("admin-web/nginx.conf").read_text(encoding="utf-8")
+    all_sources = "\n".join([customer_app, system_app, shared])
 
-    assert "detectWorkspaceFromLocation" in app
-    assert "system-admin.ecommerce-cs-agent-dev.fcihome.com" in app
-    assert "admin.ecommerce-cs-agent-dev.fcihome.com" in app
-    assert "workspaceSwitch" not in app
-    assert "setWorkspace" not in app
-    assert "/v1/admin/auth/me" in app
-    assert "/v1/system-admin/auth/me" in app
-    assert 'workspace === "system" ? <SystemSite /> : <CustomerSite' in app
-    assert "function CustomerSite(" in app
-    assert "function SystemSite()" in app
-    assert 'void refreshSession(workspace)' not in app
-    assert 'void refreshSession("customer").catch' not in app
-    assert 'void refreshSession("system").catch' not in app
+    assert Path("admin-web/customer-admin/index.html").exists()
+    assert Path("admin-web/system-admin/index.html").exists()
+    assert Path("admin-web/src/main.tsx").exists() is False
+    assert "detectWorkspaceFromLocation" not in all_sources
+    assert 'workspace === "system"' not in all_sources
+    assert 'workspace === "customer"' not in all_sources
+    assert "workspaceSwitch" not in all_sources
+    assert "setWorkspace" not in all_sources
+    assert "/v1/admin/auth/me" in customer_app
+    assert "/v1/system-admin" not in customer_app
+    assert "/v1/system-admin/auth/me" in system_app
+    assert "/v1/admin/auth/me" not in system_app
+    assert "function CustomerAdminShell(" in customer_app
+    assert "function SystemWorkspace(" in system_app
+    assert "system-admin.ecommerce-cs-agent-dev.fcihome.com system;" in nginx
+    assert "default customer;" in nginx
+    assert "try_files /$admin_site$uri =404;" in nginx
 
 
 def test_helm_values_define_dev_runtime_contract() -> None:
