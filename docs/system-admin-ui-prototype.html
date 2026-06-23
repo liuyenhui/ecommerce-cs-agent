@@ -760,7 +760,7 @@
         </select>
         <div class="search-wrap">
           <i data-lucide="search"></i>
-          <input class="search" id="globalSearch" placeholder="搜索 decision_id / 组织 / 店铺 / 外部消息 ID" />
+          <input class="search" id="globalSearch" placeholder="搜索 decision_id / 租户 / 店铺 / 外部消息 ID" />
         </div>
       </div>
       <div class="topbar-actions">
@@ -804,7 +804,7 @@
   <div class="modal-backdrop" id="modalBackdrop"></div>
   <section class="modal" id="modal" aria-label="操作弹窗">
     <div class="modal-head">
-      <h2 class="modal-title" id="modalTitle">创建组织</h2>
+      <h2 class="modal-title" id="modalTitle">创建租户</h2>
       <button class="icon-btn" title="关闭" style="color:#161616;border-left:0" data-action="close-modal"><i data-lucide="x"></i></button>
     </div>
     <div class="modal-body" id="modalBody"></div>
@@ -880,16 +880,16 @@
         desc: "跨租户掌握平台运行状态、上线阻断项、关键错误和发布风险。",
         actions: [
           ["导出日报", "download", "secondary", "toast"],
-          ["创建组织", "plus", "primary", "create-org"]
+          ["创建租户", "plus", "primary", "create-org"]
         ]
       },
       tenants: {
         title: "租户与店铺",
         eyebrow: "TENANT ONBOARDING",
-        desc: "开通组织、店铺和客户后台初始管理员，跟踪套餐、状态、外部引用和接入风险。",
+        desc: "开通租户、店铺和客户后台初始管理员，跟踪套餐、状态、外部引用和接入风险。",
         actions: [
           ["邀请管理员", "send", "secondary", "invite-admin"],
-          ["创建组织", "plus", "primary", "create-org"]
+          ["创建租户", "plus", "primary", "create-org"]
         ]
       },
       readiness: {
@@ -1030,7 +1030,7 @@
     function dashboardView() {
       return `
         <div class="metric-grid">
-          ${metric("活跃组织", "96", "+8 本周", "trend-up")}
+          ${metric("活跃租户", "96", "+8 本周", "trend-up")}
           ${metric("今日决策量", "46.2k", "+12.4%", "trend-up")}
           ${metric("转人工率", "18.7%", "-3.2%", "trend-up")}
           ${metric("上线阻断", "9", "3 个严重", "trend-down")}
@@ -1068,14 +1068,14 @@
         ${section("租户列表", `
           <div class="section-head" style="border-top:0">
             <div class="toolbar">
-              <input class="field" placeholder="搜索组织或店铺" />
+              <input class="field" placeholder="搜索租户或店铺" />
               <select class="select"><option>全部状态</option><option>运行中</option><option>待上线</option><option>冻结</option></select>
               <select class="select"><option>全部套餐</option><option>Enterprise</option><option>Pro</option><option>Pilot</option></select>
             </div>
             <div class="segmented"><button class="active">列表</button><button>分组</button></div>
           </div>
           <table>
-            <thead><tr><th>组织</th><th>店铺</th><th>套餐</th><th>状态</th><th>完成度</th><th>客户管理员</th><th>今日决策</th><th></th></tr></thead>
+            <thead><tr><th>租户</th><th>店铺</th><th>套餐</th><th>状态</th><th>完成度</th><th>客户管理员</th><th>今日决策</th><th></th></tr></thead>
             <tbody>
               ${tenants.map(t => `
                 <tr class="clickable" data-detail="tenant" data-org="${t.org}">
@@ -1122,7 +1122,7 @@
           `)}
           ${section("上线检查流程", `
             <div class="timeline">
-              ${step("ok", "创建组织与店铺", "组织、平台、外部引用和客户管理员已建立", "100%")}
+              ${step("ok", "创建租户与店铺", "租户、平台、外部引用和客户管理员已建立", "100%")}
               ${step("warn", "资料与知识准备", "18 个店铺价格过期，7 个店铺知识审核积压", "74%")}
               ${step("warn", "规则与动作能力", "14 个店铺缺少动作能力 callback 签名状态", "68%")}
               ${step("ok", "API 接入验证", "最近 24 小时主接口成功率 99.2%", "92%")}
@@ -1472,7 +1472,7 @@
         kicker.textContent = "TENANT DETAIL";
         title.textContent = tenant.org;
         body.innerHTML = `
-          ${section("组织与店铺", `
+          ${section("租户与店铺", `
             <div class="context-body kv">
               <div class="kv-row"><span>主店铺</span><strong>${tenant.store}</strong></div>
               <div class="kv-row"><span>套餐</span><strong>${tenant.plan}</strong></div>
@@ -1522,14 +1522,14 @@
       const body = document.getElementById("modalBody");
       const foot = document.getElementById("modalFoot");
       if (type === "create-org") {
-        title.textContent = "创建组织";
+        title.textContent = "创建租户";
         body.innerHTML = `
           <div class="form-grid">
-            <div class="form-field"><label>组织名称</label><input class="field" value="新客户组织" /></div>
+            <div class="form-field"><label>租户名称</label><input class="field" value="新客户租户" /></div>
             <div class="form-field"><label>套餐</label><select class="field"><option>Pro</option><option>Enterprise</option><option>Pilot</option></select></div>
             <div class="form-field"><label>主平台</label><select class="field"><option>拼多多</option><option>淘宝</option><option>京东</option><option>抖音</option></select></div>
             <div class="form-field"><label>初始店铺</label><input class="field" value="PDD-主店" /></div>
-            <div class="form-field full"><label>开通备注</label><textarea class="field">创建组织、初始店铺和客户后台管理员邀请。</textarea></div>
+            <div class="form-field full"><label>开通备注</label><textarea class="field">创建租户、初始店铺和客户后台管理员邀请。</textarea></div>
           </div>
         `;
         foot.innerHTML = `<button class="btn secondary" data-action="close-modal">取消</button><button class="btn primary" data-action="submit-modal"><i data-lucide="plus"></i>创建并邀请</button>`;

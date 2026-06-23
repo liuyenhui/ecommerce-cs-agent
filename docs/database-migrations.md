@@ -92,14 +92,14 @@ CREATE EXTENSION IF NOT EXISTS vector;
 | --- | --- |
 | `001_initial.sql` | 初始规范表、`pgcrypto`、`vector`、租户/店铺、决策、知识、审计核心结构。 |
 | `002_v1_runtime_alignment.sql` | 第一版运行时快速表和 legacy 兼容表。 |
-| `003_canonical_runtime_alignment.sql` | 外部组织/店铺映射、规范决策/知识/商品表兼容列和索引。 |
+| `003_canonical_runtime_alignment.sql` | 外部租户/店铺映射、规范决策/知识/商品表兼容列和索引。 |
 | `004_admin_auth_runtime.sql` | 客户 Admin membership、invitation、session 扩展。 |
 | `005_legacy_runtime_defaults.sql` | dev 旧 schema 的必需默认值和兼容列。 |
 | `006_system_admin_ops.sql` | 系统后台运维任务表、任务查询/重试索引和系统审计查询索引。 |
 
 | 批次 | 代表表 |
 | --- | --- |
-| 租户、店铺、平台账号 | `organization`、`store`、`platform_account` |
+| 租户、店铺、平台账号 | `tenant`、`store`、`platform_account` |
 | Admin 用户、会话、审计 | `admin_user`、`admin_session`、`audit_log` |
 | 会话与消息 | `conversation`、`message` |
 | 上下文快照 | `product_snapshot`、`order_snapshot`，以及后续需要的物流、规则或商品资料快照 |
@@ -108,13 +108,13 @@ CREATE EXTENSION IF NOT EXISTS vector;
 | 候选回复 | `agent_suggestion` |
 | 外部动作闭环 | `action_capability`、`action_request`、`action_result` |
 | 人工反馈 | `human_reply`、`feedback_label` |
-| 商品资料中心 | `product_profile`、`product_sku_profile`、`product_asset`、`product_asset_markdown`、`product_price_snapshot` |
+| 商品资料中心 | `product_master`、`product_sku`、`listing` / `store_product`、`product_asset`、`product_asset_markdown`、`product_price_snapshot` |
 | 知识沉淀与召回 | `knowledge_candidate`、`product_knowledge_candidate`、`knowledge_review`、`knowledge_entry`、`knowledge_embedding`、`knowledge_eval_case` |
 | 规则配置 | `rule_set` |
 
 核心约束：
 
-- 业务表必须能回溯到 `organization` 或 `store`，避免跨租户、跨店铺串数据。
+- 业务表必须能回溯到 `tenant` 或 `store`，避免跨租户、跨店铺串数据。
 - 外部幂等字段如 `request_id`、`external_message_id`、`idempotency_key` 应有唯一约束或等价保护。
 - `decision_record`、`decision_graph_checkpoint`、`action_request`、`action_result` 和审计表是排障与可回放的关键路径，不能只做内存状态。
 - `knowledge_embedding` 只服务审核通过知识，不能直接把未审核聊天或客户原始资料向量化。
@@ -168,7 +168,7 @@ SELECT table_name
 FROM information_schema.tables
 WHERE table_schema = 'public'
   AND table_name IN (
-    'organization',
+    'tenant',
     'store',
     'platform_account',
     'admin_user',

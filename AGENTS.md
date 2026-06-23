@@ -110,7 +110,7 @@ node docs/scripts/validate-business-flow-x6-labels.mjs
 ### System independence rules
 
 - The customer service Agent is an independent system. Any external system can integrate through the public Agent APIs without depending on `open_erp_agent`.
-- Do not depend on `open_erp_agent` login state, organization tables, store tables, WeChat users, sessions, tokens, Admin UI, or server internals for Agent Admin login, tenant resolution, permissions, SSO, or runtime behavior.
+- Do not depend on `open_erp_agent` login state, tenant tables, store tables, WeChat users, sessions, tokens, Admin UI, or server internals for Agent Admin login, tenant resolution, permissions, SSO, or runtime behavior.
 - ERP systems are only design references or example external integrators. Do not describe ERP as the default identity provider, default upstream, required deployment component, or source of truth for Agent data.
 - External-system integration, Admin login, tenant/store permissions, and SSO design must remain provider-agnostic. Use generic external references and stable Agent-owned identifiers instead of vendor-specific or project-specific identity fields.
 - If documentation mentions ERP, it must be phrased as one possible external-system example and must not alter the standalone Agent API contract or Admin ownership model.

@@ -27,7 +27,7 @@ tags:
   - name: Admin Auth
     description: 客户 Admin 自有登录态，只服务客户后台站点，不接受外部系统 API Key 或系统 Admin session 直接调用。
   - name: Admin Context
-    description: 客户 Admin 组织和店铺上下文。
+    description: 客户 Admin 租户和店铺上下文。
   - name: Admin Connectors
     description: 后续客户 Admin 维护店铺 Connector 主动查询能力声明。
   - name: Admin Rule Releases
@@ -45,6 +45,7 @@ paths:
       summary: 创建回复决策
       description: |
         外部客服系统唯一同步问答入口。请求必须带 `request_id` 作为幂等键。
+        外部请求不传内部 `tenant_id`；服务端通过 API Key / Connector Token 授权范围，以及 `platform`、`external_store_id` / `platform_account_ref`、`listing_ref` / 商品外部引用解析内部租户、店铺、平台账号和商品上下文。
         商品、订单、物流和规则上下文可选；缺关键上下文时返回 `context_requests[]`，客户端按类型并行回填。
       security:
         - AgentApiAuth: []
@@ -417,11 +418,11 @@ paths:
       tags: [Webhooks]
       operationId: listWebhookSubscriptions
       summary: 查询 Webhook 订阅
-      description: 按当前外部系统 API token 可访问的组织 / 店铺范围查询订阅列表，响应只返回 secret 摘要。
+      description: 按当前外部系统 API token 可访问的租户 / 店铺范围查询订阅列表，响应只返回 secret 摘要。
       security:
         - AgentApiAuth: []
       parameters:
-        - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/TenantIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
         - name: event_type
           in: query
@@ -544,12 +545,12 @@ paths:
       tags: [Admin Auth]
       operationId: getAdminMe
       summary: 查询当前 Admin 用户
-      description: 后台 shell 必须调用本接口校验用户、组织、店铺和角色。外部系统 API Key / Bearer Token 不能调用本接口。
+      description: 后台 shell 必须调用本接口校验用户、租户、店铺和角色。外部系统 API Key / Bearer Token 不能调用本接口。
       security:
         - AdminSession: []
       responses:
         "200":
-          description: 当前登录用户、可访问组织、店铺和角色。
+          description: 当前登录用户、可访问租户、店铺和角色。
           content:
             application/json:
               schema:
@@ -557,27 +558,27 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
-  /v1/admin/organizations:
+  /v1/admin/tenants:
     get:
       tags: [Admin Context]
-      operationId: listAdminOrganizations
-      summary: 查询当前用户可访问组织
-      description: 客户 Admin 组织上下文列表，按登录用户权限过滤。
+      operationId: listAdminTenants
+      summary: 查询当前用户可访问租户
+      description: 客户 Admin 租户上下文列表，按登录用户权限过滤。
       security:
         - AdminSession: []
       responses:
         "200":
-          description: 组织列表。
+          description: 租户列表。
           content:
             application/json:
               schema:
                 type: object
-                required: [organizations]
+                required: [tenants]
                 properties:
-                  organizations:
+                  tenants:
                     type: array
                     items:
-                      $ref: "#/components/schemas/Organization"
+                      $ref: "#/components/schemas/Tenant"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -588,16 +589,16 @@ paths:
       tags: [Admin Context]
       operationId: listAdminStores
       summary: 查询当前用户可访问店铺
-      description: 客户 Admin 店铺上下文列表。可用 `organization_id` 过滤；不同组织和店铺的数据必须隔离。
+      description: 客户 Admin 店铺上下文列表。可用 `tenant_id` 过滤；不同租户和店铺的数据必须隔离。
       security:
         - AdminSession: []
       parameters:
-        - name: organization_id
+        - name: tenant_id
           in: query
           required: false
           schema:
             type: string
-          description: 组织 ID。
+          description: 租户 ID。
       responses:
         "200":
           description: 店铺列表。
@@ -658,11 +659,11 @@ paths:
       tags: [Admin Context]
       operationId: listAdminUsers
       summary: 查询客户 Admin 成员
-      description: 组织所有者、组织管理员和只读审计可查询本组织成员；响应按 `organization_id` 和可访问店铺范围过滤。
+      description: 租户所有者、租户管理员和只读审计可查询本租户成员；响应按 `tenant_id` 和可访问店铺范围过滤。
       security:
         - AdminSession: []
       parameters:
-        - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/TenantIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/RoleQuery"
@@ -685,7 +686,7 @@ paths:
       tags: [Admin Context]
       operationId: createAdminInvitation
       summary: 邀请客户 Admin 成员
-      description: 组织所有者或组织管理员邀请成员。请求必须声明组织、角色、店铺范围和原因，并写入审计。
+      description: 租户所有者或租户管理员邀请成员。请求必须声明租户、角色、店铺范围和原因，并写入审计。
       security:
         - AdminSession: []
       requestBody:
@@ -715,7 +716,7 @@ paths:
       tags: [Admin Context]
       operationId: updateAdminUserRoles
       summary: 更新客户 Admin 用户角色
-      description: 组织所有者或组织管理员更新成员角色和店铺范围。提升到高权限角色必须填写 `reason` 并写入审计。
+      description: 租户所有者或租户管理员更新成员角色和店铺范围。提升到高权限角色必须填写 `reason` 并写入审计。
       security:
         - AdminSession: []
       parameters:
@@ -754,11 +755,11 @@ paths:
       tags: [Admin Context]
       operationId: listAdminAuditLogs
       summary: 查询客户 Admin 审计日志
-      description: 查询本组织配置变更、权限变更、知识审核、规则和动作能力变更。客户 Admin 不能查询其他组织审计。
+      description: 查询本租户配置变更、权限变更、知识审核、规则和动作能力变更。客户 Admin 不能查询其他租户审计。
       security:
         - AdminSession: []
       parameters:
-        - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/TenantIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
         - name: object_type
           in: query
@@ -794,12 +795,12 @@ paths:
       operationId: listAdminConnectors
       summary: 查询店铺 Connector 配置和能力清单
       description: |
-        后续能力。客户 Admin 查询本组织 / 店铺 Connector 主动查询配置，能力声明覆盖 products、orders、rules、logistics。
+        后续能力。客户 Admin 查询本租户 / 店铺 Connector 主动查询配置，能力声明覆盖 products、orders、rules、logistics。
         第一版仍以外部系统根据 `context_requests[]` 回填为主；Connector 启用后也必须保留失败降级到 `context_request`、`candidate` 或 `handoff` 的路径。
       security:
         - AdminSession: []
       parameters:
-        - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/TenantIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/Page"
@@ -881,11 +882,11 @@ paths:
       tags: [Admin Rule Releases]
       operationId: listAdminRuleSets
       summary: 查询客户规则版本
-      description: 客户 Admin 查询本组织 / 店铺规则版本、发布状态、灰度范围和回滚引用。系统 Admin 平台强制规则不在本接口修改。
+      description: 客户 Admin 查询本租户 / 店铺规则版本、发布状态、灰度范围和回滚引用。系统 Admin 平台强制规则不在本接口修改。
       security:
         - AdminSession: []
       parameters:
-        - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/TenantIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
         - name: release_status
           in: query
@@ -1047,7 +1048,7 @@ paths:
       tags: [Product Content]
       operationId: upsertProductContentProduct
       summary: 创建或更新商品资料
-      description: 维护 `product_profile` 和可选 `product_sku_profile`。客户 Admin 写操作必须记录操作者、组织、店铺、对象、动作和时间。
+      description: 维护 `product_master`、可选 `product_sku` 以及 listing / store_product。客户 Admin 写操作必须记录操作者、租户、店铺、对象、动作和时间。
       security:
         - AdminSession: []
       requestBody:
@@ -1421,11 +1422,11 @@ paths:
         "422":
           $ref: "#/components/responses/ValidationError"
 
-  /v1/system-admin/organizations:
+  /v1/system-admin/tenants:
     get:
       tags: [System Admin]
-      operationId: listSystemOrganizations
-      summary: 查询租户组织
+      operationId: listSystemTenants
+      summary: 查询租户
       description: 跨租户查询必须带分页，可按状态、时间和关键词筛选；读取跨租户数据写入访问审计。
       security:
         - SystemAdminSession: []
@@ -1437,20 +1438,20 @@ paths:
         - $ref: "#/components/parameters/PageSize"
       responses:
         "200":
-          description: 租户组织分页列表。
+          description: 租户分页列表。
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SystemOrganizationListResponse"
+                $ref: "#/components/schemas/SystemTenantListResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
     post:
       tags: [System Admin]
-      operationId: createSystemOrganization
-      summary: 创建租户组织
-      description: 平台运营或更高权限创建组织；必须记录开通原因和审计。
+      operationId: createSystemTenant
+      summary: 创建租户
+      description: 平台运营或更高权限创建租户；必须记录开通原因和审计。
       security:
         - SystemAdminSession: []
       requestBody:
@@ -1458,14 +1459,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SystemOrganizationCreateRequest"
+              $ref: "#/components/schemas/SystemTenantCreateRequest"
       responses:
         "201":
-          description: 租户组织已创建。
+          description: 租户已创建。
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SystemOrganizationResponse"
+                $ref: "#/components/schemas/SystemTenantResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1480,11 +1481,11 @@ paths:
       tags: [System Admin]
       operationId: listSystemStores
       summary: 查询跨租户店铺
-      description: 系统后台按组织、店铺、平台、状态和时间查询店铺；跨租户访问写入审计。
+      description: 系统后台按租户、店铺、平台、状态和时间查询店铺；跨租户访问写入审计。
       security:
         - SystemAdminSession: []
       parameters:
-        - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/TenantIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/TimeFrom"
@@ -1506,7 +1507,7 @@ paths:
       tags: [System Admin]
       operationId: createSystemStore
       summary: 创建店铺
-      description: 为指定组织创建店铺、平台类型和外部引用；必须写入系统审计。
+      description: 为指定租户创建店铺、平台类型和外部引用；必须写入系统审计。
       security:
         - SystemAdminSession: []
       requestBody:
@@ -1540,7 +1541,7 @@ paths:
       security:
         - SystemAdminSession: []
       parameters:
-        - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/TenantIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/Page"
@@ -1562,11 +1563,11 @@ paths:
       tags: [System Admin]
       operationId: listSystemMessageTraces
       summary: 跨租户查询消息决策追踪
-      description: 技术支持按 `decision_id`、请求 ID、外部消息 ID、组织、店铺、平台和时间查询摘要。请求 raw payload 必须带 `reason`，并可能返回 `RAW_PAYLOAD_ACCESS_DENIED`。
+      description: 技术支持按 `decision_id`、请求 ID、外部消息 ID、租户、店铺、平台和时间查询摘要。请求 raw payload 必须带 `reason`，并可能返回 `RAW_PAYLOAD_ACCESS_DENIED`。
       security:
         - SystemAdminSession: []
       parameters:
-        - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/TenantIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
         - name: decision_id
           in: query
@@ -1661,7 +1662,7 @@ paths:
       security:
         - SystemAdminSession: []
       parameters:
-        - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/TenantIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
         - name: task_type
           in: query
@@ -1733,7 +1734,7 @@ paths:
       security:
         - SystemAdminSession: []
       parameters:
-        - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/TenantIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
         - name: actor_user_id
           in: query
@@ -1837,20 +1838,20 @@ components:
       schema:
         type: string
       description: 规则版本集合 ID。
-    OrganizationIdQuery:
-      name: organization_id
+    TenantIdQuery:
+      name: tenant_id
       in: query
       required: false
       schema:
         type: string
-      description: 组织 ID。客户 Admin 查询时必须属于当前 session 可访问范围；系统 Admin 跨租户查询会写访问审计。
+      description: 租户 ID。客户 Admin 查询时必须属于当前 session 可访问范围；系统 Admin 跨租户查询会写访问审计。
     StoreIdQuery:
       name: store_id
       in: query
       required: false
       schema:
         type: string
-      description: 店铺 ID。与 `organization_id` 同时提供时必须匹配。
+      description: 店铺 ID。与 `tenant_id` 同时提供时必须匹配。
     StatusQuery:
       name: status
       in: query
@@ -1921,13 +1922,13 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
     Forbidden:
-      description: 已认证但没有访问当前组织、店铺、角色或排障数据的权限。
+      description: 已认证但没有访问当前租户、店铺、角色或排障数据的权限。
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
     NotFound:
-      description: 资源不存在或不属于当前组织 / 店铺上下文。
+      description: 资源不存在或不属于当前租户 / 店铺上下文。
       content:
         application/json:
           schema:
@@ -1977,32 +1978,23 @@ components:
         request_id:
           type: string
           description: 外部请求幂等键。
-        tenant_id:
-          type: string
-          description: 内部租户边界；通常由 API Key / Connector Token 映射，外部系统不需要传。
-        organization_id:
-          type: string
-          description: 旧版兼容字段；外部接入不应依赖或公开展示该字段，服务端会映射为内部 tenant。
-        store_id:
-          type: string
-          description: 旧版兼容字段；外部接入优先使用 `external_store_id`。
         platform:
           $ref: "#/components/schemas/Platform"
         external_store_id:
           type: string
-          description: 外部系统里的店铺或业务单元引用；接入 API 的公开店铺定位字段。
+          description: 外部平台店铺 ID，例如 PDD mallId；与 API Key / Connector Token 授权范围共同解析内部 store_id。
         platform_account_ref:
           type: string
-          description: 平台账号或 Connector 引用，用于把请求映射到内部 `platform_account`。
+          description: 外部平台账号或连接器引用；用于解析内部 platform_account_id。
         listing_ref:
           type: string
-          description: 某平台、某店铺下的销售实例引用；用于区分同一商品在多个平台或店铺售卖。
+          description: 外部销售实例、商品链接或 listing 引用；用于解析内部 listing_id。
         external_product_id:
           type: string
-          description: 外部平台商品 ID。缺少完整商品上下文时仅作为补上下文查询条件，不能让 Agent 猜测商品资料。
+          description: 外部商品 ID；可用于解析或补充 product_master / listing。
         external_sku_id:
           type: string
-          description: 外部平台 SKU ID。缺少完整 SKU 上下文时仅作为补上下文查询条件。
+          description: 外部 SKU ID 或规格编码；可用于解析内部 product_sku_id。
         message:
           $ref: "#/components/schemas/IncomingMessage"
         conversation:
@@ -2391,12 +2383,14 @@ components:
 
     WebhookSubscriptionCreateRequest:
       type: object
-      required: [organization_id, store_id, target_url, event_types, signing_algorithm, retry_policy]
+      required: [target_url, event_types, signing_algorithm, retry_policy]
       properties:
-        organization_id:
+        external_store_id:
           type: string
-        store_id:
+          description: 可选外部店铺引用；省略时使用当前 API Key / Connector Token 默认授权范围。
+        platform_account_ref:
           type: string
+          description: 可选平台账号引用；服务端解析为内部 platform_account_id。
         target_url:
           type: string
           format: uri
@@ -2474,11 +2468,11 @@ components:
 
     WebhookSubscription:
       type: object
-      required: [subscription_id, organization_id, store_id, target_url, event_types, signing_algorithm, status, retry_policy, redaction_policy, secret_ref, created_at, updated_at]
+      required: [subscription_id, tenant_id, store_id, target_url, event_types, signing_algorithm, status, retry_policy, redaction_policy, secret_ref, created_at, updated_at]
       properties:
         subscription_id:
           type: string
-        organization_id:
+        tenant_id:
           type: string
         store_id:
           type: string
@@ -2588,14 +2582,14 @@ components:
 
     AdminAuthResponse:
       type: object
-      required: [user, organizations, stores]
+      required: [user, tenants, stores]
       properties:
         user:
           $ref: "#/components/schemas/AdminUser"
-        organizations:
+        tenants:
           type: array
           items:
-            $ref: "#/components/schemas/Organization"
+            $ref: "#/components/schemas/Tenant"
         stores:
           type: array
           items:
@@ -2606,7 +2600,7 @@ components:
         - $ref: "#/components/schemas/AdminAuthResponse"
         - type: object
           properties:
-            active_organization_id:
+            active_tenant_id:
               type:
                 - string
                 - "null"
@@ -2617,9 +2611,9 @@ components:
 
     AdminStoreSettingsUpdateRequest:
       type: object
-      required: [organization_id, reason, settings]
+      required: [tenant_id, reason, settings]
       properties:
-        organization_id:
+        tenant_id:
           type: string
         request_id:
           type: string
@@ -2634,11 +2628,11 @@ components:
 
     AdminStoreSettingsResponse:
       type: object
-      required: [store_id, organization_id, settings, updated_at, audit_log_id]
+      required: [store_id, tenant_id, settings, updated_at, audit_log_id]
       properties:
         store_id:
           type: string
-        organization_id:
+        tenant_id:
           type: string
         settings:
           type: object
@@ -2662,9 +2656,9 @@ components:
 
     AdminInvitationCreateRequest:
       type: object
-      required: [organization_id, email, roles, reason]
+      required: [tenant_id, email, roles, reason]
       properties:
-        organization_id:
+        tenant_id:
           type: string
         email:
           type: string
@@ -2679,7 +2673,7 @@ components:
           type: array
           items:
             type: string
-          description: 空数组表示只授予组织级权限；店铺级角色必须显式列出店铺。
+          description: 空数组表示只授予租户级权限；店铺级角色必须显式列出店铺。
         reason:
           type: string
         idempotency_key:
@@ -2687,11 +2681,11 @@ components:
 
     AdminInvitationResponse:
       type: object
-      required: [invitation_id, organization_id, email, roles, status, expires_at, audit_log_id]
+      required: [invitation_id, tenant_id, email, roles, status, expires_at, audit_log_id]
       properties:
         invitation_id:
           type: string
-        organization_id:
+        tenant_id:
           type: string
         email:
           type: string
@@ -2715,9 +2709,9 @@ components:
 
     AdminRoleUpdateRequest:
       type: object
-      required: [organization_id, roles, reason]
+      required: [tenant_id, roles, reason]
       properties:
-        organization_id:
+        tenant_id:
           type: string
         roles:
           type: array
@@ -2754,9 +2748,9 @@ components:
 
     ConnectorCreateRequest:
       type: object
-      required: [organization_id, store_id, name, provider, capabilities, auth_ref, status, reason]
+      required: [tenant_id, store_id, name, provider, capabilities, auth_ref, status, reason]
       properties:
-        organization_id:
+        tenant_id:
           type: string
         store_id:
           type: string
@@ -2809,11 +2803,11 @@ components:
 
     Connector:
       type: object
-      required: [connector_id, organization_id, store_id, name, provider, capabilities, auth_ref, status, created_at, updated_at]
+      required: [connector_id, tenant_id, store_id, name, provider, capabilities, auth_ref, status, created_at, updated_at]
       properties:
         connector_id:
           type: string
-        organization_id:
+        tenant_id:
           type: string
         store_id:
           type: string
@@ -2906,9 +2900,9 @@ components:
 
     RuleSetCreateRequest:
       type: object
-      required: [organization_id, store_id, rule_version, rules, reason]
+      required: [tenant_id, store_id, rule_version, rules, reason]
       properties:
-        organization_id:
+        tenant_id:
           type: string
         store_id:
           type: string
@@ -2939,11 +2933,11 @@ components:
 
     RuleSet:
       type: object
-      required: [rule_set_id, organization_id, store_id, rule_version, release_status, rules, created_at, updated_at]
+      required: [rule_set_id, tenant_id, store_id, rule_version, release_status, rules, created_at, updated_at]
       properties:
         rule_set_id:
           type: string
-        organization_id:
+        tenant_id:
           type: string
         store_id:
           type: string
@@ -2987,9 +2981,9 @@ components:
 
     RuleDryRunRequest:
       type: object
-      required: [organization_id, store_id, cases, reason]
+      required: [tenant_id, store_id, cases, reason]
       properties:
-        organization_id:
+        tenant_id:
           type: string
         store_id:
           type: string
@@ -3199,18 +3193,18 @@ components:
         audit_log_id:
           type: string
 
-    SystemOrganizationListResponse:
+    SystemTenantListResponse:
       type: object
       required: [items, page_info]
       properties:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/SystemOrganization"
+            $ref: "#/components/schemas/SystemTenant"
         page_info:
           $ref: "#/components/schemas/PageInfo"
 
-    SystemOrganizationCreateRequest:
+    SystemTenantCreateRequest:
       type: object
       required: [name, status, reason]
       properties:
@@ -3228,12 +3222,12 @@ components:
         idempotency_key:
           type: string
 
-    SystemOrganizationResponse:
+    SystemTenantResponse:
       type: object
-      required: [organization, audit_log_id]
+      required: [tenant, audit_log_id]
       properties:
-        organization:
-          $ref: "#/components/schemas/SystemOrganization"
+        tenant:
+          $ref: "#/components/schemas/SystemTenant"
         audit_log_id:
           type: string
 
@@ -3250,9 +3244,9 @@ components:
 
     SystemStoreCreateRequest:
       type: object
-      required: [organization_id, name, platform, status, reason]
+      required: [tenant_id, name, platform, status, reason]
       properties:
-        organization_id:
+        tenant_id:
           type: string
         name:
           type: string
@@ -3374,17 +3368,24 @@ components:
 
     ProductUpsertRequest:
       type: object
-      required: [organization_id, store_id, external_product_id, title]
+      required: [tenant_id, store_id, external_product_id, title]
       properties:
         request_id:
           type: string
           description: Admin 写操作幂等键。
-        organization_id:
+        tenant_id:
           type: string
         store_id:
           type: string
         external_product_id:
           type: string
+          description: 外部平台商品 ID，可映射到一个或多个 listing。
+        listing_ref:
+          type: string
+          description: 可选销售实例 / 商品链接引用；同一 product_master 可挂多个 listing。
+        platform_account_ref:
+          type: string
+          description: 可选平台账号引用，用于定位 listing 所属连接器或平台账号。
         title:
           type: string
         category:
@@ -4089,7 +4090,7 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AdminRole"
-        organization_ids:
+        tenant_ids:
           type: array
           items:
             type: string
@@ -4106,11 +4107,11 @@ components:
             - "null"
           format: date-time
 
-    Organization:
+    Tenant:
       type: object
-      required: [organization_id, name]
+      required: [tenant_id, name]
       properties:
-        organization_id:
+        tenant_id:
           type: string
         name:
           type: string
@@ -4120,11 +4121,11 @@ components:
 
     Store:
       type: object
-      required: [store_id, organization_id, name, platform]
+      required: [store_id, tenant_id, name, platform]
       properties:
         store_id:
           type: string
-        organization_id:
+        tenant_id:
           type: string
         name:
           type: string
@@ -4158,9 +4159,9 @@ components:
             - "null"
           format: date-time
 
-    SystemOrganization:
+    SystemTenant:
       allOf:
-        - $ref: "#/components/schemas/Organization"
+        - $ref: "#/components/schemas/Tenant"
         - type: object
           required: [created_at]
           properties:
@@ -4192,9 +4193,9 @@ components:
 
     ReadinessSummary:
       type: object
-      required: [organization_id, store_id, status, checks, updated_at]
+      required: [tenant_id, store_id, status, checks, updated_at]
       properties:
-        organization_id:
+        tenant_id:
           type: string
         store_id:
           type: string
@@ -4224,11 +4225,11 @@ components:
 
     SystemMessageTraceSummary:
       type: object
-      required: [decision_id, organization_id, store_id, action, risk_level, created_at]
+      required: [decision_id, tenant_id, store_id, action, risk_level, created_at]
       properties:
         decision_id:
           type: string
-        organization_id:
+        tenant_id:
           type: string
         store_id:
           type: string
@@ -4252,7 +4253,7 @@ components:
 
     BackgroundTask:
       type: object
-      required: [task_id, task_type, status, organization_id, created_at]
+      required: [task_id, task_type, status, tenant_id, created_at]
       properties:
         task_id:
           type: string
@@ -4262,7 +4263,7 @@ components:
         status:
           type: string
           enum: [queued, running, succeeded, failed, retrying, canceled]
-        organization_id:
+        tenant_id:
           type: string
         store_id:
           type:
@@ -4306,7 +4307,7 @@ components:
             - string
             - "null"
           description: 系统 Admin 操作者 ID。
-        organization_id:
+        tenant_id:
           type:
             - string
             - "null"
@@ -4434,6 +4435,7 @@ components:
             - policy_blocked
             - internal_error
             - TENANT_SCOPE_REQUIRED
+            - RESOURCE_MAPPING_REQUIRED
             - ROLE_FORBIDDEN
             - AUDIT_REASON_REQUIRED
             - RAW_PAYLOAD_ACCESS_DENIED

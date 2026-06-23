@@ -8,10 +8,10 @@
 
 第一版目标是形成可部署、可鉴权、可追踪、可评测的同步客服决策闭环：
 
-- 外部系统通过 `POST /v1/reply-decisions` 提交最小问答请求。
+- 外部系统通过 `POST /v1/reply-decisions` 提交最小问答请求，只传平台、外部店铺 / 平台账号引用、可选 listing / 商品引用、消息和上下文；内部 `tenant_id` / `store_id` 由 API Key / Connector Token 解析。
 - 服务端生成稳定 `decision_id`，处理幂等、租户边界、规则闸门 stub 和 trace。
 - 缺少商品、订单、物流、规则或动作执行结果时，使用 typed context refill 和 `actions/results` 聚合。
-- 客户 Admin 维护租户自己的组织、店铺、用户、审计和商品资料。
+- 客户 Admin 维护租户自己的租户、店铺、用户、审计和商品资料。
 - 系统 Admin 管理平台级租户开通、上线检查、决策追踪、任务、审计和健康状态。
 - eval gate、OpenAPI 校验、CI 和部署健康检查形成发布闭环。
 
@@ -76,11 +76,11 @@ curl -fsS http://127.0.0.1:8000/health
 
 | 分组 | 最小表 |
 | --- | --- |
-| 租户与店铺 | `organization`、`store`、`platform_account` |
+| 租户与店铺 | `tenant`、`store`、`platform_account` |
 | 鉴权与会话 | `external_api_token`、`admin_user`、`admin_session`、`system_admin_user`、`system_admin_session` |
 | 决策与 trace | `decision_record`、`decision_trace_step`、`context_snapshot`、`decision_graph_checkpoint` |
 | 动作闭环 | `action_request`、`action_result` |
-| 商品资料 | `product`、`product_asset`、`product_asset_markdown`、`product_knowledge_candidate`、`product_price_snapshot` |
+| 商品资料 | `product_master`、`product_sku`、`listing` / `store_product`、`product_asset`、`product_asset_markdown`、`product_knowledge_candidate`、`product_price_snapshot` |
 | 审计 | `admin_audit_log`、`system_admin_audit_log` |
 
 建议验收命令：
@@ -106,15 +106,15 @@ psql "$DATABASE_URL" -c "select version, applied_at from schema_migration order 
 | 项目 | 内容 |
 | --- | --- |
 | 输入文档 | [HTTP API Design](http-api-design.md)、[Customer Admin Design](customer-admin-design.md)、[System Admin Design](system-admin-design.md)、[OpenAPI Contract](openapi.yaml) |
-| 主要产出 | 外部 API Bearer token 校验；客户 Admin HttpOnly session；系统 Admin HttpOnly session；组织 / 店铺 / 角色鉴权依赖；token hash 存储；审计入口。 |
-| 验收命令 / 口径 | 三类凭据不能跨 API 分组使用；跨组织、跨店铺访问默认拒绝；所有后台写操作都能记录操作者和租户上下文。 |
+| 主要产出 | 外部 API Bearer token 校验；客户 Admin HttpOnly session；系统 Admin HttpOnly session；租户 / 店铺 / 角色鉴权依赖；token hash 存储；审计入口。 |
+| 验收命令 / 口径 | 三类凭据不能跨 API 分组使用；跨租户、跨店铺访问默认拒绝；所有后台写操作都能记录操作者和租户上下文。 |
 
 鉴权边界：
 
 | 凭据类型 | 允许访问 | 必须拒绝 |
 | --- | --- | --- |
 | 外部 API token | `/v1/reply-decisions`、typed context refill、`actions/results`、人工反馈、按契约允许的 trace 查询 | `/v1/admin/*`、`/v1/system-admin/*` |
-| 客户 Admin session | `/v1/admin/*`、`/v1/product-content/*`、本租户授权店铺的审计和 trace | `/v1/system-admin/*`、其他组织或未授权店铺 |
+| 客户 Admin session | `/v1/admin/*`、`/v1/product-content/*`、本租户授权店铺的审计和 trace | `/v1/system-admin/*`、其他租户或未授权店铺 |
 | 系统 Admin session | `/v1/system-admin/*`、跨租户 readiness 和排障视图 | 客户业务写入，除非通过明确的代运营接口并写系统审计 |
 | 客户 Admin Web | `admin.ecommerce-cs-agent-dev.fcihome.com`、客户登录页、客户后台路由守卫 | 系统后台入口、系统后台 session、`/v1/system-admin/*` |
 | 系统 Admin Web | `system-admin.ecommerce-cs-agent-dev.fcihome.com`、系统登录页、系统后台路由守卫 | 客户后台入口、客户后台 session、伪装客户用户调用 `/v1/admin/*` |
@@ -203,16 +203,16 @@ python -m pytest tests/integration/test_reply_decision_context_resume.py -q
 | 项目 | 内容 |
 | --- | --- |
 | 输入文档 | [Customer Admin Design](customer-admin-design.md)、[HTTP API Design](http-api-design.md)、[OpenAPI Contract](openapi.yaml)、[Development Readiness](development-readiness.md) |
-| 主要产出 | `/v1/admin/auth/me`；organizations；stores；users；audit；product-content 入口；客户 session 校验；角色权限；客户审计日志。 |
-| 验收命令 / 口径 | 登录态可读取当前用户、组织、店铺和角色；客户只能操作授权组织 / 店铺；写操作写入 `admin_audit_log`。 |
+| 主要产出 | `/v1/admin/auth/me`；tenants；stores；users；audit；product-content 入口；客户 session 校验；角色权限；客户审计日志。 |
+| 验收命令 / 口径 | 登录态可读取当前用户、租户、店铺和角色；客户只能操作授权租户 / 店铺；写操作写入 `admin_audit_log`。 |
 
 第一版接口分组：
 
 | 分组 | 实现内容 |
 | --- | --- |
-| auth/me | 当前用户、组织、店铺、角色、权限摘要和 session 状态。 |
-| organizations | 当前用户可访问组织列表和默认组织选择。 |
-| stores | 当前组织下可访问店铺列表、店铺设置摘要和启用状态。 |
+| auth/me | 当前用户、租户、店铺、角色、权限摘要和 session 状态。 |
+| tenants | 当前用户可访问租户列表和默认租户选择。 |
+| stores | 当前租户下可访问店铺列表、店铺设置摘要和启用状态。 |
 | users | 成员列表、邀请、角色调整和禁用。 |
 | audit | 客户后台配置变更、知识审核、规则变更和敏感操作查询。 |
 | product-content | 商品、SKU、资料资产、Markdown 审稿稿件、知识候选、价格快照和资料健康检查的入口。 |
@@ -228,7 +228,7 @@ python -m pytest tests/contract/test_customer_admin.py tests/integration/test_cu
 - `GET /v1/admin/auth/me` 必须返回前端渲染所需的最小身份上下文。
 - 客户 Admin session 不能访问系统 Admin API。
 - 客户后台 Web 只部署在 `admin.ecommerce-cs-agent-dev.fcihome.com`，不展示系统后台入口或切换按钮。
-- 每个写接口都记录操作者、组织、店铺、对象类型、对象 ID、动作和差异摘要。
+- 每个写接口都记录操作者、租户、店铺、对象类型、对象 ID、动作和差异摘要。
 
 ## 7. 系统 Admin
 
@@ -244,7 +244,7 @@ python -m pytest tests/contract/test_customer_admin.py tests/integration/test_cu
 
 | 分组 | 实现内容 |
 | --- | --- |
-| tenant / store | 组织和店铺创建、启停、平台绑定、初始客户管理员开通。 |
+| tenant / store | 租户和店铺创建、启停、平台绑定、初始客户管理员开通。 |
 | readiness | 商品资料、知识审核、规则、动作能力、价格快照、API token、health 的上线检查。 |
 | message-traces | 按 `decision_id`、请求 ID、外部消息 ID、租户、店铺、平台和时间查询决策链路。 |
 | tasks | 资料解析、Markdown 转换、知识抽取、embedding、评测运行等任务状态查询契约。 |

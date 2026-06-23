@@ -83,7 +83,7 @@ TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com \
 | --- | --- | --- |
 | `FAIL health` | API 入口不可用或返回非 2xx。 | 先按 `/health` 失败排查。 |
 | `status=401` | 未传 token、token 错误或服务端鉴权配置不一致。 | 确认 `AGENT_API_TOKEN` 从运行时 Secret 临时注入；不要打印 token。 |
-| `status=403` | token 有效但没有组织 / 店铺 / 接口权限。 | 检查 token 授权范围与请求里的 `organization_id`、`store_id`。 |
+| `status=403` | token 有效但没有租户 / 店铺 / 接口权限。 | 检查 token 授权范围与请求里的 `tenant_id`、`store_id`。 |
 | `status=404` | `/v1/reply-decisions` 路由未部署或 Ingress 转发错误。 | 检查当前镜像版本和 API 路由实现。 |
 | `status=422` | 请求 schema 与 OpenAPI / 服务端校验不一致。 | 对照 `docs/openapi.yaml` 和 eval 请求体。 |
 | `status=500` | 服务端运行时错误。 | 查应用日志、DB、LLM、配置。 |
@@ -97,7 +97,7 @@ TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com \
 | --- | --- | --- |
 | 400 | 请求格式非法或 JSON 无法解析。 | 检查请求体和 `Content-Type`。 |
 | 401 | 缺少认证或认证无效。 | 检查 token/session 注入，不打印明文。 |
-| 403 | 认证有效但权限不足。 | 检查组织、店铺、角色、客户 / 系统 Admin host、Cookie 名和 API 鉴权域。 |
+| 403 | 认证有效但权限不足。 | 检查租户、店铺、角色、客户 / 系统 Admin host、Cookie 名和 API 鉴权域。 |
 | 404 | 路由不存在或资源不存在。 | 检查部署版本、OpenAPI path、Ingress path。 |
 | 409 | 幂等冲突、版本冲突或重复动作。 | 检查 `request_id`、`idempotency_key`、资源版本。 |
 | 422 | 字段校验失败或缺少审计原因。 | 对照 OpenAPI schema 和业务错误 code。 |
