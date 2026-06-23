@@ -123,18 +123,35 @@ def product_document_analyzer_for(settings: Settings) -> ProductDocumentAnalyzer
 def _extract_labeled_fields(text: str) -> dict[str, str]:
     fields: dict[str, str] = {}
     for line in text.splitlines():
-        match = re.match(r"^\s*([^:：]{1,24})\s*[:：]\s*(.+?)\s*$", line)
-        if match:
-            fields[match.group(1).strip()] = match.group(2).strip()
+        parsed = _split_labeled_line(line)
+        if parsed is not None:
+            key, value = parsed
+            fields[key] = value
     return fields
 
 
 def _first_content_line(text: str) -> str:
     for line in text.splitlines():
         cleaned = line.strip().strip("#").strip()
-        if cleaned and not re.match(r"^[^:：]{1,24}\s*[:：]", cleaned):
+        if cleaned and _split_labeled_line(cleaned) is None:
             return cleaned[:80]
     return ""
+
+
+def _split_labeled_line(line: str) -> tuple[str, str] | None:
+    stripped = line.strip()
+    ascii_separator = stripped.find(":")
+    full_width_separator = stripped.find("：")
+    separator_positions = [position for position in (ascii_separator, full_width_separator) if position >= 0]
+    if not separator_positions:
+        return None
+
+    separator_index = min(separator_positions)
+    key = stripped[:separator_index].strip()
+    value = stripped[separator_index + 1 :].strip()
+    if not key or not value or len(key) > 24:
+        return None
+    return key, value
 
 
 def _slug_from_file_name(file_name: str) -> str:

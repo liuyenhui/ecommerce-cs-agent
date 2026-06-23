@@ -50,8 +50,6 @@ jobs:
           )"
           echo "CodeQL alert count: ${alert_count}"
           if [ "$alert_count" -gt 0 ]; then
-            find codeql-results -name '*.sarif' -print0 \
-              | xargs -0 jq -r '.runs[] as $run | $run.results[]? | "\(.ruleId) \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine) \(.message.text)"'
             exit 1
           fi
 
