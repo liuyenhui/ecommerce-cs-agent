@@ -33,6 +33,14 @@ function collectSource(dir) {
   return files.map((file) => `\n/* ${path.relative(adminRoot, file)} */\n${readFileSync(file, "utf8")}`).join("\n");
 }
 
+function sliceBetween(source, start, end) {
+  const startIndex = source.indexOf(start);
+  const endIndex = source.indexOf(end, startIndex + start.length);
+  assert.ok(startIndex >= 0, `missing slice start ${start}`);
+  assert.ok(endIndex > startIndex, `missing slice end ${end}`);
+  return source.slice(startIndex, endIndex);
+}
+
 test("admin web has independent customer and system entry roots", () => {
   assert.ok(existsSync(repoPath("customer-admin", "index.html")), "customer-admin/index.html must exist");
   assert.ok(existsSync(repoPath("customer-admin", "src", "main.tsx")), "customer-admin/src/main.tsx must exist");
@@ -57,6 +65,24 @@ test("customer admin source stays inside customer auth and host boundary", () =>
   assert.doesNotMatch(source, /system-admin\.ecommerce-cs-agent-dev\.fcihome\.com/);
   assert.doesNotMatch(source, /agent_system_admin_session/);
   assert.doesNotMatch(source, /\b(SystemSite|SystemWorkspace|SystemHome|TenantManagement|TraceTable|TaskCenter|HealthPanel|SystemCreateModal)\b/);
+});
+
+test("customer admin login page keeps customer-only email password and fcihome account entry", () => {
+  const customerApp = readRelative("customer-admin/src/App.tsx");
+  const sharedComponents = readRelative("shared/components.tsx");
+  const loginRoute = sliceBetween(customerApp, 'if (path === "/login")', 'if (path.startsWith("/admin"))');
+  const loginPanel = sliceBetween(sharedComponents, "export function LoginPanelBase", "function loginFailureMessage");
+  const loginSource = `${loginRoute}\n${loginPanel}`;
+
+  assert.match(loginSource, /客户后台登录/);
+  assert.match(loginSource, /使用 Fcihome Account 登录/);
+  assert.match(loginSource, /\/v1\/admin\/auth\/oidc\/start/);
+  assert.match(loginSource, /邮箱/);
+  assert.match(loginSource, /密码/);
+  assert.doesNotMatch(loginSource, /组织 ID/);
+  assert.doesNotMatch(loginSource, /\borganization\b/i);
+  assert.doesNotMatch(loginSource, /org-001/);
+  assert.doesNotMatch(loginSource, /system-admin/i);
 });
 
 test("system admin source stays inside system auth boundary", () => {

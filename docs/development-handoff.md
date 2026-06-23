@@ -6,6 +6,7 @@
 
 ### 2026-06-23
 
+- Customer Admin 登录页新增 Fcihome Account OIDC 入口：邮箱密码登录继续保留且不展示组织 ID；OIDC 仅确认身份，已绑定 `fcihome_account_sub` 可登录，唯一 active 邮箱匹配时才自动绑定并写审计；System Admin 第一版不接 OIDC，Cookie/session 继续隔离。
 - Customer Admin 商品资料页收敛为商品主数据列表 + “上传商品”导入草稿：客户 UI 不再展示组织上下文、顶部刷新按钮或账号 badge；上传文件先生成 AI 抽取草稿，用户确认后才写入正式商品和资料资产。
 - Product Content API 新增 `GET /v1/product-content/products`、`POST /v1/product-content/product-import-drafts`、`POST /v1/product-content/product-import-drafts/{draft_id}/confirm`；导入草稿持久化到 `product_import_draft`，审计不得记录上传正文或 `content_base64` 明文。
 

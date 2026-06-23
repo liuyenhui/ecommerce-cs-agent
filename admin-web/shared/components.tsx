@@ -144,13 +144,21 @@ export function TopBar({
 
 export function LoginPanelBase({
   title,
+  initialError,
   onLoggedIn,
   onSubmit,
+  secondaryAction,
   setToast
 }: {
   title: string;
+  initialError?: string | null;
   onLoggedIn: (session: JsonRecord) => void;
   onSubmit: (email: string, password: string) => Promise<JsonRecord>;
+  secondaryAction?: {
+    label: string;
+    onClick: () => void;
+    icon?: React.ReactNode;
+  };
   setToast: (toast: ToastState) => void;
 }) {
   const [email, setEmail] = React.useState("");
@@ -159,7 +167,11 @@ export function LoginPanelBase({
   const [fieldErrors, setFieldErrors] = React.useState<Partial<Record<"email" | "password", boolean>>>({});
   const [loading, setLoading] = React.useState(false);
   const loginErrorId = `${title.replace(/\s+/g, "-")}-login-error`;
-  const authErrorText = "邮箱或密码不正确，请检查后重试。";
+  const authErrorText = "邮箱或密码错误，请检查后重试。";
+
+  React.useEffect(() => {
+    setLoginError(initialError || null);
+  }, [initialError]);
 
   function clearLoginError() {
     if (loginError) setLoginError(null);
@@ -235,6 +247,12 @@ export function LoginPanelBase({
           {loading ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
           登录
         </button>
+        {secondaryAction ? (
+          <button className="secondaryLoginButton" type="button" onClick={secondaryAction.onClick} disabled={loading}>
+            {secondaryAction.icon || <KeyRound size={16} />}
+            {secondaryAction.label}
+          </button>
+        ) : null}
       </form>
     </section>
   );

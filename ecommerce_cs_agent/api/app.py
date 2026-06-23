@@ -15,6 +15,7 @@ from ecommerce_cs_agent.api.auth import (
 from ecommerce_cs_agent.api.errors import api_error
 from ecommerce_cs_agent.core.config import Settings, load_settings
 from ecommerce_cs_agent.core.passwords import password_matches
+from ecommerce_cs_agent.services import oidc as oidc_service
 from ecommerce_cs_agent.services.admin import admin_repository_for
 from ecommerce_cs_agent.services.admin_auth import admin_auth_service_for, system_admin_auth_service_for
 from ecommerce_cs_agent.services.decision import DecisionService
@@ -191,6 +192,65 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/v1/admin/auth/me")
     def get_admin_me(session: Any = Depends(admin_session)) -> dict[str, Any]:
         return admin_auth.me(session)
+
+    @app.get("/v1/admin/auth/oidc/start")
+    def admin_oidc_start() -> RedirectResponse:
+        redirect_url, state_cookie = oidc_service.build_authorization_redirect(settings)
+        response = RedirectResponse(redirect_url, status_code=307)
+        response.set_cookie(
+            oidc_service.OIDC_STATE_COOKIE,
+            state_cookie,
+            httponly=True,
+            samesite="lax",
+            max_age=600,
+        )
+        return response
+
+    @app.get("/v1/admin/auth/oidc/callback")
+    def admin_oidc_callback(request: Request) -> RedirectResponse:
+        try:
+            state_payload = oidc_service.read_state_cookie(
+                settings,
+                request.cookies.get(oidc_service.OIDC_STATE_COOKIE),
+                request.query_params.get("state") or "",
+            )
+            profile = oidc_service.exchange_code_for_userinfo(
+                settings,
+                request.query_params.get("code") or "",
+                state_payload,
+            )
+            _content, token = admin_auth.login_oidc(profile)
+        except HTTPException as exc:
+            error_code = _http_error_code(exc)
+            if error_code in {
+                "oidc_state_pkce_failed",
+                "oidc_unbound_account",
+                "oidc_disabled",
+                "oidc_misconfigured",
+                "oidc_exchange_failed",
+            }:
+                response = RedirectResponse(f"/login?error={error_code}", status_code=307)
+                response.delete_cookie(oidc_service.OIDC_STATE_COOKIE)
+                return response
+            raise
+        response = RedirectResponse("/admin", status_code=307)
+        response.set_cookie("agent_admin_session", token, httponly=True, samesite="lax")
+        response.delete_cookie(oidc_service.OIDC_STATE_COOKIE)
+        return response
+
+    @app.post("/v1/admin/auth/oidc/link")
+    async def admin_oidc_link(request: Request, session: Any = Depends(admin_session)) -> JSONResponse:
+        payload = await request.json()
+        _require_fields(payload, ["code", "state"])
+        state_payload = oidc_service.read_state_cookie(
+            settings,
+            request.cookies.get(oidc_service.OIDC_STATE_COOKIE),
+            str(payload.get("state") or ""),
+        )
+        profile = oidc_service.exchange_code_for_userinfo(settings, str(payload.get("code") or ""), state_payload)
+        response = JSONResponse(content=admin_auth.link_oidc(session, profile))
+        response.delete_cookie(oidc_service.OIDC_STATE_COOKIE)
+        return response
 
     @app.get("/v1/admin/organizations")
     def list_admin_organizations(session: Any = Depends(admin_session)) -> dict[str, Any]:
@@ -450,6 +510,14 @@ def _error_response(status_code: int, code: str, message: str, extra: dict[str, 
     if extra:
         content["error"].update(extra)
     return JSONResponse(status_code=status_code, content=content)
+
+
+def _http_error_code(exc: HTTPException) -> str:
+    if isinstance(exc.detail, dict):
+        error = exc.detail.get("error")
+        if isinstance(error, dict) and error.get("code"):
+            return str(error["code"])
+    return "http_error"
 
 
 def _require_fields(payload: dict[str, Any], fields: list[str]) -> None:

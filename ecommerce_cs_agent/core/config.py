@@ -29,6 +29,11 @@ class Settings:
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    admin_oidc_enabled: bool = False
+    admin_oidc_issuer: str | None = None
+    admin_oidc_client_id: str | None = None
+    admin_oidc_client_secret: str | None = None
+    admin_oidc_redirect_uri: str | None = None
 
 
 def load_settings() -> Settings:
@@ -81,6 +86,11 @@ def load_settings() -> Settings:
         llm_api_key=os.environ.get("LLM_API_KEY"),
         llm_base_url=os.environ.get("LLM_BASE_URL"),
         llm_model=os.environ.get("LLM_MODEL"),
+        admin_oidc_enabled=_env_bool("ADMIN_OIDC_ENABLED", "OIDC_ENABLED"),
+        admin_oidc_issuer=_env_first_optional("ADMIN_OIDC_ISSUER", "OIDC_ISSUER"),
+        admin_oidc_client_id=_env_first_optional("ADMIN_OIDC_CLIENT_ID", "OIDC_CLIENT_ID"),
+        admin_oidc_client_secret=_env_first_optional("ADMIN_OIDC_CLIENT_SECRET", "OIDC_CLIENT_SECRET"),
+        admin_oidc_redirect_uri=_env_first_optional("ADMIN_OIDC_REDIRECT_URI", "OIDC_REDIRECT_URI"),
     )
 
 
@@ -90,6 +100,19 @@ def _env_first(*keys: str, default: str) -> str:
         if value:
             return value
     return default
+
+
+def _env_first_optional(*keys: str) -> str | None:
+    for key in keys:
+        value = os.environ.get(key)
+        if value:
+            return value
+    return None
+
+
+def _env_bool(*keys: str) -> bool:
+    value = _env_first_optional(*keys)
+    return str(value or "").lower() in {"1", "true", "yes", "on"}
 
 
 def _missing_required_groups(groups: list[tuple[str, ...]]) -> list[str]:

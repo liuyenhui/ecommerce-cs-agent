@@ -59,6 +59,7 @@ class InMemoryAdminAuthService:
                 "user_id": "admin-001",
                 "email": settings.admin_initial_email,
                 "display_name": "Customer Admin",
+                "fcihome_account_sub": None,
                 "roles": ["owner"],
                 "organization_ids": ["org-001"],
                 "store_ids": ["store-001"],
@@ -97,6 +98,79 @@ class InMemoryAdminAuthService:
         self.users["admin-001"]["last_login_at"] = _now()
         self._audit("admin-001", organization_id, None, "auth.login", "admin_session", "current", {"reason": "login"})
         return self.me(self.sessions[token]), token
+
+    def login_oidc(self, profile: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        user_id, linked = self._resolve_oidc_user(profile)
+        user = self.users[user_id]
+        token = secrets.token_urlsafe(32)
+        session = AdminSession(
+            token=token,
+            user_id=user_id,
+            active_organization_id=user["organization_ids"][0],
+            active_store_id=user["store_ids"][0],
+            expires_at=_now_dt() + timedelta(hours=8),
+        )
+        self.sessions[token] = session
+        user["last_login_at"] = _now()
+        if linked:
+            self._audit(
+                user_id,
+                session.active_organization_id,
+                session.active_store_id,
+                "auth.oidc.link",
+                "admin_user",
+                user_id,
+                {"provider": "fcihome_account", "bind_reason": "email_match"},
+            )
+        self._audit(
+            user_id,
+            session.active_organization_id,
+            session.active_store_id,
+            "auth.oidc.login",
+            "admin_session",
+            "current",
+            {"provider": "fcihome_account", "login_method": "oidc"},
+        )
+        return self.me(session), token
+
+    def link_oidc(self, session: AdminSession, profile: dict[str, Any]) -> dict[str, Any]:
+        user = self.users[session.user_id]
+        sub = _oidc_sub(profile)
+        email = _oidc_email(profile)
+        if email and email.lower() != str(user.get("email", "")).lower():
+            raise api_error(403, "oidc_unbound_account", "OIDC 未绑定账号")
+        user["fcihome_account_sub"] = sub
+        self._audit(
+            session.user_id,
+            session.active_organization_id,
+            session.active_store_id,
+            "auth.oidc.link",
+            "admin_user",
+            session.user_id,
+            {"provider": "fcihome_account", "bind_reason": "manual_link"},
+        )
+        return self.me(session)
+
+    def _resolve_oidc_user(self, profile: dict[str, Any]) -> tuple[str, bool]:
+        sub = _oidc_sub(profile)
+        email = _oidc_email(profile)
+        for user_id, user in self.users.items():
+            if user.get("status") == "active" and user.get("fcihome_account_sub") == sub:
+                return user_id, False
+        if not email or profile.get("email_verified") is False:
+            raise api_error(403, "oidc_unbound_account", "OIDC 未绑定账号")
+        matches = [
+            (user_id, user)
+            for user_id, user in self.users.items()
+            if user.get("status") == "active"
+            and not user.get("fcihome_account_sub")
+            and str(user.get("email", "")).lower() == email.lower()
+        ]
+        if len(matches) != 1:
+            raise api_error(403, "oidc_unbound_account", "OIDC 未绑定账号")
+        user_id, user = matches[0]
+        user["fcihome_account_sub"] = sub
+        return user_id, True
 
     def logout(self, token: str) -> None:
         session = self.sessions.get(token)
@@ -264,7 +338,7 @@ class PostgresAdminAuthService:
                 cur.execute(
                     """
                     SELECT admin.id, org.id, st.id, admin.email, admin.password_hash,
-                           admin.display_name, membership.roles,
+                           admin.display_name, membership.roles, admin.fcihome_account_sub,
                            org.external_organization_id, st.external_store_id
                     FROM admin_user admin
                     JOIN organization org ON org.id = admin.organization_id
@@ -279,7 +353,7 @@ class PostgresAdminAuthService:
                     """,
                     (email,),
                 )
-                row = cur.fetchone()
+                row = _normalize_admin_auth_row(cur.fetchone())
                 if not row or not _password_matches(email, password, row[3], row[4]):
                     raise api_error(401, "unauthorized", "invalid admin credentials")
                 token = secrets.token_urlsafe(32)
@@ -297,11 +371,147 @@ class PostgresAdminAuthService:
                 session = AdminSession(
                     token=token,
                     user_id=str(row[0]),
-                    active_organization_id=str(row[7]),
-                    active_store_id=str(row[8]),
+                    active_organization_id=str(row[8]),
+                    active_store_id=str(row[9]),
                     expires_at=_now_dt() + timedelta(hours=8),
                 )
                 return self._auth_response_from_row(row, session), token
+
+    def login_oidc(self, profile: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        sub = _oidc_sub(profile)
+        email = _oidc_email(profile)
+        linked = False
+        with self._connect(self.settings.database_url) as conn:
+            with conn.cursor() as cur:
+                self._bootstrap_initial_admin(cur, "org-001")
+                cur.execute(
+                    """
+                    SELECT admin.id, org.id, st.id, admin.email, admin.password_hash,
+                           admin.display_name, membership.roles, admin.fcihome_account_sub,
+                           org.external_organization_id, st.external_store_id
+                    FROM admin_user admin
+                    JOIN organization org ON org.id = admin.organization_id
+                    JOIN admin_membership membership ON membership.admin_user_id = admin.id
+                     AND membership.organization_id = org.id
+                     AND membership.status = 'active'
+                    LEFT JOIN store st ON st.organization_id = org.id
+                    WHERE admin.status = 'active'
+                      AND admin.fcihome_account_sub = %s
+                    ORDER BY membership.created_at ASC NULLS LAST, org.created_at ASC NULLS LAST
+                    LIMIT 1
+                    """,
+                    (sub,),
+                )
+                row = _normalize_admin_auth_row(cur.fetchone())
+                if row is None:
+                    if not email or profile.get("email_verified") is False:
+                        raise api_error(403, "oidc_unbound_account", "OIDC 未绑定账号")
+                    cur.execute(
+                        """
+                        SELECT admin.id, org.id, st.id, admin.email, admin.password_hash,
+                               admin.display_name, membership.roles, admin.fcihome_account_sub,
+                               org.external_organization_id, st.external_store_id
+                        FROM admin_user admin
+                        JOIN organization org ON org.id = admin.organization_id
+                        JOIN admin_membership membership ON membership.admin_user_id = admin.id
+                         AND membership.organization_id = org.id
+                         AND membership.status = 'active'
+                        LEFT JOIN store st ON st.organization_id = org.id
+                        WHERE admin.status = 'active'
+                          AND admin.fcihome_account_sub IS NULL
+                          AND lower(admin.email) = lower(%s)
+                        ORDER BY membership.created_at ASC NULLS LAST, org.created_at ASC NULLS LAST
+                        LIMIT 2
+                        """,
+                        (email,),
+                    )
+                    matches = [_normalize_admin_auth_row(item) for item in cur.fetchall()]
+                    matches = [item for item in matches if item is not None]
+                    if len({str(item[0]) for item in matches}) != 1:
+                        raise api_error(403, "oidc_unbound_account", "OIDC 未绑定账号")
+                    row = matches[0]
+                    cur.execute(
+                        "UPDATE admin_user SET fcihome_account_sub = %s, updated_at = now() WHERE id = %s",
+                        (sub, row[0]),
+                    )
+                    row = (*row[:7], sub, *row[8:])
+                    linked = True
+                token = secrets.token_urlsafe(32)
+                cur.execute(
+                    """
+                    INSERT INTO admin_session (
+                        organization_id, admin_user_id, session_hash, active_store_id,
+                        expires_at, last_seen_at, request_metadata
+                    )
+                    VALUES (%s, %s, %s, %s, now() + interval '8 hours', now(), %s)
+                    """,
+                    (row[1], row[0], _hash_session(token), row[2], Jsonb({"source": "oidc_login"})),
+                )
+                session = AdminSession(
+                    token=token,
+                    user_id=str(row[0]),
+                    active_organization_id=str(row[8]),
+                    active_store_id=str(row[9]),
+                    expires_at=_now_dt() + timedelta(hours=8),
+                )
+                if linked:
+                    self._audit(
+                        cur,
+                        session,
+                        session.active_organization_id,
+                        session.active_store_id,
+                        "auth.oidc.link",
+                        "admin_user",
+                        session.user_id,
+                        {"provider": "fcihome_account", "bind_reason": "email_match"},
+                    )
+                self._audit(
+                    cur,
+                    session,
+                    session.active_organization_id,
+                    session.active_store_id,
+                    "auth.oidc.login",
+                    "admin_session",
+                    "current",
+                    {"provider": "fcihome_account", "login_method": "oidc"},
+                )
+                return self._auth_response_from_row(row, session), token
+
+    def link_oidc(self, session: AdminSession, profile: dict[str, Any]) -> dict[str, Any]:
+        sub = _oidc_sub(profile)
+        email = _oidc_email(profile)
+        with self._connect(self.settings.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE admin_user
+                    SET fcihome_account_sub = %s, updated_at = now()
+                    WHERE id = %s
+                      AND status = 'active'
+                      AND (%s = '' OR lower(email) = lower(%s))
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM admin_user other_admin
+                        WHERE other_admin.fcihome_account_sub = %s
+                          AND other_admin.id <> admin_user.id
+                      )
+                    RETURNING id
+                    """,
+                    (sub, session.user_id, email, email, sub),
+                )
+                if not cur.fetchone():
+                    raise api_error(403, "oidc_unbound_account", "OIDC 未绑定账号")
+                self._audit(
+                    cur,
+                    session,
+                    session.active_organization_id,
+                    session.active_store_id,
+                    "auth.oidc.link",
+                    "admin_user",
+                    session.user_id,
+                    {"provider": "fcihome_account", "bind_reason": "manual_link"},
+                )
+        return self.me(session)
 
     def logout(self, token: str) -> None:
         with self._connect(self.settings.database_url) as conn:
@@ -458,6 +668,7 @@ class PostgresAdminAuthService:
                     """
                     SELECT admin.id, admin.email, admin.display_name, admin.status,
                            membership.roles, org.external_organization_id,
+                           admin.fcihome_account_sub,
                            COALESCE(array_agg(st.external_store_id) FILTER (WHERE st.external_store_id IS NOT NULL), ARRAY[]::text[])
                     FROM admin_user admin
                     JOIN admin_membership membership ON membership.admin_user_id = admin.id
@@ -466,7 +677,7 @@ class PostgresAdminAuthService:
                     LEFT JOIN store st ON st.id = ANY(membership.store_ids)
                     WHERE org.external_organization_id = %s
                     GROUP BY admin.id, admin.email, admin.display_name, admin.status,
-                             membership.roles, org.external_organization_id
+                             membership.roles, org.external_organization_id, admin.fcihome_account_sub
                     ORDER BY admin.created_at DESC
                     LIMIT 50
                     """,
@@ -703,20 +914,24 @@ class PostgresAdminAuthService:
         )
 
     def _auth_response_from_row(self, row: tuple[Any, ...], session: AdminSession) -> dict[str, Any]:
+        row = _normalize_admin_auth_row(row)
+        if row is None:
+            raise api_error(401, "unauthorized", "missing customer admin session")
         roles = list(row[6] or ["owner"])
         return {
             "user": {
                 "user_id": str(row[0]),
                 "email": row[3],
                 "display_name": row[5],
+                "fcihome_account_sub": row[7],
                 "roles": roles,
-                "organization_ids": [str(row[7])],
-                "store_ids": [str(row[8])],
+                "organization_ids": [str(row[8])],
+                "store_ids": [str(row[9])],
                 "status": "active",
                 "last_login_at": None,
             },
-            "organizations": [{"id": str(row[7]), "name": str(row[7]), "status": "active", "metadata": {}}],
-            "stores": [{"id": str(row[8]), "organization_id": str(row[7]), "name": str(row[8]), "platform": "pdd", "status": "active", "metadata": {}}],
+            "organizations": [{"id": str(row[8]), "name": str(row[8]), "status": "active", "metadata": {}}],
+            "stores": [{"id": str(row[9]), "organization_id": str(row[8]), "name": str(row[9]), "platform": "pdd", "status": "active", "metadata": {}}],
             "active_organization_id": session.active_organization_id,
             "active_store_id": session.active_store_id,
         }
@@ -992,11 +1207,13 @@ def _store_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
 
 def _admin_user_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
     roles = list(row[4] or [])
-    store_ids = list(row[6] or [])
+    fcihome_account_sub = row[6] if len(row) >= 8 else None
+    store_ids = list((row[7] if len(row) >= 8 else row[6]) or [])
     return {
         "user_id": str(row[0]),
         "email": str(row[1]),
         "display_name": str(row[2]),
+        "fcihome_account_sub": fcihome_account_sub,
         "roles": roles,
         "organization_ids": [str(row[5])],
         "store_ids": [str(item) for item in store_ids],
@@ -1025,6 +1242,25 @@ def _admin_audit_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
 
 def _password_matches(email: Any, password: Any, expected_email: str, stored_hash: str) -> bool:
     return password_matches(email, password, expected_email, stored_hash)
+
+
+def _oidc_sub(profile: dict[str, Any]) -> str:
+    sub = str(profile.get("sub") or "")
+    if not sub:
+        raise api_error(422, "validation_error", "OIDC sub is required")
+    return sub
+
+
+def _oidc_email(profile: dict[str, Any]) -> str:
+    return str(profile.get("email") or "").strip()
+
+
+def _normalize_admin_auth_row(row: tuple[Any, ...] | None) -> tuple[Any, ...] | None:
+    if row is None:
+        return None
+    if len(row) == 9:
+        return (*row[:7], None, *row[7:])
+    return row
 
 
 def _parse_cookie(cookie: str | None) -> dict[str, str]:

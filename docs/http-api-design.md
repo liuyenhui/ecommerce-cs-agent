@@ -37,7 +37,7 @@ GET https://system-admin.ecommerce-cs-agent-dev.fcihome.com/
 ```
 
 - `admin.ecommerce-cs-agent-dev.fcihome.com` 只承载公开宣传页、客户 Admin 登录页和客户后台 shell，不展示“系统后台”入口。
-- 客户后台登录只提交邮箱和密码，登录成功后建立客户 Admin session，例如 `agent_admin_session`，并跳转 `/admin`；组织 / 店铺上下文来自 `GET /v1/admin/auth/me` 返回的可访问列表，客户后台路由守卫只调用该接口。
+- 客户后台登录默认只提交邮箱和密码；也可通过 Customer Admin 专用 Fcihome Account OIDC 入口确认外部身份。无论哪种方式，登录成功后只建立客户 Admin session，例如 `agent_admin_session`，并跳转 `/admin`；组织 / 店铺上下文来自 `GET /v1/admin/auth/me` 返回的可访问列表，客户后台路由守卫只调用该接口。
 - `system-admin.ecommerce-cs-agent-dev.fcihome.com` 承载系统 Admin 登录页和系统后台 shell，`ops-admin.ecommerce-cs-agent-dev.fcihome.com` 只作为可选别名。
 - 系统后台登录成功后建立系统 Admin session，例如 `agent_system_admin_session`；系统后台路由守卫只调用 `GET /v1/system-admin/auth/me`。
 - 客户 Admin session、系统 Admin session 和外部系统 API token 互不互认；服务端 session 状态必须保存在数据库、Redis 或等价外部存储，不能依赖单容器内存。
@@ -526,6 +526,9 @@ POST /v1/capabilities/action-capabilities
 POST /v1/admin/auth/login
 POST /v1/admin/auth/logout
 GET /v1/admin/auth/me
+GET /v1/admin/auth/oidc/start
+GET /v1/admin/auth/oidc/callback
+POST /v1/admin/auth/oidc/link
 GET /v1/admin/tenants
 GET /v1/admin/stores
 PATCH /v1/admin/stores/{store_id}/settings
@@ -535,7 +538,7 @@ PATCH /v1/admin/users/{user_id}/roles
 GET /v1/admin/audit-logs
 ```
 
-Admin API 必须校验 Agent 自有用户身份、租户、店铺和角色权限。外部系统接入 token 和系统 Admin session 不能直接访问 `/v1/admin/*`。所有商品资料、知识审核、规则配置、动作能力配置和店铺设置的写操作都应记录操作者、租户、店铺、对象、动作和时间。未登录访问客户后台 `/admin` 必须回到客户后台 `/login`，登录成功后如果用户有多个租户或店铺，应先选择上下文再进入后台首页。系统后台如需代客户操作，必须走 `/v1/system-admin/*` 专用接口并写系统审计，不得伪装客户用户调用 `/v1/admin/*`。
+Admin API 必须校验 Agent 自有用户身份、租户、店铺和角色权限。外部系统接入 token 和系统 Admin session 不能直接访问 `/v1/admin/*`。Customer Admin OIDC 只确认 Fcihome Account 身份：已绑定 `admin_user.fcihome_account_sub` 的 active 用户可登录；未绑定时，仅当 OIDC email 精确匹配唯一 active `admin_user` 才允许绑定并写审计；不得自动创建租户、店铺或角色权限。OIDC callback 成功后只设置 `agent_admin_session`，不得设置或读取 `agent_system_admin_session`，也不得读取 `open_erp_agent` SQLite 或把微信登录态当作 AI 客服 Admin 身份源。`POST /v1/admin/auth/oidc/link` 必须由后端校验 OIDC code / state / PKCE 并换取 userinfo 后再绑定，不能信任前端直接提交的 subject 或 email。所有商品资料、知识审核、规则配置、动作能力配置、店铺设置和 OIDC 绑定写操作都应记录操作者、租户、店铺、对象、动作和时间；审计不得记录 token、code、Cookie、client_secret、密码或完整 OIDC 响应。未登录访问客户后台 `/admin` 必须回到客户后台 `/login`，登录成功后如果用户有多个租户或店铺，应先选择上下文再进入后台首页。系统后台如需代客户操作，必须走 `/v1/system-admin/*` 专用接口并写系统审计，不得伪装客户用户调用 `/v1/admin/*`。
 
 ### 商品资料维护
 
