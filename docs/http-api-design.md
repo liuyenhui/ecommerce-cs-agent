@@ -14,7 +14,7 @@
 
 - 外部系统负责接收平台消息、展示客服界面、真正发送回复。
 - 公开宣传页属于客服 Agent 自身，只展示产品能力和登录入口，不承载外部系统接入或租户业务数据。
-- 客户 Admin 后台属于客服 Agent 自身，负责登录、组织/店铺切换、商品资料维护、知识审核、规则配置、动作能力配置和审计查询。
+- 客户 Admin 后台属于客服 Agent 自身，负责登录、租户/店铺切换、商品资料维护、知识审核、规则配置、动作能力配置和审计查询。
 - Agent 服务负责理解消息、检索知识、生成候选、判断风险、输出决策。
 - Agent 内部可用 LangGraph 编排决策状态、补上下文等待、动作结果等待和人工介入；对外仍只暴露稳定 HTTP API，不暴露 graph 节点或 LangGraph runtime。
 - 自动回复必须经过规则闸门，不能只依赖模型自评。
@@ -80,7 +80,8 @@ POST <external_callback_url>
 
 - `request_id`：外部请求幂等键。
 - `platform`：平台标识。
-- `external_store_id`：外部系统里的店铺或业务单元引用；服务端映射到内部 `tenant` / `store`。
+- `external_store_id` 或 `platform_account_ref`：外部店铺 / 平台账号引用。
+- `external_product_id`、`external_sku_id` 或 `listing_ref`：可选商品 / SKU / 销售实例引用，能提供时用于更快定位商品上下文。
 - `message`：买家当前消息、平台消息 ID、发送时间。
 - `conversation`：最小会话上下文，至少包含外部会话 ID、买家脱敏引用和可选最近消息。
 - `mode`：决策模式，例如 `assist_first`、`auto_when_safe`。
@@ -90,6 +91,8 @@ POST <external_callback_url>
 - `platform_account_ref`：平台账号或 Connector 引用。
 - `listing_ref`：某平台、某店铺、某商品链接或 SKU 的销售实例引用。
 - `external_product_id` / `external_sku_id`：外部平台商品和 SKU 引用，只能作为补上下文查询条件；缺少可信商品资料时不能让 Agent 猜测。
+
+外部接入 API 不暴露内部 `tenant_id`。服务端必须通过 API Key / Connector Token 的授权范围，再结合 `platform`、`external_store_id` / `platform_account_ref`、`listing_ref`、`external_product_id` 和 `external_sku_id`，解析到内部 `tenant_id`、`store_id`、`platform_account_id`、`listing_id`、`product_id` 和 `sku_id`。解析失败时返回 `context_request`、`TENANT_SCOPE_REQUIRED` 或 `RESOURCE_MAPPING_REQUIRED`，不能让外部系统传一个内部租户 ID 绕过映射。
 
 商品、订单、物流和规则都是可选上下文。外部系统如果已经有低成本、可信的上下文，可以随主请求传入；如果没有，Agent 先做轻量意图和上下文需求判断，一次性返回当前可判断出的 `context_requests[]`。客户端按类型并行调用补充接口，服务端用同一个 `decision_id` 聚合上下文，直到返回明确可答复内容、动作请求或人工介入。
 
@@ -164,7 +167,8 @@ POST /v1/reply-decisions
       "reason": "用户询问订单发货时间，但当前请求没有订单上下文",
       "query": {
         "buyer_ref": "buyer-hash-001",
-        "store_id": "store-001",
+        "external_store_id": "pdd-mall-001",
+        "platform_account_ref": "pdd-account-001",
         "conversation_id": "conv-001",
         "time_window": "recent"
       },
@@ -178,7 +182,7 @@ POST /v1/reply-decisions
       "reason": "发货时间回答需要物流或仓库状态",
       "query": {
         "order_ref": "latest_order_for_buyer",
-        "store_id": "store-001"
+        "external_store_id": "pdd-mall-001"
       },
       "deadline_ms": 5000,
       "fallback_action": "handoff"
@@ -246,7 +250,8 @@ POST /v1/reply-decisions
 {
   "scope": "store",
   "platform": "pdd",
-  "store_id": "store-001",
+  "external_store_id": "pdd-mall-001",
+  "platform_account_ref": "pdd-account-001",
   "capabilities": [
     {
       "action_type": "update-note",
@@ -305,7 +310,7 @@ POST /v1/reply-decisions/{decision_id}/actions/results
     "reason": "用户要求修改订单备注，但当前请求未提供订单上下文",
     "query": {
       "buyer_ref": "buyer-001",
-      "store_id": "store-001",
+      "external_store_id": "pdd-mall-001",
       "conversation_id": "conv-001",
       "time_window": "recent"
     },
@@ -515,13 +520,13 @@ POST /v1/capabilities/action-capabilities
 
 ### Admin 登录、权限和审计
 
-客户后台使用客服 Agent 自有 Admin API 分组承载登录、组织/店铺上下文、用户角色和审计查询，不扩大同步问答接口，也不依赖任何外部系统的登录态、session 或 token。客户后台站点为 `admin.ecommerce-cs-agent-dev.fcihome.com`，公开路由 `/`、`/login`、`/admin` 只负责页面入口和后台 shell，真实登录状态由以下 API 校验：
+客户后台使用客服 Agent 自有 Admin API 分组承载登录、租户/店铺上下文、用户角色和审计查询，不扩大同步问答接口，也不依赖任何外部系统的登录态、session 或 token。客户后台站点为 `admin.ecommerce-cs-agent-dev.fcihome.com`，公开路由 `/`、`/login`、`/admin` 只负责页面入口和后台 shell，真实登录状态由以下 API 校验：
 
 ```text
 POST /v1/admin/auth/login
 POST /v1/admin/auth/logout
 GET /v1/admin/auth/me
-GET /v1/admin/organizations
+GET /v1/admin/tenants
 GET /v1/admin/stores
 PATCH /v1/admin/stores/{store_id}/settings
 GET /v1/admin/users
@@ -530,7 +535,7 @@ PATCH /v1/admin/users/{user_id}/roles
 GET /v1/admin/audit-logs
 ```
 
-Admin API 必须校验 Agent 自有用户身份、组织、店铺和角色权限。外部系统接入 token 和系统 Admin session 不能直接访问 `/v1/admin/*`。所有商品资料、知识审核、规则配置、动作能力配置和店铺设置的写操作都应记录操作者、组织、店铺、对象、动作和时间。未登录访问客户后台 `/admin` 必须回到客户后台 `/login`，登录成功后如果用户有多个组织或店铺，应先选择上下文再进入后台首页。系统后台如需代客户操作，必须走 `/v1/system-admin/*` 专用接口并写系统审计，不得伪装客户用户调用 `/v1/admin/*`。
+Admin API 必须校验 Agent 自有用户身份、租户、店铺和角色权限。外部系统接入 token 和系统 Admin session 不能直接访问 `/v1/admin/*`。所有商品资料、知识审核、规则配置、动作能力配置和店铺设置的写操作都应记录操作者、租户、店铺、对象、动作和时间。未登录访问客户后台 `/admin` 必须回到客户后台 `/login`，登录成功后如果用户有多个租户或店铺，应先选择上下文再进入后台首页。系统后台如需代客户操作，必须走 `/v1/system-admin/*` 专用接口并写系统审计，不得伪装客户用户调用 `/v1/admin/*`。
 
 ### 商品资料维护
 
@@ -545,7 +550,7 @@ POST /v1/product-content/price-snapshots
 GET /v1/product-content/products/{product_id}/health
 ```
 
-这些接口用于维护 `product_profile`、`product_sku_profile`、`product_asset`、`product_asset_markdown`、`product_knowledge_candidate`、`knowledge_eval_case` 和 `product_price_snapshot`。客户上传说明书、照片或视频后，系统必须保留原始文件和版本，再转换为 Markdown 审稿稿件。LLM 可以基于 Markdown 和候选片段生成模拟买家问题、参考答案、同义问法和覆盖率提示，但人工必须按知识片段对照原文审核，批准后才写入 `knowledge_entry` 并生成 `knowledge_embedding`。
+这些接口用于维护 `product_master`、`product_sku`、`listing` / `store_product`、`product_asset`、`product_asset_markdown`、`product_knowledge_candidate`、`knowledge_eval_case` 和 `product_price_snapshot`。`product_master` 表示可跨平台复用的通用商品主数据；`listing` / `store_product` 表示某平台、某店铺、某商品链接或 SKU 的销售实例。客户上传说明书、照片或视频后，系统必须保留原始文件和版本，再转换为 Markdown 审稿稿件。LLM 可以基于 Markdown 和候选片段生成模拟买家问题、参考答案、同义问法和覆盖率提示，但人工必须按知识片段对照原文审核，批准后才写入 `knowledge_entry` 并生成 `knowledge_embedding`。
 
 产品照片第一版只维护图片类型、适用 SKU、图片说明、审核状态和是否允许引用，不直接驱动自动回复。资料体检接口应返回缺说明书、缺 SKU 图、价格过期、知识未审核、解析失败、信息冲突等状态。
 
@@ -579,11 +584,11 @@ POST /v1/admin/connectors
 PATCH /v1/admin/connectors/{connector_id}
 ```
 
-Connector 属于客户 Admin 店铺配置能力，不属于外部决策 token 能直接写入的 API。客户 Admin session 只能维护自己组织 / 店铺下的 Connector；系统 Admin 可在系统后台查看健康、审计和跨租户故障摘要，但不默认代替客户配置真实鉴权。
+Connector 属于客户 Admin 店铺配置能力，不属于外部决策 token 能直接写入的 API。客户 Admin session 只能维护自己租户 / 店铺下的 Connector；系统 Admin 可在系统后台查看健康、审计和跨租户故障摘要，但不默认代替客户配置真实鉴权。
 
 Connector 配置必须声明：
 
-- `organization_id`、`store_id`、`provider`、`connector_id`。
+- Admin 内部保存 `tenant_id`、`store_id`、`provider`、`connector_id`；外部决策请求只提交 `platform`、`external_store_id` / `platform_account_ref` 和商品 / listing 引用。
 - `auth_ref`：Secret Manager、Kubernetes Secret 或等价安全存储引用；不得传、返或记录真实 token。
 - `capabilities[]`：按 `products`、`orders`、`rules`、`logistics` 声明主动查询能力。
 - `operations[]`：`get`、`search`、`list_recent` 等稳定操作名。
@@ -610,7 +615,7 @@ POST /v1/events/messages
 GET /v1/tasks/{task_id}
 ```
 
-`POST /v1/events/messages` 使用外部系统 API token，提交内容与 `POST /v1/reply-decisions` 保持同一字段语义，并额外支持 `callback_preference` 和 `expected_timeout_ms`。请求必须带 `request_id`；服务端按 `organization_id + store_id + request_id` 幂等。幂等键重复且 payload 一致时返回原 `task_id`，payload 不一致时返回 409 / `IDEMPOTENCY_CONFLICT`。
+`POST /v1/events/messages` 使用外部系统 API token，提交内容与 `POST /v1/reply-decisions` 保持同一字段语义，并额外支持 `callback_preference` 和 `expected_timeout_ms`。请求必须带 `request_id`；服务端按解析后的 `tenant_id + store_id + request_id` 幂等。幂等键重复且 payload 一致时返回原 `task_id`，payload 不一致时返回 409 / `IDEMPOTENCY_CONFLICT`。
 
 入队响应必须返回：
 
@@ -656,7 +661,7 @@ DELETE /v1/webhook-subscriptions/{subscription_id}
 - `knowledge_entry.created`
 - `feedback.processed`
 
-Webhook 订阅使用外部系统 API token 管理，只能访问该 token 授权的组织 / 店铺。订阅字段包括 `subscription_id`、`organization_id`、`store_id`、`target_url`、`event_types[]`、`signing_algorithm`、`retry_policy`、`redaction_policy`、`status` 和 `secret_ref`。创建或轮换时可以一次性返回 `signing_secret`，后续查询只能返回 `secret_ref` 或摘要。
+Webhook 订阅使用外部系统 API token 管理，只能访问该 token 授权解析出的租户 / 店铺。订阅字段内部保存 `subscription_id`、`tenant_id`、`store_id`、`target_url`、`event_types[]`、`signing_algorithm`、`retry_policy`、`redaction_policy`、`status` 和 `secret_ref`；外部创建时可以使用 token 默认范围或声明 `external_store_id` / `platform_account_ref`。创建或轮换时可以一次性返回 `signing_secret`，后续查询只能返回 `secret_ref` 或摘要。
 
 投递事件 envelope：
 
@@ -665,7 +670,7 @@ Webhook 订阅使用外部系统 API token 管理，只能访问该 token 授权
   "event_id": "evt-001",
   "event_type": "reply_decision.completed",
   "occurred_at": "2026-06-12T10:15:06+08:00",
-  "organization_id": "org-001",
+  "tenant_id": "tenant-001",
   "store_id": "store-001",
   "decision_id": "decision-001",
   "request_id": "external-idempotency-key",
@@ -698,8 +703,8 @@ POST /v1/admin/rules/rule-sets/{rule_set_id}/releases
 
 客户 Admin 权限边界：
 
-- 客户 Admin 维护自己组织 / 店铺的店铺级规则、灰度范围、回滚和 dry-run。
-- 组织所有者、组织管理员、店铺管理员和规则运营可按角色写规则；只读审计只能查看。
+- 客户 Admin 维护自己租户 / 店铺的店铺级规则、灰度范围、回滚和 dry-run。
+- 租户所有者、租户管理员、店铺管理员和规则运营可按角色写规则；只读审计只能查看。
 - 高风险规则、自动回复比例提升、回滚和灰度扩大必须填写 `reason`，并记录 `audit_log_id`。
 - 客户 Admin 不能修改系统级平台强制规则，也不能跨租户读取其他客户规则。
 

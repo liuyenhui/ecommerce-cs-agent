@@ -45,16 +45,16 @@
 ### P1 High Priority
 
 - 移动端导航占据首屏过多高度。影响：390px 宽度下，用户先看到完整深色导航和分组，核心 dashboard 被推到第二屏；系统后台尤其明显。Evidence：customer mobile、system mobile 截图首屏顶部为整块导航。Fix direction：移动端改为 compact top app bar + 可展开导航抽屉或横向 tab，默认只露出品牌、当前页面和菜单按钮。
-- 移动端表格隐藏表头后没有字段标签。影响：`org-001 / org-001 / active`、`org-a / store-a-1 / blocked / -` 在移动端无法快速判断字段含义。Evidence：customer mobile 组织/店铺表、system mobile 上线阻断队列。Fix direction：移动端把表格行渲染成 labeled record cards，每个 cell 显示 `字段名 + 值`，保留状态 badge。
-- 登录页预填测试邮箱和组织 ID。影响：dev/live host 给用户“测试环境未收口”的观感，也可能误导自动化和真实用户；系统后台入口尤其不应预填固定账号。Evidence：登录前 DOM 显示 customer email、system email 和 `org-001` 默认值。Fix direction：登录表单默认空值；如需要演示预填，使用明确的 dev-only flag 或 query opt-in，且不在 live dev host 默认开启。
+- 移动端表格隐藏表头后没有字段标签。影响：`org-001 / org-001 / active`、`org-a / store-a-1 / blocked / -` 在移动端无法快速判断字段含义。Evidence：customer mobile 租户/店铺表、system mobile 上线阻断队列。Fix direction：移动端把表格行渲染成 labeled record cards，每个 cell 显示 `字段名 + 值`，保留状态 badge。
+- 登录页预填测试邮箱和租户 ID。影响：dev/live host 给用户“测试环境未收口”的观感，也可能误导自动化和真实用户；系统后台入口尤其不应预填固定账号。Evidence：登录前 DOM 显示 customer email、system email 和 `org-001` 默认值。Fix direction：登录表单默认空值；如需要演示预填，使用明确的 dev-only flag 或 query opt-in，且不在 live dev host 默认开启。
 - 系统筛选区在移动端变成 4 个输入 + 查询按钮的长块，缺少收起/摘要。影响：核心系统指标和阻断队列被筛选栏推后，重复访问成本高。Evidence：system mobile 截图中筛选区域占用一整屏上部。Fix direction：移动端默认折叠高级筛选，只显示“筛选”按钮和已应用条件摘要；展开后再显示字段。
 
 ### P2 Polish
 
-- 空态只显示 `暂无记录`，缺少说明和下一步。影响：用户不知道是未配置、筛选无结果、权限受限还是系统正常无数据。Evidence：系统首页 `最近消息决策`。Fix direction：按场景显示标题、简短原因和下一步行动，例如“填写组织与店铺后查询决策”。
+- 空态只显示 `暂无记录`，缺少说明和下一步。影响：用户不知道是未配置、筛选无结果、权限受限还是系统正常无数据。Evidence：系统首页 `最近消息决策`。Fix direction：按场景显示标题、简短原因和下一步行动，例如“填写租户与店铺后查询决策”。
 - 指标卡和右侧上下文重复信息偏多。影响：桌面宽屏中 customer dashboard 大量空白，右侧上下文重复指标卡信息；system dashboard 同时显示 metric grid 和 summary。Fix direction：保留右侧为“当前上下文/当前账号/最近活动”，避免重复计数。
 - 操作权重不够清晰。影响：`刷新`、用户 badge、退出、主操作按钮视觉权重接近；重复刷新按钮也容易让用户不知道刷新的是会话还是数据。Fix direction：把会话刷新降级为图标/菜单操作，把页面数据刷新留在内容区；主操作保持唯一蓝色。
-- 状态表达仍偏工程化。影响：`blocked`、字段名 `organization_id`、`store_id` 对业务用户不友好。Fix direction：在 UI 层使用中文标签和简短解释，同时保留 raw id 作为次级 monospace 文本。
+- 状态表达仍偏工程化。影响：`blocked`、字段名 `tenant_id`、`store_id` 对业务用户不友好。Fix direction：在 UI 层使用中文标签和简短解释，同时保留 raw id 作为次级 monospace 文本。
 
 ## Page-Level Remediation
 
@@ -83,7 +83,7 @@
 - Problem：`thead { display: none }` 后每个 `td` block 化，但没有字段标签。
 - Recommendation：在 `DataTable` / `ListPanel` 中为每个 cell 写入 `data-label`，移动端用 `td::before { content: attr(data-label) }` 或直接渲染 labeled row；状态值保持 badge。
 - Acceptance criteria：
-  - 移动端每条记录显示字段名和值，例如 `组织 ID org-001`、`店铺 ID store-001`、`状态 blocked`。
+  - 移动端每条记录显示字段名和值，例如 `租户 ID org-001`、`店铺 ID store-001`、`状态 blocked`。
   - 桌面表格仍保留原有表头和紧凑密度。
   - 空表格显示结构化空态，不只显示 `暂无记录`。
 - Needs product/brand confirmation：No.
@@ -91,7 +91,7 @@
 ### Login Forms
 
 - Problem：登录页默认带 `admin@example.test`、`system-admin@example.test`、`org-001`。
-- Recommendation：默认清空 email/password；customer organization 可使用 placeholder 或 last-used non-sensitive value，但不预填测试组织；错误态显示在 form 内，toast 仅作辅助。
+- Recommendation：默认清空 email/password；customer tenant 可使用 placeholder 或 last-used non-sensitive value，但不预填测试租户；错误态显示在 form 内，toast 仅作辅助。
 - Acceptance criteria：
   - 未登录打开两个 host 时，邮箱和密码为空。
   - 表单包含 required validation、loading disabled、错误 message，不改变 API path 和 Cookie/session 边界。
@@ -105,7 +105,7 @@
 - Acceptance criteria：
   - 加载数据时有明确 busy 状态，不误显示旧值或空表。
   - `blocked`、`active`、`pending` 等状态在 UI 层显示中文标签和颜色，颜色不是唯一信息。
-  - 空态提供下一步，例如“填写组织 ID 和店铺 ID 后查询决策”。
+  - 空态提供下一步，例如“填写租户 ID 和店铺 ID 后查询决策”。
 - Needs product/brand confirmation：No.
 
 ## Engineering Task Breakdown
@@ -189,7 +189,7 @@ Implementation guidance:
 Acceptance criteria:
 - system-admin desktop/mobile 登录后不出现以 { 开头的 raw JSON 用户对象。
 - system-admin dashboard 不显示完整 email。
-- Customer Admin 的组织/店铺/成员/审计摘要仍正常。
+- Customer Admin 的租户/店铺/成员/审计摘要仍正常。
 - 无横向滚动；移动端摘要不出现长 JSON 块。
 
 Verification:
@@ -276,7 +276,7 @@ Constraints:
 5. Do not change backend contracts.
 
 Implementation guidance:
-- 为 fields 增加 UI label map，例如 organization_id -> 组织 ID、store_id -> 店铺 ID、status -> 状态。
+- 为 fields 增加 UI label map，例如 tenant_id -> 租户 ID、store_id -> 店铺 ID、status -> 状态。
 - 在 td 上写 data-label，移动端用 CSS before 显示字段名，或渲染 mobile record cards。
 - Status badge 显示中文状态 + 可选 title 保留原始值。
 - EmptyState 组件支持 title、description、action；用于最近消息决策、空表格、筛选无结果。
@@ -291,7 +291,7 @@ Acceptance criteria:
 Verification:
 - npm --prefix admin-web test
 - npm --prefix admin-web run build
-- Chrome mobile 检查 Customer 组织/店铺表、System 上线阻断队列、最近消息决策空态。
+- Chrome mobile 检查 Customer 租户/店铺表、System 上线阻断队列、最近消息决策空态。
 
 Return:
 - Files changed
@@ -326,7 +326,7 @@ Constraints:
 
 Implementation guidance:
 - email/password 默认空字符串。
-- customer organization_id 默认空或只用 placeholder；如 dev demo 需要预填，必须显式 opt-in，例如 Vite env flag 或 query 参数，默认关闭。
+- customer tenant_id 默认空或只用 placeholder；如 dev demo 需要预填，必须显式 opt-in，例如 Vite env flag 或 query 参数，默认关闭。
 - 提交前做 required validation，错误显示在 form 内；toast 可保留但不作为唯一错误反馈。
 - loading 时按钮 disabled，显示 spinner 和稳定按钮宽度。
 - 补充 autocomplete、aria-invalid、aria-describedby。

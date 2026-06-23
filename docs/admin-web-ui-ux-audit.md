@@ -16,11 +16,11 @@
 - 本文不记录真实密码、Cookie 值、Secret 明文、kubeconfig、Authorization header 或生产数据。
 - 当前 live 登录口令必须从批准的 Secret 渠道获取；不要从聊天记录、文档或代码提交中传递。
 - 仓库代码和测试中存在本地 / 测试默认账号占位值，不能把这些占位值当成线上凭据。
-- 当前 live 未登录页会预填测试邮箱和客户组织 ID，这是 UI/UX 与安全信任问题，应作为高优先级整改项移除。
+- 当前 live 未登录页会预填测试邮箱和客户租户 ID，这是 UI/UX 与安全信任问题，应作为高优先级整改项移除。
 
 ## Overall Assessment
 
-两个后台的站点边界、请求路径和基础企业控制台视觉方向已经建立：Customer host 只请求 `/v1/admin/auth/me`，System host 只请求 `/v1/system-admin/auth/me`。主要问题集中在未登录态：页面把完整后台导航和刷新操作暴露在登录前，移动端导航占据首屏，登录表单被推到折线以下，且 live 表单预填测试邮箱 / 组织 ID，降低专业感和安全信任。客户 Admin 当前也没有呈现预期的公开宣传页，首次访问更像内部后台登录壳。建议先修复登录前体验和移动端结构，再打磨后台 shell 的密度、状态和可访问性。
+两个后台的站点边界、请求路径和基础企业控制台视觉方向已经建立：Customer host 只请求 `/v1/admin/auth/me`，System host 只请求 `/v1/system-admin/auth/me`。主要问题集中在未登录态：页面把完整后台导航和刷新操作暴露在登录前，移动端导航占据首屏，登录表单被推到折线以下，且 live 表单预填测试邮箱 / 租户 ID，降低专业感和安全信任。客户 Admin 当前也没有呈现预期的公开宣传页，首次访问更像内部后台登录壳。建议先修复登录前体验和移动端结构，再打磨后台 shell 的密度、状态和可访问性。
 
 ## Evidence
 
@@ -61,7 +61,7 @@
 - 客户 Admin 根路径没有公开宣传页。影响：客户首次访问无法理解产品价值和登录入口层级。Evidence：desktop/mobile live 页面直接展示内部 console shell + 登录卡片。Fix direction：在 customer host 未登录 `/` 提供 Notion-led 产品介绍与 CTA，`/login` 承载客户登录，`/admin` 承载受保护后台。
 - 未登录态展示完整后台导航。影响：用户尚未登录却看到功能菜单，削弱安全边界感，也把登录主任务挤到次级位置。Evidence：Customer/System desktop 和 mobile 均显示 rail + tabs。Fix direction：未登录时只显示精简品牌、站点类型、登录卡片和必要帮助链接；登录后再渲染后台导航。
 - 移动端登录被导航下推。影响：system mobile 中登录表单顶部约在 `808px`，首屏主要被导航占用，核心任务不可立即完成。Evidence：Playwright 指标显示 system mobile rail 高 `429px`，customer mobile rail 高 `275px`。Fix direction：移动端未登录隐藏 rail，登录卡片进入首屏；登录后使用可折叠 drawer 或顶部栏导航。
-- live 登录表单预填测试邮箱和组织 ID。影响：显得像测试环境泄露，用户也可能误以为这些是可用凭据。Evidence：Customer 显示 `admin@example.test` 和 `org-001`，System 显示测试邮箱。Fix direction：线上构建不预填账号；用 placeholder / helper text 展示输入格式。
+- live 登录表单预填测试邮箱和租户 ID。影响：显得像测试环境泄露，用户也可能误以为这些是可用凭据。Evidence：Customer 显示 `admin@example.test` 和 `org-001`，System 显示测试邮箱。Fix direction：线上构建不预填账号；用 placeholder / helper text 展示输入格式。
 - Customer 与 System 未登录页面区分度不足。影响：两个后台都像同一个 app 的文案替换版，系统后台的高权限风险感不足。Evidence：布局、颜色、登录卡片完全一致。Fix direction：保持同一设计系统，但用不同的页面标题、辅助说明、安全提示和高权限标识区分。
 
 ### P2 Polish
@@ -90,7 +90,7 @@
 - Recommendation: 提取 `LoginLayout` 与 `LoginPanel`，按 workspace 注入标题、说明、安全提示、字段集。移除 live 默认值；本地开发可通过显式 dev flag 才预填。
 - Acceptance criteria:
   - live 表单初始值为空，placeholder 不含真实或测试凭据。
-  - customer 登录包含组织 ID 字段；system 登录不包含组织 ID。
+  - customer 登录包含租户 ID 字段；system 登录不包含租户 ID。
   - customer 页面不出现“系统后台”入口；system 页面不出现“客户后台”入口。
   - 登录失败在表单内显示错误摘要，toast 仅作辅助反馈。
 - Needs product/brand confirmation: no。
@@ -134,7 +134,7 @@
 - Scope: 登录表单、错误反馈、提交态、字段 helper text。
 - Suggested files/components: `LoginPanel`、新增 `LoginShell` / `AuthMessage`，`styles.css`。
 - Implementation notes: 初始值默认为空；如需本地预填，用 `import.meta.env.DEV` 或显式环境变量控制；错误显示在表单内。
-- Acceptance criteria: live 不预填测试邮箱和组织 ID；登录失败不只依赖 toast；system 登录页不出现客户组织字段。
+- Acceptance criteria: live 不预填测试邮箱和租户 ID；登录失败不只依赖 toast；system 登录页不出现客户租户字段。
 - Verification: TypeScript build；手动输入错误凭据检查 inline error；检查 DOM 中无默认测试值。
 - Risk: 测试用例若依赖预填值需调整。
 - Needs product confirmation: no。
@@ -223,12 +223,12 @@ Goal:
 Make Customer Admin and System Admin login pages professional, clearly separated, and safe for live use.
 
 Background:
-UI/UX audit found that live login forms prefill test emails and customer organization ID, and customer/system login pages look like the same internal shell with text substitutions. This reduces trust and makes the two authorization domains feel less distinct.
+UI/UX audit found that live login forms prefill test emails and customer tenant ID, and customer/system login pages look like the same internal shell with text substitutions. This reduces trust and makes the two authorization domains feel less distinct.
 
 Scope:
 - LoginPanel and related auth UI in admin-web/src/main.tsx
 - Login styles in admin-web/src/styles.css
-- Customer login fields: email, password, organization ID
+- Customer login fields: email, password, tenant ID
 - System login fields: email, password
 
 Constraints:
@@ -246,9 +246,9 @@ Implementation guidance:
 - Add workspace-specific explanatory text: customer manages own tenant data; system manages platform operations and audited cross-tenant access.
 
 Acceptance criteria:
-- Live login forms do not prefill test email or organization ID.
+- Live login forms do not prefill test email or tenant ID.
 - Customer login does not mention system admin.
-- System login does not mention customer admin and does not show organization ID.
+- System login does not mention customer admin and does not show tenant ID.
 - Auth failure shows a persistent inline message near the form.
 - Submit button has loading and disabled states.
 

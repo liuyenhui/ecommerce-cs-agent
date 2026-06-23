@@ -20,7 +20,7 @@
 | --- | --- |
 | 公开宣传页 | 属于客服 Agent 自身，公开展示产品能力和登录按钮，不读取租户业务数据。 |
 | 外部客服系统 | 负责平台消息接收、客服工作台、真正发送回复、执行真实平台 API。 |
-| 客户 Admin 后台 | 属于客服 Agent 自身，负责客户登录、组织/店铺切换、商品资料维护、知识审核、规则配置、动作能力配置和审计查询。 |
+| 客户 Admin 后台 | 属于客服 Agent 自身，负责客户登录、租户/店铺切换、商品资料维护、知识审核、规则配置、动作能力配置和审计查询。 |
 | Agent 服务 | 负责理解消息、构建上下文、检索知识、生成候选、判断风险、输出决策。 |
 | 电商平台 | 拼多多、淘宝、京东、抖音等平台仍由外部客服系统对接。 |
 | LLM Provider | 提供回复生成、辅助分类、辅助抽参能力，由 Provider Adapter 屏蔽供应商差异。 |
@@ -37,7 +37,7 @@ Agent 输出的是 `auto_reply`、`candidate`、`handoff`、`context_request`、
 | --- | --- | --- |
 | 公开宣传页 | 产品介绍、后台能力预览、登录入口 | `/` 公开访问，点击登录进入 `/login` |
 | 客服前台 | 展示买家消息、Agent 候选、风险原因、追踪结果 | 外部客服系统已有工作台承载 |
-| 客户运营后台 | 客户登录、组织/店铺切换、上传商品说明书、照片、视频，维护商品/SKU 资料，审核 Markdown 知识片段，配置规则和动作能力 | 第一版必备客户 Admin 模块，dev 域名为 `admin.ecommerce-cs-agent-dev.fcihome.com`，详见 [Customer Admin Design](customer-admin-design.md) |
+| 客户运营后台 | 客户登录、租户/店铺切换、上传商品说明书、照片、视频，维护商品/SKU 资料，审核 Markdown 知识片段，配置规则和动作能力 | 第一版必备客户 Admin 模块，dev 域名为 `admin.ecommerce-cs-agent-dev.fcihome.com`，详见 [Customer Admin Design](customer-admin-design.md) |
 | 系统管理后台 | 平台运营、技术支持、系统管理员和安全审计查看跨租户 readiness、trace、任务、发布、审计和健康 | 第一版必备系统 Admin 模块，目标 dev 域名为 `system-admin.ecommerce-cs-agent-dev.fcihome.com`，详见 [System Admin Design](system-admin-design.md) |
 | Admin UI 视觉 | 宣传页、登录页、后台 shell、表格、表单、审核队列和配置界面的视觉规则 | Notion 主导宣传页 + IBM / Carbon 企业后台规则 + Ant Design 组件能力层；不照抄外部品牌 |
 | Agent API 服务 | 提供回复决策、反馈、消息追踪、动作请求等 API | 独立 FastAPI 服务 |
@@ -82,8 +82,8 @@ PostgreSQL 16+
 
 | 分组 | 代表表 | 职责 |
 | --- | --- | --- |
-| 租户与平台 | `organization` / 内部 `tenant`、`store`、`platform_account` | 客户隔离、店铺、平台账号和权限边界；外部 API 不暴露 organization 概念。 |
-| 商品资料中心 | `product_master` / `product_profile`、`listing` / `store_product`、`product_sku_profile`、`product_asset`、`product_asset_markdown`、`product_price_snapshot` | 通用商品主数据、平台/店铺销售实例、SKU、说明书、照片、Markdown 审稿稿件和外部价格快照。 |
+| 租户与平台 | `tenant`、`store`、`platform_account` | 租户、店铺、平台账号和权限边界。 |
+| 商品资料中心 | `product_master`、`product_sku`、`listing` / `store_product`、`product_asset`、`product_asset_markdown`、`product_price_snapshot` | 客户维护商品主数据、SKU、平台/店铺销售实例、说明书、照片、Markdown 审稿稿件和外部价格快照。 |
 | 会话与消息 | `conversation`、`message` | 外部会话、消息原文、平台消息 ID 和 raw payload。 |
 | 上下文快照 | `product_snapshot`、`order_snapshot` | 保存请求当时的商品、订单、物流状态，保证决策可回放。 |
 | 决策与候选 | `decision_record`、`agent_suggestion` | 保存 action、confidence、risk、trace、候选回复和模型输出。 |

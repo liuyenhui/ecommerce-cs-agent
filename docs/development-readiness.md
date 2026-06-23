@@ -29,7 +29,7 @@
 
 | 范围 | 第一版必须具备 | 依据 |
 | --- | --- | --- |
-| 外部接入 | 外部客服系统调用 `POST /v1/reply-decisions`，提交买家消息、最小会话、平台、外部店铺、平台账号、listing / 商品 / SKU 引用和可选上下文；内部再映射到 tenant / store。 | [HTTP API Design](http-api-design.md)、[System Architecture](system-architecture.md) |
+| 外部接入 | 外部客服系统调用 `POST /v1/reply-decisions`，提交买家消息、最小会话、平台、外部店铺 / 平台账号引用、可选 listing / 商品 / SKU 引用和上下文；内部租户、店铺、平台账号、销售实例和商品主数据由 API Key / Connector Token 与业务引用解析。 | [HTTP API Design](http-api-design.md)、[System Architecture](system-architecture.md) |
 | 决策输出 | 返回 `auto_reply`、`candidate`、`handoff`、`context_request` 或 `action_request`，并带 `decision_id`、风险、原因和 trace。 | [HTTP API Design](http-api-design.md) |
 | typed context refill | 支持按 `context_requests[]` 回填商品、订单、物流和规则上下文，并用同一个 `decision_id` 聚合。 | [HTTP API Design](http-api-design.md)、[System Architecture](system-architecture.md) |
 | 动作闭环 | 动作类需求返回结构化 `action_request`；外部系统执行真实业务 API 后调用 `actions/results` 回传结果。 | [HTTP API Design](http-api-design.md)、[Application Technology Architecture](application-technology-architecture.md) |
@@ -37,7 +37,7 @@
 | 决策编排 | 内部使用 LangGraph StateGraph 或等价状态机表达补上下文等待、动作结果等待、规则闸门、人工介入和节点级 trace。 | [System Architecture](system-architecture.md)、[Application Technology Architecture](application-technology-architecture.md) |
 | 持久化 | PostgreSQL + JSONB + pgvector 保存租户、店铺、商品资料、会话、消息、上下文快照、决策、checkpoint、反馈、知识和向量。 | [System Architecture](system-architecture.md)、[Application Technology Architecture](application-technology-architecture.md) |
 | k8s 无状态 | API 容器、Admin Web/API 不保存本地业务状态；session、checkpoint、审计和业务数据落外部存储。 | [Application Technology Architecture](application-technology-architecture.md)、[Deployment](deployment.md) |
-| 客户 Admin | 在 `admin.ecommerce-cs-agent-dev.fcihome.com` 提供 Agent 自有 `/`、`/login`、`/admin`，支持登录、组织/店铺切换、商品资料、知识审核、规则、动作能力和审计；客户后台 UI 不展示系统后台入口。 | [Customer Admin Design](customer-admin-design.md)、[HTTP API Design](http-api-design.md) |
+| 客户 Admin | 在 `admin.ecommerce-cs-agent-dev.fcihome.com` 提供 Agent 自有 `/`、`/login`、`/admin`，支持登录、租户/店铺切换、商品资料、知识审核、规则、动作能力和审计；客户后台 UI 不展示系统后台入口。 | [Customer Admin Design](customer-admin-design.md)、[HTTP API Design](http-api-design.md) |
 | 系统 Admin | 在 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 提供独立系统后台，支持系统管理员登录、租户/店铺开通、配置完成度、决策追踪、任务、模型用量、评测、API 凭据、安全审计和健康检查。 | [System Admin Design](system-admin-design.md) |
 | 规则闸门 | 自动回复必须经过规则、风险、上下文完整性和置信度控制；高风险或上下文不足时输出候选或转人工。 | [README](../README.md)、[System Architecture](system-architecture.md) |
 | 测试门禁 | 本地快测覆盖 unit / contract / policy；PR 覆盖接口契约、状态机、权限、幂等、context refill、policy gate 和 Admin 审计关键流。 | [Automated Blind Testing Design](superpowers/specs/2026-06-14-automated-blind-testing-design.md) |
@@ -54,6 +54,7 @@
 | 独立数据仓库和实时 BI | 第一版先用 PostgreSQL、trace、评测报告和后台查询满足排障与上线判断。 | [System Architecture](system-architecture.md)、[System Admin Design](system-admin-design.md) |
 | Redis 作为必需依赖 | dev 部署明确 Redis 暂不部署；后续需要 session cache、队列或异步任务时再引入。 | [Deployment](deployment.md) |
 | 供应商锁定 SSO / MFA / 复杂审批流 | 第一版使用 Agent 自有登录和权限；企业 SSO、MFA、规则灰度、审批流后续扩展。 | [Customer Admin Design](customer-admin-design.md)、[System Admin Design](system-admin-design.md) |
+| Fcihome Account / OIDC 统一身份 | PN-04 第一阶段只做统一门户入口、REST 契约和租户 / 店铺 / listing 映射；不共享 Cookie/session，不让微信登录自动登录 AI 客服后台。 | [HTTP API Design](http-api-design.md)、[Customer Admin Design](customer-admin-design.md) |
 | 买家会话接待界面 | 外部客服系统继续负责客服工作台、消息接收和真实发送。 | [Customer Admin Design](customer-admin-design.md)、[System Admin Design](system-admin-design.md) |
 | 系统后台替客户批量审核业务知识 | 系统后台做运营、排障和治理，不默认代替客户完成知识审核。 | [System Admin Design](system-admin-design.md) |
 | 大规模 LLM 盲测作为 PR 默认项 | PR 默认跑确定性自动化；盲测用于每日、发布前和失败沉淀回归。 | [Automated Blind Testing Design](superpowers/specs/2026-06-14-automated-blind-testing-design.md) |
@@ -145,7 +146,7 @@ TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com AGENT_API_TOKEN=<
 | `POST /v1/feedback/human-replies` | 必须实现 | 已覆盖 | 回传人工最终回复、是否采用候选和处理结果。 |
 | `GET /v1/message-traces/{decision_id}` | 必须实现 | 已覆盖 | 查询单条消息完整处理过程。 |
 | `/v1/admin/auth/*` | 必须实现 | 已覆盖 | 客户后台登录、退出、当前用户。 |
-| `/v1/admin/organizations`、`/v1/admin/stores` | 必须实现 | 已覆盖 | 客户后台组织和店铺上下文。 |
+| `/v1/admin/tenants`、`/v1/admin/stores` | 必须实现 | 已覆盖 | 客户后台租户和店铺上下文。 |
 | `/v1/admin/users`、`/v1/admin/invitations`、角色变更 | 必须实现 | 已覆盖 | 客户后台用户、邀请和角色权限。 |
 | `/v1/admin/audit-logs` | 必须实现 | 已覆盖 | 客户后台配置变更和敏感操作审计。 |
 | `/v1/product-content/*` | 必须实现 | 已覆盖 | 商品、资料、Markdown 审稿、知识候选审核、价格快照和资料体检。 |
