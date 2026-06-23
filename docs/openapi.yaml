@@ -540,6 +540,94 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /v1/admin/auth/oidc/start:
+    get:
+      tags: [Admin Auth]
+      operationId: adminOidcStart
+      summary: 发起客户 Admin Fcihome Account OIDC 登录
+      description: |
+        仅用于客户 Admin 登录页的 Fcihome Account 入口。接口创建短期 OIDC state / PKCE cookie 并重定向到 Fcihome Account；不会创建租户、店铺或权限，也不会设置系统后台 Cookie。
+      security: []
+      responses:
+        "307":
+          description: 重定向到 Fcihome Account 授权端点。
+          headers:
+            Location:
+              description: Fcihome Account 授权 URL。
+              schema:
+                type: string
+            Set-Cookie:
+              description: 短期 HttpOnly OIDC state cookie，文档不记录实际值。
+              schema:
+                type: string
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/admin/auth/oidc/callback:
+    get:
+      tags: [Admin Auth]
+      operationId: adminOidcCallback
+      summary: 处理客户 Admin Fcihome Account OIDC 回调
+      description: |
+        校验 state / PKCE 后用 OIDC 只确认账号身份。已绑定 `fcihome_account_sub` 的 active admin_user 可直接登录；未绑定时，仅当 OIDC email 精确匹配唯一 active admin_user 才允许绑定并写审计。失败时重定向回客户登录页并带明确错误码。
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+          description: OIDC 授权码；不得写入审计日志。
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+          description: OIDC state；用于和 HttpOnly state cookie 校验。
+      responses:
+        "307":
+          description: 登录成功跳转 `/admin`，失败跳转 `/login?error=...`。
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              description: 成功时设置 `agent_admin_session`，失败时删除 OIDC state cookie；不会设置 `agent_system_admin_session`。
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/admin/auth/oidc/link:
+    post:
+      tags: [Admin Auth]
+      operationId: adminOidcLink
+      summary: 为当前客户 Admin 绑定 Fcihome Account
+      description: 当前客户 Admin session 下，用已校验的 OIDC code / state 换取 Fcihome Account 身份后绑定 subject。绑定只写 `admin_user.fcihome_account_sub` 和审计，不创建租户、店铺或权限。
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminOidcLinkRequest"
+      responses:
+        "200":
+          description: 绑定成功并返回当前用户摘要。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAuthResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
   /v1/admin/auth/me:
     get:
       tags: [Admin Auth]
@@ -1957,6 +2045,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
+    ServiceUnavailable:
+      description: 依赖服务未启用、配置缺失或暂不可用；响应不得回显凭据或 Secret。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
     TooManyRequests:
       description: 请求过于频繁或触发登录 / API 限流。
       content:
@@ -2579,6 +2673,19 @@ components:
           type: string
           format: password
           writeOnly: true
+
+    AdminOidcLinkRequest:
+      type: object
+      required: [code, state]
+      properties:
+        code:
+          type: string
+          writeOnly: true
+          description: OIDC 授权码，只能用于后端换取已校验身份；不得写入审计日志。
+        state:
+          type: string
+          writeOnly: true
+          description: OIDC state，必须和 HttpOnly state cookie 通过 state / PKCE 校验。
 
     AdminAuthResponse:
       type: object

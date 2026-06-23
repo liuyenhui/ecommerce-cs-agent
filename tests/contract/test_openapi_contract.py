@@ -19,6 +19,9 @@ REQUIRED_PATHS = {
     "/v1/admin/auth/login",
     "/v1/admin/auth/logout",
     "/v1/admin/auth/me",
+    "/v1/admin/auth/oidc/start",
+    "/v1/admin/auth/oidc/callback",
+    "/v1/admin/auth/oidc/link",
     "/v1/admin/audit-logs",
     "/v1/product-content/products",
     "/v1/product-content/product-import-drafts",
@@ -36,6 +39,7 @@ REQUIRED_PATHS = {
 CORE_JSON_REQUESTS = {
     ("post", "/v1/reply-decisions"): "#/components/schemas/ReplyDecisionCreateRequest",
     ("post", "/v1/admin/auth/login"): "#/components/schemas/AdminLoginRequest",
+    ("post", "/v1/admin/auth/oidc/link"): "#/components/schemas/AdminOidcLinkRequest",
     ("post", "/v1/product-content/products"): "#/components/schemas/ProductUpsertRequest",
     ("post", "/v1/product-content/product-import-drafts"): "#/components/schemas/ProductImportDraftCreateRequest",
     ("post", "/v1/product-content/product-import-drafts/{draft_id}/confirm"): "#/components/schemas/ProductImportDraftConfirmRequest",
@@ -48,6 +52,7 @@ CORE_JSON_REQUESTS = {
 CORE_JSON_RESPONSES = {
     ("post", "/v1/reply-decisions", "200"): "#/components/schemas/ReplyDecisionResponse",
     ("post", "/v1/admin/auth/login", "200"): "#/components/schemas/AdminAuthResponse",
+    ("post", "/v1/admin/auth/oidc/link", "200"): "#/components/schemas/AdminAuthResponse",
     ("get", "/v1/admin/auth/me", "200"): "#/components/schemas/AdminMeResponse",
     ("get", "/v1/admin/users", "200"): "#/components/schemas/AdminUserListResponse",
     ("get", "/v1/admin/audit-logs", "200"): "#/components/schemas/AuditLogListResponse",
@@ -82,6 +87,7 @@ ERROR_RESPONSE_REFS = {
     "#/components/responses/Conflict",
     "#/components/responses/ValidationError",
     "#/components/responses/ObjectStorageUnavailable",
+    "#/components/responses/ServiceUnavailable",
     "#/components/responses/TooManyRequests",
     "#/components/responses/InternalError",
 }
@@ -300,6 +306,18 @@ class OpenApiContractTest(unittest.TestCase):
 
         self.assertEqual(set(schema["required"]), {"email", "password"})
         self.assertNotIn("organization_id", schema["properties"])
+
+    def test_customer_admin_oidc_contract_is_customer_scoped(self):
+        paths = self.document["paths"]
+        link_schema = self.document["components"]["schemas"]["AdminOidcLinkRequest"]
+
+        self.assertEqual(paths["/v1/admin/auth/oidc/start"]["get"]["security"], [])
+        self.assertEqual(paths["/v1/admin/auth/oidc/callback"]["get"]["security"], [])
+        self.assertEqual(paths["/v1/admin/auth/oidc/link"]["post"]["security"], [{"AdminSession": []}])
+        self.assertNotIn("/v1/system-admin/auth/oidc/start", paths)
+        self.assertEqual(set(link_schema["required"]), {"code", "state"})
+        self.assertNotIn("token", link_schema["properties"])
+        self.assertNotIn("client_secret", link_schema["properties"])
 
     def test_product_snapshot_contract_separates_master_product_and_listing_context(self):
         schema = self.document["components"]["schemas"]["ProductSnapshot"]

@@ -619,6 +619,13 @@ pre {
   color: #ffffff;
 }
 
+.secondaryLoginButton {
+  width: 100%;
+  border-color: #9aa7b8;
+  background: #ffffff;
+  color: #1f2937;
+}
+
 .dangerButton {
   border-color: #dc2626;
   background: #dc2626;

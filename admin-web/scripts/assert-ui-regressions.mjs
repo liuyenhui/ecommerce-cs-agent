@@ -27,7 +27,9 @@ const allSource = [customerApp, systemApp, sharedComponents, sharedData].join('\
 const checks = [
   ['Admin Web regression guard is wired into npm test', packageJson.includes('assert-ui-regressions.mjs')],
   ['Login auth failures render inline form error', loginPanel.includes('loginError') && loginPanel.includes('role="alert"') && styles.includes('.loginError')],
-  ['Login 401 auth failures use user-facing credential copy', sharedComponents.includes('message.startsWith("401 ")') && loginPanel.includes('邮箱或密码不正确，请检查后重试。')],
+  ['Login 401 auth failures use user-facing credential copy', sharedComponents.includes('message.startsWith("401 ")') && loginPanel.includes('邮箱或密码错误')],
+  ['Customer login renders Fcihome Account OIDC entry only in customer wrapper', customerApp.includes('使用 Fcihome Account 登录') && customerApp.includes('/v1/admin/auth/oidc/start') && !systemApp.includes('Fcihome Account')],
+  ['Customer login maps distinct OIDC failure query errors', customerApp.includes('oidc_unbound_account') && customerApp.includes('OIDC 未绑定账号') && customerApp.includes('oidc_disabled') && customerApp.includes('OIDC 配置未启用') && customerApp.includes('oidc_state_pkce_failed') && customerApp.includes('state/PKCE 校验失败')],
   ['Login auth failures are not shown through global toast', !loginPanel.includes('setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });')],
   ['Login fields are empty by default on live builds', loginPanel.includes('React.useState("")') && !loginPanel.includes('admin@example.test') && !loginPanel.includes('system-admin@example.test') && !loginPanel.includes('React.useState("org-001")')],
   ['Customer login no longer asks for organization ID', !loginPanel.includes('organizationId') && !loginPanel.includes('组织 ID') && !loginPanel.includes('organization_id:')],

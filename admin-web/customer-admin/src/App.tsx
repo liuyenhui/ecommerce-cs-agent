@@ -56,6 +56,19 @@ async function submitCustomerLogin(email: string, password: string) {
   return requestJson("/v1/admin/auth/me");
 }
 
+function customerLoginErrorFromLocation() {
+  if (typeof window === "undefined") return null;
+  const error = new URLSearchParams(window.location.search).get("error");
+  const errorMessages: Record<string, string> = {
+    oidc_unbound_account: "OIDC 未绑定账号，请先使用邮箱密码登录或联系管理员绑定。",
+    oidc_disabled: "OIDC 配置未启用，请使用邮箱密码登录。",
+    oidc_misconfigured: "OIDC 配置未启用，请使用邮箱密码登录。",
+    oidc_state_pkce_failed: "OIDC 回调 state/PKCE 校验失败，请重新发起登录。",
+    oidc_exchange_failed: "OIDC 登录失败，请稍后重试。"
+  };
+  return error ? errorMessages[error] || "OIDC 登录失败，请稍后重试。" : null;
+}
+
 export function App() {
   const [path, setPath] = React.useState(() => normalizePath());
   const [customerTab, setCustomerTab] = React.useState<CustomerTab>("overview");
@@ -101,10 +114,16 @@ export function App() {
         </button>
         <LoginPanelBase
           title="客户后台登录"
+          initialError={customerLoginErrorFromLocation()}
           onSubmit={submitCustomerLogin}
           onLoggedIn={(session) => {
             setCustomerSession(session);
             navigate("/admin");
+          }}
+          secondaryAction={{
+            label: "使用 Fcihome Account 登录",
+            onClick: () => window.location.assign("/v1/admin/auth/oidc/start"),
+            icon: <ShieldCheck size={16} />
           }}
           setToast={setToast}
         />
