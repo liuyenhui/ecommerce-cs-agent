@@ -11,6 +11,8 @@ from urllib import request as urllib_request
 from urllib.error import URLError
 from urllib.parse import parse_qsl, quote, urlsplit
 
+from ecommerce_cs_agent.services.outbound_http import validate_public_https_url
+
 
 class ObjectStorageError(RuntimeError):
     pass
@@ -141,7 +143,10 @@ class S3ObjectStorage:
         secret_access_key: str,
         path_style: bool = True,
     ) -> None:
-        self.endpoint = endpoint.rstrip("/")
+        try:
+            self.endpoint = validate_public_https_url(endpoint, field="object storage endpoint")
+        except ValueError as exc:
+            raise ObjectStorageValidationError(str(exc)) from exc
         self.bucket = bucket
         self.region = region
         self.access_key_id = access_key_id

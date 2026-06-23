@@ -7,6 +7,7 @@ from urllib import request as urllib_request
 from urllib.error import URLError
 
 from ecommerce_cs_agent.core.config import Settings
+from ecommerce_cs_agent.services.outbound_http import validate_public_https_url
 
 
 class ProductDocumentAnalyzer(Protocol):
@@ -53,7 +54,7 @@ class OpenAICompatibleProductDocumentAnalyzer:
     model_version = "openai-compatible-product-document-v1"
 
     def __init__(self, *, base_url: str, api_key: str, model: str, fallback: ProductDocumentAnalyzer | None = None) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.base_url = validate_public_https_url(base_url, field="LLM base URL")
         self.api_key = api_key
         self.model = model
         self.fallback = fallback or DeterministicProductDocumentAnalyzer()

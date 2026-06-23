@@ -7,7 +7,9 @@ from ecommerce_cs_agent.services.object_storage import (
     ObjectStorageUnavailable,
     ObjectStorageValidationError,
     ReferenceObjectStorage,
+    S3ObjectStorage,
 )
+from ecommerce_cs_agent.services.product_analysis import OpenAICompatibleProductDocumentAnalyzer
 
 
 def test_filesystem_object_storage_rejects_path_traversal(tmp_path) -> None:
@@ -63,4 +65,24 @@ def test_reference_object_storage_rejects_signed_source_url() -> None:
                 "file_ref": "object://bucket/manual.pdf",
                 "source_url": "https://storage.example/manual.pdf?X-Amz-Signature=abc",
             },
+        )
+
+
+def test_s3_object_storage_rejects_private_endpoint() -> None:
+    with pytest.raises(ObjectStorageValidationError, match="public https"):
+        S3ObjectStorage(
+            endpoint="http://127.0.0.1:9000",
+            bucket="bucket",
+            region="us-east-1",
+            access_key_id="access",
+            secret_access_key="secret",
+        )
+
+
+def test_llm_analyzer_rejects_private_endpoint() -> None:
+    with pytest.raises(ValueError, match="public https"):
+        OpenAICompatibleProductDocumentAnalyzer(
+            base_url="http://169.254.169.254/latest",
+            api_key="key",
+            model="model",
         )
