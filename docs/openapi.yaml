@@ -557,6 +557,81 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /v1/admin/auth/oidc/start:
+    get:
+      tags: [Admin Auth]
+      operationId: startAdminOidcLogin
+      summary: 开始 Fcihome Account OIDC 登录
+      description: 仅用于客户 Admin 灰度登录入口。服务端生成 state、nonce 和 PKCE verifier，设置临时 HttpOnly state cookie，并跳转到 `account.fcihome.com`。本接口不建立客户 Admin session。
+      security: []
+      responses:
+        "307":
+          description: 跳转到 Fcihome Account authorization endpoint。
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/admin/auth/oidc/callback:
+    get:
+      tags: [Admin Auth]
+      operationId: completeAdminOidcLogin
+      summary: 完成 Fcihome Account OIDC 登录
+      description: 校验 state cookie，使用 authorization code + PKCE 换取 userinfo，把 `sub` 映射到已有客户 Admin 用户后建立 `agent_admin_session`。不创建新的 tenant/store 权限。
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "307":
+          description: 登录成功后跳转客户 Admin `/admin`。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOidcRedirectResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/admin/auth/oidc/link:
+    post:
+      tags: [Admin Auth]
+      operationId: linkAdminOidcAccount
+      summary: 绑定当前客户 Admin 与 Fcihome Account
+      description: 已登录客户 Admin 显式绑定 Fcihome Account `sub`。邮箱不匹配时拒绝；绑定只影响身份映射，不改变 tenant/store 权限。
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminOidcLinkRequest"
+      responses:
+        "200":
+          description: 绑定成功后返回当前客户 Admin session 摘要。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAuthResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
   /v1/admin/organizations:
     get:
       tags: [Admin Context]
@@ -2586,6 +2661,34 @@ components:
           format: password
           writeOnly: true
 
+    AdminOidcLinkRequest:
+      type: object
+      required: [sub]
+      properties:
+        sub:
+          type: string
+          description: Fcihome Account stable subject.
+        email:
+          type:
+            - string
+            - "null"
+          format: email
+        email_verified:
+          type:
+            - boolean
+            - "null"
+        name:
+          type:
+            - string
+            - "null"
+
+    AdminOidcRedirectResponse:
+      type: object
+      description: Documentation-only placeholder for redirect responses.
+      properties:
+        location:
+          type: string
+
     AdminAuthResponse:
       type: object
       required: [user, organizations, stores]
@@ -2671,6 +2774,10 @@ components:
           format: email
         display_name:
           type: string
+        fcihome_account_sub:
+          type:
+            - string
+            - "null"
         roles:
           type: array
           items:

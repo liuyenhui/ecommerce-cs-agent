@@ -19,6 +19,7 @@ from ecommerce_cs_agent.services.admin import admin_repository_for
 from ecommerce_cs_agent.services.admin_auth import admin_auth_service_for, system_admin_auth_service_for
 from ecommerce_cs_agent.services.decision import DecisionService
 from ecommerce_cs_agent.services.object_storage import ObjectStorageUnavailable, ObjectStorageValidationError
+from ecommerce_cs_agent.services import oidc as oidc_service
 from ecommerce_cs_agent.services.product_analysis import product_document_analyzer_for
 from ecommerce_cs_agent.services.system_admin import system_admin_repository_for
 
@@ -191,6 +192,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/v1/admin/auth/me")
     def get_admin_me(session: Any = Depends(admin_session)) -> dict[str, Any]:
         return admin_auth.me(session)
+
+    @app.get("/v1/admin/auth/oidc/start")
+    def admin_oidc_start() -> RedirectResponse:
+        redirect_url, state_cookie = oidc_service.build_authorization_redirect(settings)
+        response = RedirectResponse(redirect_url)
+        response.set_cookie(oidc_service.OIDC_STATE_COOKIE, state_cookie, httponly=True, samesite="lax")
+        return response
+
+    @app.get("/v1/admin/auth/oidc/callback")
+    def admin_oidc_callback(request: Request) -> RedirectResponse:
+        state = request.query_params.get("state") or ""
+        code = request.query_params.get("code") or ""
+        if not code:
+            raise api_error(400, "invalid_oidc_callback", "OIDC callback missing code")
+        state_payload = oidc_service.read_state_cookie(settings, request.cookies.get(oidc_service.OIDC_STATE_COOKIE), state)
+        profile = oidc_service.exchange_code_for_userinfo(settings, code, state_payload)
+        _content, token = admin_auth.login_oidc(profile)
+        response = RedirectResponse("/admin")
+        response.set_cookie("agent_admin_session", token, httponly=True, samesite="lax")
+        response.delete_cookie(oidc_service.OIDC_STATE_COOKIE)
+        return response
+
+    @app.post("/v1/admin/auth/oidc/link")
+    async def admin_oidc_link(request: Request, session: Any = Depends(admin_session)) -> dict[str, Any]:
+        payload = await request.json()
+        _require_fields(payload, ["sub"])
+        return admin_auth.link_oidc(session, payload)
 
     @app.get("/v1/admin/organizations")
     def list_admin_organizations(session: Any = Depends(admin_session)) -> dict[str, Any]:

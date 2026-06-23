@@ -632,6 +632,10 @@ function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLog
     }
   }
 
+  function startOidcLogin() {
+    window.location.assign("/v1/admin/auth/oidc/start");
+  }
+
   return (
     <section className="loginSurface">
       <form className="loginPanel" onSubmit={submit}>
@@ -676,6 +680,12 @@ function LoginPanel({ target, onLoggedIn, setToast }: { target: Workspace; onLog
           {loading ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
           登录
         </button>
+        {target === "customer" ? (
+          <button className="oidcButton" type="button" onClick={startOidcLogin}>
+            <ShieldCheck size={16} />
+            使用 Fcihome Account 登录
+          </button>
+        ) : null}
       </form>
     </section>
   );

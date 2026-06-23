@@ -6,6 +6,7 @@
 
 ### 2026-06-23
 
+- Customer Admin 新增 Fcihome Account / OIDC 灰度登录入口：`GET /v1/admin/auth/oidc/start`、`GET /v1/admin/auth/oidc/callback`、`POST /v1/admin/auth/oidc/link`。OIDC 只证明用户身份，服务端把 `sub` 映射到已有 `admin_user.fcihome_account_sub` 或精确匹配的 active 邮箱；不自动创建 tenant/store 权限，System Admin 第一版不接 OIDC。
 - Customer Admin 商品资料页收敛为商品主数据列表 + “上传商品”导入草稿：客户 UI 不再展示组织上下文、顶部刷新按钮或账号 badge；上传文件先生成 AI 抽取草稿，用户确认后才写入正式商品和资料资产。
 - Product Content API 新增 `GET /v1/product-content/products`、`POST /v1/product-content/product-import-drafts`、`POST /v1/product-content/product-import-drafts/{draft_id}/confirm`；导入草稿持久化到 `product_import_draft`，审计不得记录上传正文或 `content_base64` 明文。
 

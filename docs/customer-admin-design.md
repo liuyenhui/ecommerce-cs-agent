@@ -127,7 +127,7 @@
 | 页面 | 核心能力 |
 | --- | --- |
 | 公开宣传页 | 产品介绍、能力摘要、后台产品预览和登录按钮；Hero 下方展示商品信息、AI 自学习、AI 客服回复可控 3 张产品演示轮播；“怎么工作”段落使用短 GIF 或等效动效展示上传商品说明书 → AI 学习 → 模拟问答 → AI 自动回复；不展示租户数据。 |
-| 登录页 | 用户使用邮箱和密码登录、会话续期、退出登录、登录失败提示；不要求或展示组织 ID。 |
+| 登录页 | 用户使用邮箱和密码登录，或灰度使用 Fcihome Account / OIDC 登录；会话续期、退出登录、登录失败提示；不要求或展示组织 ID。 |
 | 店铺选择 | 显示当前用户可访问店铺；内部租户归属由 session 和权限模型确定，不在客户 UI 中展示组织 ID。 |
 | 首页概览 | 展示资料缺口、待审核知识、价格过期、规则未启用、动作能力异常和最近变更。 |
 | 商品资料 | 以商品主数据列表为第一入口，展示商品名称、外部商品 ID、店铺、状态、资料健康和更新时间。 |
@@ -157,6 +157,7 @@
 | --- | --- | --- |
 | 页面入口 | `GET /`、`GET /login`、`GET /admin` | 宣传页、登录页和受保护后台 shell；`/admin` 未登录必须显示客户登录页且不展示后台导航。 |
 | 登录与会话 | `POST /v1/admin/auth/login`、`POST /v1/admin/auth/logout`、`GET /v1/admin/auth/me` | 登录、退出、读取当前用户、组织、店铺和角色。 |
+| Fcihome Account 灰度登录 | `GET /v1/admin/auth/oidc/start`、`GET /v1/admin/auth/oidc/callback`、`POST /v1/admin/auth/oidc/link` | 通过独立 `account.fcihome.com` OIDC Provider 证明用户身份，把稳定 `sub` 映射到已有客户 Admin 用户；不自动创建租户、店铺或权限。 |
 | 组织与店铺 | `GET /v1/admin/organizations`、`GET /v1/admin/stores`、`PATCH /v1/admin/stores/{store_id}/settings` | 查看可访问组织/店铺，维护店铺设置。 |
 | 用户与权限 | `GET /v1/admin/users`、`POST /v1/admin/invitations`、`PATCH /v1/admin/users/{user_id}/roles` | 组织管理员维护成员、邀请和角色。 |
 | 商品资料 | `GET /v1/product-content/products`、`POST /v1/product-content/products`、`POST /v1/product-content/product-import-drafts`、`POST /v1/product-content/product-import-drafts/{draft_id}/confirm`、`POST /v1/product-content/assets`、`POST /v1/product-content/assets/{asset_id}/markdown` | 查询商品主数据列表；上传商品资料生成 AI 导入草稿；用户确认后维护商品、SKU、资料资产和 Markdown 审稿稿件。 |
@@ -170,6 +171,7 @@
 
 - 后台写接口必须校验 `organization_id`、`store_id`、角色权限和幂等键。
 - 登录 session 应使用客户后台专用 HttpOnly Cookie，例如 `agent_admin_session`；服务端会话状态必须持久化到数据库、Redis 或等价外部存储，不能依赖单容器内存。
+- OIDC 登录只用于建立客户 Admin 自有 session；`account.fcihome.com` 的 cookie、authorization code、access token、id token 不得被当作客户 Admin session。未绑定 `sub` 且邮箱不能精确匹配已有 active `admin_user` 时必须拒绝登录。
 - 后台接口只信任 Agent 自有 Admin session 和成员权限；外部系统 token 只能用于外部系统接入 API，不能直接访问 Admin API。
 - 客户后台路由守卫只能调用 `/v1/admin/auth/me`；不得调用 `/v1/system-admin/auth/me` 探测或复用系统后台登录态。
 - 后台批量导入可以复用同一接口语义，但必须返回每条记录的成功、失败和错误原因。

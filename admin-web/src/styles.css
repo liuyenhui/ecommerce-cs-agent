@@ -619,6 +619,19 @@ pre {
   color: #ffffff;
 }
 
+.oidcButton {
+  width: 100%;
+  justify-content: center;
+  background: #ffffff;
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+
+.oidcButton:hover {
+  border-color: #2563eb;
+  color: #1d4ed8;
+}
+
 .dangerButton {
   border-color: #dc2626;
   background: #dc2626;

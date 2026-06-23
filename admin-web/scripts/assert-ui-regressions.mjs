@@ -25,6 +25,7 @@ const checks = [
   ['Customer login no longer asks for organization ID', !loginPanel.includes('organizationId') && !loginPanel.includes('组织 ID') && !loginPanel.includes('organization_id:')],
   ['Login validates email and password only before requesting auth', loginPanel.includes('请填写邮箱和密码') && !loginPanel.includes('请填写邮箱、密码和组织 ID') && loginPanel.includes('return;')],
   ['Login submits trimmed email without tenant identifiers', loginPanel.includes('email: email.trim()') && !loginPanel.includes('organization_id:')],
+  ['Customer login offers Fcihome Account OIDC without affecting system login', loginPanel.includes('使用 Fcihome Account 登录') && loginPanel.includes('target === "customer"') && loginPanel.includes('/v1/admin/auth/oidc/start')],
   ['Customer Admin top bar has no manual refresh button or user badge', !topBar.includes('title="刷新"') && !topBar.includes('userBadge')],
   ['Customer workspace hides organization context panel', !customerWorkspace.includes('客户上下文') && !customerWorkspace.includes('label="组织"')],
   ['Customer context selector has no refresh button', !customerWorkspace.includes('onRefresh={refresh}') && !customerWorkspace.includes('刷新</button>')],

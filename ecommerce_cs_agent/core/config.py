@@ -29,6 +29,11 @@ class Settings:
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    oidc_enabled: bool = False
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: str | None = None
+    oidc_redirect_uri: str | None = None
 
 
 def load_settings() -> Settings:
@@ -81,6 +86,11 @@ def load_settings() -> Settings:
         llm_api_key=os.environ.get("LLM_API_KEY"),
         llm_base_url=os.environ.get("LLM_BASE_URL"),
         llm_model=os.environ.get("LLM_MODEL"),
+        oidc_enabled=os.environ.get("OIDC_ENABLED", "").lower() in {"1", "true", "yes", "on"},
+        oidc_issuer=os.environ.get("OIDC_ISSUER"),
+        oidc_client_id=os.environ.get("OIDC_CLIENT_ID"),
+        oidc_client_secret=os.environ.get("OIDC_CLIENT_SECRET"),
+        oidc_redirect_uri=os.environ.get("OIDC_REDIRECT_URI"),
     )
 
 
