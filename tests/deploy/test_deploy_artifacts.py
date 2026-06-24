@@ -181,6 +181,16 @@ def test_publish_workflow_generates_sbom_and_scans_images() -> None:
         assert snippet in publish
 
 
+def test_ci_validates_built_admin_nginx_image_before_publish() -> None:
+    pr_checks = Path(".github/workflows/pr-checks.yml").read_text(encoding="utf-8")
+    publish = Path(".github/workflows/publish-images.yml").read_text(encoding="utf-8")
+
+    for workflow in (pr_checks, publish):
+        assert "Admin image nginx config check" in workflow
+        assert "docker build -f admin-web/Dockerfile" in workflow
+        assert "docker run --rm ecommerce-cs-agent-admin:nginx-check nginx -t" in workflow
+
+
 def test_deploy_workflow_archives_dev_release_gate_report() -> None:
     workflow = Path(".github/workflows/deploy-dev.yml").read_text(encoding="utf-8")
 

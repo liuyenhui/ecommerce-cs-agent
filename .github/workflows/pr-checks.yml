@@ -52,6 +52,11 @@ jobs:
         working-directory: admin-web
         run: npm run build
 
+      - name: Admin image nginx config check
+        run: |
+          docker build -f admin-web/Dockerfile -t ecommerce-cs-agent-admin:nginx-check .
+          docker run --rm ecommerce-cs-agent-admin:nginx-check nginx -t
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
