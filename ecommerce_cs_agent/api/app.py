@@ -20,6 +20,7 @@ from ecommerce_cs_agent.services.admin import admin_repository_for
 from ecommerce_cs_agent.services.admin_auth import admin_auth_service_for, system_admin_auth_service_for
 from ecommerce_cs_agent.services.decision import DecisionService
 from ecommerce_cs_agent.services.object_storage import ObjectStorageUnavailable, ObjectStorageValidationError
+from ecommerce_cs_agent.services.open_erp_integration import BillingLeaseError, OpenErpIntegrationService
 from ecommerce_cs_agent.services.product_analysis import product_document_analyzer_for
 from ecommerce_cs_agent.services.system_admin import system_admin_repository_for
 
@@ -33,6 +34,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     admin_auth = admin_auth_service_for(settings)
     system_admin_auth = system_admin_auth_service_for(settings)
     system_admin_data = system_admin_repository_for(settings)
+    open_erp = OpenErpIntegrationService(settings)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -53,7 +55,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return _error_response(500, "internal_error", "unexpected server error")
 
     def agent_principal(request: Request) -> Principal:
-        return require_agent_api(settings, request.headers.get("Authorization"))
+        authorization = request.headers.get("Authorization")
+        expected = f"Bearer {settings.agent_api_token}"
+        if authorization == expected:
+            return require_agent_api(settings, authorization)
+        try:
+            connector = open_erp.authenticate_connector(authorization)
+        except PermissionError as exc:
+            raise api_error(401, "unauthorized", str(exc)) from exc
+        return Principal("connector", connector.connector_id, connector.tenant_id, connector.external_store_id, "connector")
 
     def admin_principal(request: Request) -> Principal:
         principal, _session = admin_auth.require_session(request.headers.get("Cookie"), request.headers.get("Authorization"))
@@ -101,6 +111,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         payload = await request.json()
         _require_fields(payload, ["request_id", "platform", "message", "conversation", "mode"])
+        connector = open_erp.get_connector(_principal.user_id) if _principal.kind == "connector" else None
+        if connector:
+            try:
+                lease = open_erp.verify_billing_lease(connector, payload)
+            except BillingLeaseError as exc:
+                raise api_error(exc.status_code, exc.code, exc.message) from exc
+            payload = open_erp.enrich_reply_payload(connector, payload, lease)
         payload = _normalize_reply_decision_payload(payload)
         return decisions.create_reply_decision(payload)
 
@@ -237,6 +254,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.set_cookie("agent_admin_session", token, httponly=True, samesite="lax")
         response.delete_cookie(oidc_service.OIDC_STATE_COOKIE)
         return response
+
+    @app.post("/v1/integrations/open-erp/provision")
+    async def provision_open_erp_connector(request: Request) -> JSONResponse:
+        try:
+            open_erp.require_service_auth(request.headers.get("Authorization"))
+            status_code, content = open_erp.provision(await request.json())
+        except PermissionError as exc:
+            raise api_error(401, "unauthorized", str(exc)) from exc
+        except ValueError as exc:
+            raise api_error(422, "validation_error", str(exc)) from exc
+        return JSONResponse(status_code=status_code, content=content)
+
+    @app.patch("/v1/integrations/open-erp/connectors/{connector_id}")
+    async def patch_open_erp_connector(connector_id: str, request: Request) -> dict[str, Any]:
+        try:
+            open_erp.require_service_auth(request.headers.get("Authorization"))
+            return open_erp.patch_connector(connector_id, await request.json())
+        except PermissionError as exc:
+            raise api_error(401, "unauthorized", str(exc)) from exc
+        except KeyError as exc:
+            raise api_error(404, "not_found", "connector not found") from exc
+        except ValueError as exc:
+            raise api_error(422, "validation_error", str(exc)) from exc
 
     @app.post("/v1/admin/auth/oidc/link")
     async def admin_oidc_link(request: Request, session: Any = Depends(admin_session)) -> JSONResponse:

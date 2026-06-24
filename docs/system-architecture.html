@@ -1517,7 +1517,7 @@
         '宣传页由 Notion 主导：黑白中性基调、大留白、AI Agent 叙事、产品能力模块、可信背书、产品预览和黑色主 CTA；Admin 不做 Notion 化，仍按 IBM / Carbon 企业后台规则设计。',
         '所有决策都记录 decision_id、trace、模型版本、规则命中和上下文引用。',
         '高风险场景由规则闸门优先拦截，模型置信度不能覆盖 P0 风险规则。',
-        '后续再引入 Connector、队列、Webhook、通用企业 SSO、MFA、灰度评估和批量学习。',
+        '第一阶段仅落地最小 open_erp provisioning、Connector Token 和 billing_lease 校验；后续再引入通用 Connector、队列、Webhook、通用企业 SSO、MFA、灰度评估和批量学习。',
         '商品资料中心保留原始资产、Markdown 审稿稿件、知识片段、模拟问答和价格快照版本，支撑决策回放。'
       ]
     };
@@ -1525,14 +1525,14 @@
     const apiDocumentation = {
       title: 'API 文档',
       summary: 'REST HTTP API 风格说明：输入参数、输出参数、错误定义、调用频率和 curl 示例。',
-      description: '第一版以同步 HTTP/JSON 为主，外部客服系统通过 POST /v1/reply-decisions 提交最小问答请求。缺商品、订单、物流、规则或动作结果时，Agent 返回 context_requests[]，外部系统按类型并行回填，最终得到可答复内容、动作请求或人工介入。',
-      badges: ['REST', 'HTTP/JSON', 'OpenAPI', 'API Key / Bearer Token', 'Idempotency-Key'],
+      description: '第一版以同步 HTTP/JSON 为主，外部客服系统通过 POST /v1/reply-decisions 提交最小问答请求。Connector Token 调用时必须带外部计费权威签发的 billing_lease。缺商品、订单、物流、规则或动作结果时，Agent 返回 context_requests[]，外部系统按类型并行回填，最终得到可答复内容、动作请求或人工介入。',
+      badges: ['REST', 'HTTP/JSON', 'OpenAPI', 'API Key / Connector Token', 'billing_lease', 'Idempotency-Key'],
       quickStart: {
         title: '快速开始',
-        description: '外部客服系统先申请 API Token，并在每次主请求中传入平台、外部店铺或平台账号引用、可选 listing / 商品引用、消息、最小会话、模式和幂等键。内部租户和店铺由凭证与业务引用解析。第一版同步调用 reply decision；缺上下文时按 context_requests[] 并行调用 products / orders / logistics / rules 回填接口。',
+        description: '外部客服系统先申请 API Token 或 Connector Token，并在每次主请求中传入平台、外部店铺或平台账号引用、可选 listing / 商品引用、消息、最小会话、模式和幂等键。Connector Token 调用还必须带 billing_lease，由外部计费权威 reserve 后签发。内部租户和店铺由凭证与业务引用解析。第一版同步调用 reply decision；缺上下文时按 context_requests[] 并行调用 products / orders / logistics / rules 回填接口。',
         steps: [
-          '准备 Authorization: Bearer token，并为每次请求生成稳定的 Idempotency-Key。',
-          '调用 POST /v1/reply-decisions 时只必填 request_id、platform、external_store_id、message、最小 conversation 和 mode；platform_account_ref、listing_ref、external_product_id、external_sku_id 以及已有商品、订单、物流、规则上下文按需传入。',
+          '准备 Authorization: Bearer token，并为每次请求生成稳定的 Idempotency-Key；Connector Token 调用前先由外部计费权威 reserve 并签发 billing_lease。',
+          '调用 POST /v1/reply-decisions 时只必填 request_id、platform、external_store_id、message、最小 conversation 和 mode；Connector Token 调用还必填 billing_lease；platform_account_ref、listing_ref、external_product_id、external_sku_id 以及已有商品、订单、物流、规则上下文按需传入。',
           '如果返回 context_requests[]，按 type 并行调用 /contexts/products、/contexts/orders、/contexts/logistics 或 /contexts/rules，服务端聚合同一 decision_id。',
           '根据 action 和 decision_status 渲染候选、自动回复、转人工原因、补上下文字段或外部动作确认；总等待预算最高 5 秒。',
           '客服最终回复后调用 POST /v1/feedback/human-replies，形成反馈和待审核知识候选；商品说明书上传后先形成 Markdown 审稿稿件和片段候选。',
@@ -1540,7 +1540,7 @@
         ],
         businessFlow: [
           ['1. 接收买家消息', '外部客服系统负责接收平台买家消息、维护会话归属、展示客服工作台和执行真实发送动作。接入客服 Agent(客服智能体) 前，外部系统只需准备 platform(电商平台)、external_store_id(外部店铺)、platform_account_ref(平台账号引用)、可选 listing_ref(销售实例)、message(消息)、conversation(最小会话) 和 mode(模式)。'],
-          ['2. 调用决策接口', '外部系统使用 Authorization(授权凭证) 和 Idempotency-Key(幂等键) 调用 POST(提交) /v1/reply-decisions(创建回复决策)，把本次消息、最小会话和可选已有上下文提交给客服 Agent(客服智能体)。客服 Agent(客服智能体) 对外是黑盒，接入方只依赖接口协议和返回字段。'],
+          ['2. 调用决策接口', '外部系统使用 Authorization(授权凭证) 和 Idempotency-Key(幂等键) 调用 POST(提交) /v1/reply-decisions(创建回复决策)。如果使用 Connector Token(连接器令牌)，还必须提交 billing_lease(计费租约)，由外部计费权威签发并绑定 connector、reservation、request、store 和 feature。'],
           ['3. 读取返回动作', '客服 Agent(客服智能体) 返回 decision_id(决策编号)、decision_status(决策状态)、action(处理动作)、confidence(置信度)、reply_text(回复文本)、context_requests(补上下文请求列表)、action_request(动作执行请求) 和 trace_summary(追踪摘要)。外部系统只根据 action(处理动作) 处理结果，不依赖客服 Agent(客服智能体) 的实现细节。'],
           ['4. 展示、发送或转人工', '当 action(处理动作) 是 auto_reply(自动回复) 时，外部系统决定是否自动发送；当 action(处理动作) 是 candidate(候选回复) 时，外部系统展示给客服确认或编辑；当 action(处理动作) 是 handoff(转人工) 时，外部系统转人工并展示原因。'],
           ['5. 补上下文或执行动作', '当 action(处理动作) 是 context_request(补上下文请求) 时，外部系统按 context_requests[] 中的 type 并行调用 products、orders、logistics、rules 回填接口。当 action(处理动作) 是 action_request(动作执行请求) 时，外部系统执行自己的业务 API(应用接口)，再调用 actions/results 回传执行结果。'],
@@ -1550,6 +1550,56 @@
         businessFlowFutureNote: ['实时通知（非本期目标）', 'WebSocket(实时连接) 是后续异步通知能力，用于状态变化、处理完成或补充事件推送；本期接入流程不依赖实时通知，客户系统按同步 API(应用接口) 返回和查询接口完成闭环。']
       },
       endpoints: [
+        {
+          id: 'open-erp-provision',
+          title: 'open_erp 无感开通',
+          method: 'POST',
+          path: '/v1/integrations/open-erp/provision',
+          purpose: '服务间幂等 provision Agent 内部 tenant / store / platform_account / connector 映射。',
+          request: [
+            ['Authorization', 'Bearer service token', '必填，仅接受 open_erp integration 服务间 token；不接受微信 session、ERP client token、Cookie 或 Admin session。'],
+            ['tenant_ref', 'string', '可选，外部租户引用；不能作为 Agent 内部权限来源。'],
+            ['store_ref', 'string', '可选，外部店铺引用。'],
+            ['platform', 'string', '必填，平台标识，例如 pdd。'],
+            ['external_store_id', 'string', '必填，外部平台店铺 ID，例如 PDD mallId。'],
+            ['platform_account_ref', 'string', '必填，外部平台账号或连接器引用。'],
+            ['machine_id_hash', 'string', '可选，客户端机器标识哈希，不传明文机器指纹。']
+          ],
+          response: [
+            ['tenant_id / store_id / platform_account_id', 'string', 'Agent 内部映射 ID。'],
+            ['connector_id', 'string', 'Agent Connector ID。'],
+            ['connector_token', 'string', '仅首次创建或轮换时返回一次；后续只返回 prefix。'],
+            ['connector_token_prefix', 'string', '可展示前缀，不是 secret。'],
+            ['status', 'enum', 'active / paused / revoked。'],
+            ['readiness_status', 'string', '知识准备或运行状态。']
+          ],
+          errors: [
+            ['401', '服务间 token 缺失或无效。'],
+            ['422', 'platform、external_store_id 或 platform_account_ref 缺失。']
+          ]
+        },
+        {
+          id: 'open-erp-connector-patch',
+          title: 'open_erp Connector 状态',
+          method: 'PATCH',
+          path: '/v1/integrations/open-erp/connectors/{connector_id}',
+          purpose: '暂停、恢复或轮换 open_erp connector；暂停后不能调用决策接口。',
+          request: [
+            ['Authorization', 'Bearer service token', '必填，仅服务间 provisioning 凭据。'],
+            ['status', 'enum', '可选，active / paused / revoked。'],
+            ['rotate_token', 'boolean', '可选，为 true 时轮换并一次性返回新 connector_token。']
+          ],
+          response: [
+            ['connector_id', 'string', '目标 Connector。'],
+            ['connector_token', 'string', '仅轮换时返回一次。'],
+            ['connector_token_prefix', 'string', '可展示前缀，不是 secret。'],
+            ['status', 'enum', '更新后的状态。']
+          ],
+          errors: [
+            ['401', '服务间 token 缺失或无效。'],
+            ['404', 'connector 不存在。']
+          ]
+        },
         {
           id: 'reply-decisions',
           title: '创建回复决策',
@@ -1563,6 +1613,7 @@
             ['platform_account_ref', 'string', '可选，平台账号或 Connector 引用。'],
             ['listing_ref', 'string', '可选，某平台、某店铺、某商品链接或 SKU 的销售实例引用。'],
             ['external_product_id / external_sku_id', 'string', '可选，外部平台商品 / SKU 引用；缺可信商品资料时只作为补上下文查询条件。'],
+            ['billing_lease', 'string', 'Connector Token 调用必填，由外部计费权威签发，绑定 connector、reservation、request、store 和 feature=ai_cs.reply_decision。'],
             ['mode', 'enum', '必填，assist_first / auto_when_safe / evaluate_only 等决策模式。'],
             ['message', 'object', '必填，外部消息 ID、内容、发送方和时间。', [
               ['external_message_id', 'string', '必填，外部客服系统或平台消息 ID，用于幂等去重。'],
@@ -1972,6 +2023,7 @@
       ],
       errors: [
         ['AUTH_INVALID', '401', 'API Key / Bearer Token 缺失、过期或签名错误。'],
+        ['BILLING_LEASE_INVALID', '402/403', 'Connector Token 调用缺少 billing_lease、租约过期、签名错误或 scope 与 connector/store/request 不匹配。'],
         ['TENANT_FORBIDDEN', '403', '请求中的 tenant_id / store_id 与凭证不匹配。'],
         ['VALIDATION_ERROR', '422', '请求 schema 不合法或必填字段缺失。'],
         ['IDEMPOTENCY_CONFLICT', '409', '相同幂等键对应的请求体不一致。'],
@@ -2000,6 +2052,7 @@
         '    "listing_ref": "pdd-listing-001",',
         '    "external_product_id": "pdd-product-001",',
         '    "external_sku_id": "pdd-sku-001",',
+        '    "billing_lease": "base64url(payload).base64url(signature)",',
         '    "message": {',
         '      "external_message_id": "m_10086",',
         '      "sender_type": "buyer",',
@@ -2542,7 +2595,7 @@
           { key: 'cs', text: '外部客服系统', sub: '消息接收 / 工作台 / 实际发送', kind: 'external' },
           { key: 'admin', text: '客户 Admin', sub: '商品资料 / 片段审核 / 资料体检', kind: 'external' },
           { key: 'systemAdmin', text: '系统 Admin', sub: 'readiness / 排障 / 审计', kind: 'external' },
-          { key: 'api', text: 'HTTP API', sub: '/v1/reply-decisions\n/contexts/*\n/v1/feedback/human-replies', kind: 'service' },
+          { key: 'api', text: 'HTTP API', sub: '/v1/reply-decisions\n/integrations/open-erp\n/contexts/*', kind: 'service' },
           { key: 'auth', text: '鉴权与租户识别', sub: 'API Key / Bearer Token', kind: 'service' },
           { key: 'normalize', text: '上下文标准化', sub: '平台字段映射 / JSONB raw', kind: 'service' },
           { key: 'productContent', text: '商品资料中心', sub: 'Markdown 审稿 / 片段审核 / 价格快照', kind: 'service' },
@@ -3760,6 +3813,29 @@
     }
 
     function codeExampleFor(endpoint) {
+      if (endpoint.id === 'open-erp-provision') return [
+        'curl -X POST https://cs-agent.example.com/v1/integrations/open-erp/provision \\',
+        '  -H "Authorization: Bearer $OPEN_ERP_INTEGRATION_TOKEN" \\',
+        '  -H "Content-Type: application/json" \\',
+        '  -d \'{',
+        '    "tenant_ref": "open_erp:org:org_001",',
+        '    "store_ref": "open_erp:store:store_001",',
+        '    "platform": "pdd",',
+        '    "external_store_id": "mall-001",',
+        '    "external_store_name": "示例店铺",',
+        '    "platform_account_ref": "pdd:mall-001",',
+        '    "machine_id_hash": "sha1-redacted"',
+        '  }\''
+      ].join('\n');
+      if (endpoint.id === 'open-erp-connector-patch') return [
+        'curl -X PATCH https://cs-agent.example.com/v1/integrations/open-erp/connectors/connector_001 \\',
+        '  -H "Authorization: Bearer $OPEN_ERP_INTEGRATION_TOKEN" \\',
+        '  -H "Content-Type: application/json" \\',
+        '  -d \'{',
+        '    "status": "paused",',
+        '    "rotate_token": false',
+        '  }\''
+      ].join('\n');
       if (endpoint.id === 'reply-decisions') return apiDocumentation.curl.join('\n');
       if (endpoint.id.startsWith('context-')) {
         const contextPayload = {
@@ -3848,6 +3924,26 @@
     }
 
     function responseExampleFor(endpoint) {
+      if (endpoint.id === 'open-erp-provision') return [
+        '{',
+        '  "tenant_id": "tenant_001",',
+        '  "store_id": "store_001",',
+        '  "platform_account_id": "platform_account_001",',
+        '  "connector_id": "connector_001",',
+        '  "connector_token": "csconn_returned_once",',
+        '  "connector_token_prefix": "csconn_return",',
+        '  "status": "active",',
+        '  "readiness_status": "knowledge_pending"',
+        '}'
+      ].join('\n');
+      if (endpoint.id === 'open-erp-connector-patch') return [
+        '{',
+        '  "connector_id": "connector_001",',
+        '  "connector_token_prefix": "csconn_return",',
+        '  "status": "paused",',
+        '  "readiness_status": "paused"',
+        '}'
+      ].join('\n');
       if (endpoint.id === 'reply-decisions') return apiDocumentation.responseExample.join('\n');
       if (endpoint.id.startsWith('context-')) return [
         '{',

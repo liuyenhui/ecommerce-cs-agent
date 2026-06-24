@@ -46,6 +46,7 @@ const checks = [
   ['Status badges render localized status text', sharedData.includes('const statusLabel') && sharedData.includes('title={value}>{statusLabel[value] || value}</span>')],
   ['EmptyState accepts title, description, and optional action', sharedComponents.includes('function EmptyState({ title, description, action }: EmptyStateProps)')],
   ['Mobile table cells render labels before content', styles.includes('td::before') && styles.includes('content: attr(data-label)')],
+  ['Nginx host map has enough bucket size for dev admin hostnames', /map_hash_bucket_size\s+128;/.test(nginxConf)],
   ['Nginx does not serve index.html for missing hashed assets', /location\s+\^~\s+\/assets\/\s*\{[\s\S]*try_files\s+\/\$admin_site\$uri\s+=404;/.test(nginxConf)],
   ['Nginx keeps SPA documents revalidatable after deployments', /location\s+=\s+\/index\.html\s*\{[\s\S]*Cache-Control[\s\S]*no-store/.test(nginxConf)]
 ];

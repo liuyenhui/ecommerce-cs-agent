@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import time
+
 from fastapi.testclient import TestClient
 
 from ecommerce_cs_agent.api.app import create_app
@@ -12,6 +18,27 @@ def client() -> TestClient:
 
 def auth_headers() -> dict[str, str]:
     return {"Authorization": "Bearer test-agent-token"}
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def billing_lease(request_id: str, external_store_id: str) -> str:
+    payload = {
+        "iss": "open_erp_agent",
+        "aud": "ecommerce-cs-agent",
+        "reservation_id": f"reservation-{request_id}",
+        "request_id": request_id,
+        "platform": "pdd",
+        "external_store_id": external_store_id,
+        "feature": "ai_cs.reply_decision",
+        "quantity": 1,
+        "exp": int(time.time()) + 300,
+    }
+    encoded = _b64(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    signature = _b64(hmac.new(b"test-open-erp-billing-secret", encoded.encode("ascii"), hashlib.sha256).digest())
+    return f"{encoded}.{signature}"
 
 
 def minimal_reply_request(request_id: str = "req-001", content: str = "这个订单什么时候发货？") -> dict:
@@ -33,6 +60,7 @@ def minimal_reply_request(request_id: str = "req-001", content: str = "这个订
         },
         "mode": "assist_first",
         "context": {"products": [], "orders": [], "logistics": [], "rules": []},
+        "billing_lease": billing_lease(request_id, "store-001"),
     }
 
 
@@ -58,6 +86,7 @@ def platform_listing_reply_request(request_id: str = "req-listing", content: str
         },
         "mode": "assist_first",
         "context": {"orders": [], "logistics": [], "rules": []},
+        "billing_lease": billing_lease(request_id, "pdd-store-001"),
     }
 
 

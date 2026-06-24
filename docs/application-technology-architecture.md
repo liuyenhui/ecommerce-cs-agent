@@ -104,6 +104,8 @@ PostgreSQL 16+
 | `GET https://admin.ecommerce-cs-agent-dev.fcihome.com/admin` | 受保护客户后台 shell，未登录访问时重定向到客户后台 `/login`。 |
 | `GET https://system-admin.ecommerce-cs-agent-dev.fcihome.com/login` | 系统 Admin 登录页，使用系统后台专用 session。 |
 | `GET https://system-admin.ecommerce-cs-agent-dev.fcihome.com/` | 受保护系统后台 shell，未登录访问时重定向到系统后台 `/login`。 |
+| `POST /v1/integrations/open-erp/provision` | 服务间 open_erp 无感开通入口，幂等创建内部 tenant/store/platform_account/connector 映射，首次或轮换时一次性返回 connector token。 |
+| `PATCH /v1/integrations/open-erp/connectors/{connector_id}` | 服务间暂停、恢复或轮换 open_erp connector；不接受微信 session、ERP client token、Cookie 或 Admin session。 |
 | `POST /v1/reply-decisions` | 外部客服系统提交买家消息、最小会话和可选已有上下文，Agent 返回候选、自动回复决策、补上下文请求、动作请求或转人工。 |
 | `POST /v1/reply-decisions/{decision_id}/contexts/products` | 按 `context_requests[type=products]` 回填商品快照或商品引用。 |
 | `POST /v1/reply-decisions/{decision_id}/contexts/orders` | 按 `context_requests[type=orders]` 回填订单快照。 |
@@ -116,7 +118,7 @@ PostgreSQL 16+
 | `GET /v1/tasks/{task_id}` | 后续轮询查询异步任务状态。 |
 | Webhook 回调 | 后续异步决策完成、动作执行结果、失败重试通知。 |
 
-公开页面路由不属于外部系统接入协议。外部系统 API 鉴权建议使用 API Key 或 Bearer Token；客户 Admin 登录使用 `agent_admin_session`，系统 Admin 登录使用 `agent_system_admin_session`，两者不能互认。主请求必须带 `request_id`，并用 `platform`、`external_store_id`、`platform_account_ref`、`listing_ref` 等业务引用定位上下文；补上下文和动作结果必须带 `context_request_id` / `action_id` 与 `idempotency_key`，避免外部系统重试导致重复决策、重复回填或重复动作。
+公开页面路由不属于外部系统接入协议。外部系统 API 鉴权建议使用 API Key 或 Bearer Token；客户 Admin 登录使用 `agent_admin_session`，系统 Admin 登录使用 `agent_system_admin_session`，两者不能互认。主请求必须带 `request_id`，并用 `platform`、`external_store_id`、`platform_account_ref`、`listing_ref` 等业务引用定位上下文；Connector Token 调用 `POST /v1/reply-decisions` 时还必须带外部计费权威签发的 `billing_lease`，绑定 connector、reservation、request、store 和 `feature=ai_cs.reply_decision`。补上下文和动作结果必须带 `context_request_id` / `action_id` 与 `idempotency_key`，避免外部系统重试导致重复决策、重复回填或重复动作。
 
 ## 6. AI 架构与模型访问
 

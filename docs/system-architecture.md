@@ -8,13 +8,14 @@
 - 任一外部客服、ERP、订单、仓储或平台接入系统都可以通过标准 API 单独接入；ERP 只是外部系统的一种示例，不是默认上游或必需组件。
 - 第一版同步优先：外部系统调用 `POST /v1/reply-decisions` 获取候选回复或自动回复决策。
 - 第一版请求只要求最小问答字段：消息、会话、平台、外部店铺 / 平台账号引用、可选 listing / 商品引用和模式；内部 `tenant_id`、`store_id`、`platform_account_id`、`listing_id`、`product_id` 由 API Key / Connector Token 和业务引用解析，不由外部系统直接传入。
+- open_erp 无感开通第一阶段只新增服务间 provisioning、Connector Token 和 `billing_lease` 校验：外部计费权威负责 reserve/finalize，Agent 只验签并校验 connector/store/request/scope，不能把 ERP 微信登录、client token 或 Cookie 当作 Admin 身份源。
 - 内部决策编排采用 LangGraph 设计：用 StateGraph 表达意图识别、缺上下文判断、RAG、生成、规则闸门、动作等待和人工介入；对外 API 不暴露 LangGraph 概念。
 - 第一版提供 Agent 自有客户后台站点 `admin.ecommerce-cs-agent-dev.fcihome.com`，承载公开宣传页 `/`、客户登录页 `/login` 和受保护客户后台 `/admin`；宣传页对外使用“AI / AI 客服”白话叙事，只作为产品介绍和登录入口，不承载租户业务数据。
 - 第一版提供独立系统后台站点 `system-admin.ecommerce-cs-agent-dev.fcihome.com`，承载系统管理员登录、跨租户 readiness、决策排障、任务、审计和健康检查；`ops-admin.ecommerce-cs-agent-dev.fcihome.com` 仅作为可选别名。
 - 第一版包含 Agent 自有客户 Admin 后台，用于登录、租户/店铺切换、商品资料维护、知识审核、规则配置、动作能力配置和审计查询，不由外部系统承载。
 - 客户后台和系统后台使用不同登录页、Cookie / session 名、路由守卫和 API 鉴权域；客户后台 UI 不展示系统后台入口，系统后台不得伪装客户用户调用客户 Admin API。
 - 公开宣传页 UI 采用黑白中性、大留白、Apple 式轻量产品展示、产品演示轮播和黑色主 CTA，围绕“商品信息管好了，AI 客服才答得准。”表达；Admin Web UI 仍采用 IBM / Carbon 企业后台结构，Ant Design 只是组件能力层，不是视觉风格来源。
-- 后续预留 Connector、异步事件、回调、规则灰度和学习评估闭环。
+- 第一阶段落地最小 Connector 接入；后续预留通用 Connector 管理、异步事件、回调、规则灰度和学习评估闭环。
 - PN-04 统一门户阶段先把 `www.fcihome.com` 做成 Fcihome 总门户、产品入口和品牌叙事层；它不共享 Cookie/session，不自动登录客户 Admin，不展示系统 Admin，后续统一身份走 Fcihome Account / OIDC 抽象。
 
 ## 1. 总体架构
