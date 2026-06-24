@@ -14,6 +14,8 @@ servers:
   - url: https://api.example.com
     description: 生产或 dev 环境 API 域名占位，实际部署以环境配置为准。
 tags:
+  - name: Open ERP Integrations
+    description: open_erp_agent 无感开通的服务间 provisioning、connector token 和暂停/轮换契约。
   - name: Reply Decisions
     description: 外部客服系统调用的同步决策、补上下文和动作结果闭环。
   - name: Message Traces
@@ -38,6 +40,66 @@ tags:
     description: 系统后台字段级契约，覆盖租户、店铺、readiness、排障、任务、审计和健康；使用系统后台独立 session。
 
 paths:
+  /v1/integrations/open-erp/provision:
+    post:
+      tags: [Open ERP Integrations]
+      operationId: provisionOpenErpConnector
+      summary: 幂等开通 open_erp AI 客服 Connector
+      description: |
+        服务间接口，只接受 open_erp integration Bearer Token，不接受微信 session、ERP client token、Cookie、Customer Admin session 或 System Admin session。
+        幂等创建或更新内部 tenant/store/platform_account/connector 映射；首次创建或显式轮换时一次性返回 connector_token，数据库只保存 token hash/prefix。
+      security:
+        - OpenErpIntegrationAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenErpProvisionRequest"
+      responses:
+        "201":
+          description: Connector 首次创建或已存在的幂等映射。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenErpProvisionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/integrations/open-erp/connectors/{connector_id}:
+    patch:
+      tags: [Open ERP Integrations]
+      operationId: patchOpenErpConnector
+      summary: 暂停、恢复或轮换 open_erp Connector
+      description: Connector 暂停后不能调用决策接口；轮换时只返回一次新 connector_token，后续查询只返回 prefix。
+      security:
+        - OpenErpIntegrationAuth: []
+      parameters:
+        - name: connector_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenErpConnectorPatchRequest"
+      responses:
+        "200":
+          description: Connector 状态已更新。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenErpProvisionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /v1/reply-decisions:
     post:
       tags: [Reply Decisions]
@@ -66,6 +128,7 @@ paths:
                   listing_ref: pdd-listing-001
                   external_product_id: pdd-product-001
                   external_sku_id: pdd-sku-001
+                  billing_lease: base64url-payload.base64url-signature
                   message:
                     external_message_id: msg-001
                     sender_type: buyer
@@ -92,6 +155,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/IdempotencyConflict"
         "422":
@@ -1877,8 +1944,13 @@ components:
     AgentApiAuth:
       type: http
       scheme: bearer
-      bearerFormat: API Key or Bearer Token
-      description: 外部系统接入凭据，只能调用外部决策、补上下文、动作结果和反馈接口，不能调用客户 Admin 或系统 Admin API。
+      bearerFormat: API Key or Connector Token
+      description: 外部系统接入凭据，只能调用外部决策、补上下文、动作结果和反馈接口，不能调用客户 Admin 或系统 Admin API。Connector Token 调用 `POST /v1/reply-decisions` 时必须带有效 `billing_lease`。
+    OpenErpIntegrationAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Service Token
+      description: open_erp_agent 服务间 provisioning 凭据，只能调用 `/v1/integrations/open-erp/*`，不能调用 Admin API，也不能替代 Connector Token 调用决策接口。
     AdminSession:
       type: apiKey
       in: cookie
@@ -2065,6 +2137,71 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
 
   schemas:
+    OpenErpProvisionRequest:
+      type: object
+      required: [platform, external_store_id, platform_account_ref]
+      properties:
+        tenant_ref:
+          type: string
+          description: 外部租户引用，例如 open_erp 组织引用；不能作为 Agent 内部权限来源。
+        store_ref:
+          type: string
+          description: 外部店铺引用，例如 open_erp 店铺引用。
+        platform:
+          $ref: "#/components/schemas/Platform"
+        external_store_id:
+          type: string
+          description: 外部平台店铺 ID，例如 PDD mallId。
+        external_store_name:
+          type: string
+        platform_account_ref:
+          type: string
+          description: 外部平台账号或连接器引用。
+        machine_id_hash:
+          type: string
+          description: 客户端机器标识哈希，不得传明文机器指纹。
+        source:
+          type: string
+          enum: [open_erp_agent]
+
+    OpenErpConnectorPatchRequest:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [active, paused, revoked]
+        rotate_token:
+          type: boolean
+          default: false
+
+    OpenErpProvisionResponse:
+      type: object
+      required: [tenant_id, store_id, platform_account_id, connector_id, connector_token_prefix, status, readiness_status]
+      properties:
+        tenant_id:
+          type: string
+          description: Agent 内部 tenant ID。
+        store_id:
+          type: string
+          description: Agent 内部 store ID。
+        platform_account_id:
+          type: string
+          description: Agent 内部 platform_account ID。
+        connector_id:
+          type: string
+        connector_token:
+          type: string
+          description: 仅首次创建或轮换时返回一次，后续不得再返回明文。
+        connector_token_prefix:
+          type: string
+          description: 可展示和排障的 token 前缀，不是 secret。
+        status:
+          type: string
+          enum: [active, paused, revoked]
+        readiness_status:
+          type: string
+          description: 知识准备、运行或暂停状态。
+
     ReplyDecisionCreateRequest:
       type: object
       required: [request_id, platform, external_store_id, message, conversation, mode]
@@ -2089,6 +2226,9 @@ components:
         external_sku_id:
           type: string
           description: 外部 SKU ID 或规格编码；可用于解析内部 product_sku_id。
+        billing_lease:
+          type: string
+          description: Connector Token 调用必填。由外部计费权威签发，绑定 connector_id、reservation_id、request_id、platform、external_store_id、feature=ai_cs.reply_decision 和 exp；API Key 调用可按接入策略省略。
         message:
           $ref: "#/components/schemas/IncomingMessage"
         conversation:

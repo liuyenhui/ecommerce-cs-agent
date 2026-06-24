@@ -94,6 +94,8 @@ POST <external_callback_url>
 
 外部接入 API 不暴露内部 `tenant_id`。服务端必须通过 API Key / Connector Token 的授权范围，再结合 `platform`、`external_store_id` / `platform_account_ref`、`listing_ref`、`external_product_id` 和 `external_sku_id`，解析到内部 `tenant_id`、`store_id`、`platform_account_id`、`listing_id`、`product_id` 和 `sku_id`。解析失败时返回 `context_request`、`TENANT_SCOPE_REQUIRED` 或 `RESOURCE_MAPPING_REQUIRED`，不能让外部系统传一个内部租户 ID 绕过映射。
 
+当调用方使用 Connector Token 访问 `POST /v1/reply-decisions` 时，请求必须带 `billing_lease`。`billing_lease` 由外部计费权威签发，当前 `open_erp_agent` 只是一个集成示例；Agent 只验签和校验 scope，不管理余额。lease 必须绑定 `connector_id`、`reservation_id`、`request_id`、`platform`、`external_store_id`、`feature=ai_cs.reply_decision` 和 `exp`。缺失、过期、签名错误、connector/store/request/scope 不匹配时返回 402 或 403，并且不得创建决策、trace 或候选回复。
+
 商品、订单、物流和规则都是可选上下文。外部系统如果已经有低成本、可信的上下文，可以随主请求传入；如果没有，Agent 先做轻量意图和上下文需求判断，一次性返回当前可判断出的 `context_requests[]`。客户端按类型并行调用补充接口，服务端用同一个 `decision_id` 聚合上下文，直到返回明确可答复内容、动作请求或人工介入。
 
 内部编排推荐使用 LangGraph：`decision_id` 映射 graph `thread_id`，主请求、typed context refill 和 `actions/results` 都恢复同一条 thread。LangGraph checkpoint 必须落 PostgreSQL、Redis 或等价外部存储；API 容器不能依赖内存保存 graph state。
@@ -112,6 +114,19 @@ POST <external_callback_url>
 
 ## 核心接口建议
 
+### open_erp_agent 无感开通接入
+
+第一阶段为支持下载客户端后一键开启 AI 客服，提供一个服务间 provisioning API。该 API 只接受专用服务间 Bearer Token，不接受微信 session、ERP client token、Cookie、Customer Admin session 或 System Admin session。
+
+```text
+POST /v1/integrations/open-erp/provision
+PATCH /v1/integrations/open-erp/connectors/{connector_id}
+```
+
+`POST /v1/integrations/open-erp/provision` 幂等创建或更新 Agent 内部 `tenant`、`store`、`platform_account` 和 `connector` 映射。请求只传外部业务引用，例如 `tenant_ref`、`store_ref`、`platform`、`external_store_id`、`platform_account_ref`，不得传内部 `tenant_id` 作为授权来源。首次创建或显式轮换时返回一次性 `connector_token`；数据库只保存 token hash/prefix，后续重复 provision 只返回映射和 prefix。
+
+`PATCH /v1/integrations/open-erp/connectors/{connector_id}` 用于暂停、恢复或轮换 connector。暂停后的 connector 不能调用 `POST /v1/reply-decisions`；轮换时只返回一次新 token。Connector Token 只允许访问绑定的外部决策、补上下文和动作结果接口，不能访问 `/v1/admin/*` 或 `/v1/system-admin/*`。
+
 ### 创建回复决策
 
 ```text
@@ -129,6 +144,7 @@ POST /v1/reply-decisions
   "listing_ref": "pdd-listing-001",
   "external_product_id": "pdd-product-001",
   "external_sku_id": "pdd-sku-001",
+  "billing_lease": "base64url(payload).base64url(signature)",
   "message": {
     "external_message_id": "msg-001",
     "sender_type": "buyer",
@@ -779,4 +795,4 @@ POST /v1/admin/rules/rule-sets/{rule_set_id}/releases
 5. 人工处理后调用 `POST /v1/feedback/human-replies`。
 6. Agent 保存决策记录、补上下文 trace、动作结果和人工反馈，用于后续知识沉淀和评估。
 
-不建议第一版就实现复杂 Connector、消息队列、回调订阅、规则后台和自动训练。接口字段先预留，能力分阶段补齐。
+不建议第一版就实现复杂 Connector、消息队列、回调订阅、规则后台和自动训练。当前只落地 `open_erp_agent` 无感开通所需的最小 service-to-service provisioning、connector token 和 billing lease 校验；其他 Connector 管理能力仍按客户 Admin 配置分阶段补齐。

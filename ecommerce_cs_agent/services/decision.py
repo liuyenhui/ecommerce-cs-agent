@@ -102,6 +102,12 @@ class DecisionService:
                 ),
             }
             state.context_refills[key] = {**accepted, "_request_payload": comparable}
+            if not remaining:
+                updated_request = _request_with_refill_context(state.request, context_type, payload)
+                final_response = self._build_response(decision_id, updated_request, str(updated_request.get("message", {}).get("content", "")))
+                state.request = updated_request
+                state.response = final_response
+                state.context_refills[key] = {**final_response, "_request_payload": comparable}
             self._save_state(organization_id, store_id, request_id, decision_id, state)
         return _public(state.context_refills[key])
 
@@ -192,6 +198,8 @@ class DecisionService:
             "external_store_id": request.get("external_store_id") or request.get("store_id"),
             "platform_account_ref": request.get("platform_account_ref"),
             "listing_ref": request.get("listing_ref"),
+            "connector_id": request.get("connector_id"),
+            "billing_reservation_id": request.get("billing_reservation_id"),
             "conversation_id": conversation.get("external_conversation_id"),
             "action": response.get("action"),
             "confidence": response.get("confidence"),
@@ -277,6 +285,8 @@ class DecisionService:
         trace["external_store_id"] = payload.get("external_store_id") or payload.get("store_id")
         trace["platform_account_ref"] = payload.get("platform_account_ref")
         trace["listing_ref"] = payload.get("listing_ref")
+        trace["connector_id"] = payload.get("connector_id")
+        trace["billing_reservation_id"] = payload.get("billing_reservation_id")
         return {
             "decision_id": decision_id,
             "decision_status": status,
@@ -463,6 +473,18 @@ def _request_key(payload: dict[str, Any]) -> tuple[str, str, str]:
         str(payload.get("external_store_id") or payload.get("store_id", "")),
         str(payload.get("request_id", "")),
     )
+
+
+def _request_with_refill_context(request: dict[str, Any], context_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(request)
+    context = dict(updated.get("context") or {})
+    existing = context.get(context_type)
+    if isinstance(existing, list):
+        context[context_type] = [*existing, *list(payload.get("items") or [])]
+    else:
+        context[context_type] = list(payload.get("items") or [])
+    updated["context"] = context
+    return updated
 
 
 def _knowledge_evidence(item: dict[str, Any]) -> dict[str, Any]:

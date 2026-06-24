@@ -4,6 +4,12 @@
 
 ## 最近文档更新
 
+### 2026-06-24
+
+- 新增 `open_erp_agent` 无感开通第一阶段接入契约：`/v1/integrations/open-erp/provision` 幂等 provision Agent 内部 tenant/store/platform_account/connector 映射，Connector Token 明文只在首次创建或轮换时返回，服务端只保存 hash/prefix。
+- `POST /v1/reply-decisions` 支持 Connector Token 鉴权时必须校验 `billing_lease`；lease 由外部计费权威签发并绑定 connector、reservation、request、platform、external_store_id 和 `feature=ai_cs.reply_decision`，缺失、过期、签名或 scope 不匹配时拒绝且不生成决策。
+- 边界不变：第一阶段不做 SSO，不共享 Cookie/session，不把 ERP 微信登录或 client token 当作 Customer Admin 身份；open_erp 只是一个外部集成示例和计费权威，Agent 仍使用自有 Admin、tenant/store 和角色模型。
+
 ### 2026-06-23
 
 - Customer Admin 登录页新增 Fcihome Account OIDC 入口：邮箱密码登录继续保留且不展示组织 ID；OIDC 仅确认身份，已绑定 `fcihome_account_sub` 可登录，唯一 active 邮箱匹配时才自动绑定并写审计；System Admin 第一版不接 OIDC，Cookie/session 继续隔离。

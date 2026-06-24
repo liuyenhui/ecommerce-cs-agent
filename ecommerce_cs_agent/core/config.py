@@ -34,6 +34,8 @@ class Settings:
     admin_oidc_client_id: str | None = None
     admin_oidc_client_secret: str | None = None
     admin_oidc_redirect_uri: str | None = None
+    open_erp_integration_token: str = "test-open-erp-integration-token"
+    open_erp_billing_lease_secret: str = "test-open-erp-billing-secret"
 
 
 def load_settings() -> Settings:
@@ -91,6 +93,8 @@ def load_settings() -> Settings:
         admin_oidc_client_id=_env_first_optional("ADMIN_OIDC_CLIENT_ID", "OIDC_CLIENT_ID"),
         admin_oidc_client_secret=_env_first_optional("ADMIN_OIDC_CLIENT_SECRET", "OIDC_CLIENT_SECRET"),
         admin_oidc_redirect_uri=_env_first_optional("ADMIN_OIDC_REDIRECT_URI", "OIDC_REDIRECT_URI"),
+        open_erp_integration_token=os.environ.get("OPEN_ERP_INTEGRATION_TOKEN", "test-open-erp-integration-token"),
+        open_erp_billing_lease_secret=os.environ.get("OPEN_ERP_BILLING_LEASE_SECRET", "test-open-erp-billing-secret"),
     )
 
 
