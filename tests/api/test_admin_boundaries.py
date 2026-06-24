@@ -219,6 +219,8 @@ def test_production_settings_fail_fast_without_required_secrets(monkeypatch):
         "SYSTEM_ADMIN_INITIAL_EMAIL",
         "SYSTEM_ADMIN_INITIAL_PASSWORD_HASH",
         "DATABASE_URL",
+        "OPEN_ERP_INTEGRATION_TOKEN",
+        "OPEN_ERP_BILLING_LEASE_SECRET",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -238,6 +240,8 @@ def test_production_settings_accept_existing_runtime_secret_keys(monkeypatch):
     monkeypatch.setenv("ADMIN_INITIAL_EMAIL", "admin@example.test")
     monkeypatch.setenv("ADMIN_INITIAL_PASSWORD_HASH", "plain:admin-password")
     monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    monkeypatch.setenv("OPEN_ERP_INTEGRATION_TOKEN", "open-erp-token")
+    monkeypatch.setenv("OPEN_ERP_BILLING_LEASE_SECRET", "billing-secret")
     for key in (
         "ADMIN_SESSION_SECRET",
         "SYSTEM_ADMIN_SESSION_SECRET",

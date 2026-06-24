@@ -50,6 +50,8 @@ def load_settings() -> Settings:
         ("SYSTEM_ADMIN_INITIAL_EMAIL", "ADMIN_INITIAL_EMAIL"),
         ("SYSTEM_ADMIN_INITIAL_PASSWORD_HASH", "ADMIN_INITIAL_PASSWORD_HASH"),
         ("DATABASE_URL",),
+        ("OPEN_ERP_INTEGRATION_TOKEN",),
+        ("OPEN_ERP_BILLING_LEASE_SECRET",),
     ]
     if production:
         missing = _missing_required_groups(required_groups)
