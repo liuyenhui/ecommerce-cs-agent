@@ -13,6 +13,8 @@
 
 ### 2026-06-24
 
+- 发布链路门禁收紧：release gate 在 Helm reconcile 前校验 `ecommerce-cs-agent-runtime` key contract，缺 `OPEN_ERP_INTEGRATION_TOKEN` / `OPEN_ERP_BILLING_LEASE_SECRET` 等 key 直接失败；Flux / Helm / image tag / rollout / migration 任一步失败时采集 HelmRelease conditions、events 和 Pod 日志摘要后停止，不再对旧版本跑 health / live eval。
+- HelmRelease 已失败或回滚时，release gate 会对新 GitOps commit 执行一次受控 `resetAt` + `requestedAt`；Admin 镜像发布前在 PR checks 和 `Publish Images` verify job 中对构建后的 Nginx 镜像运行 `nginx -t`。
 - open_erp provisioning 与 `billing_lease` 在 production 环境必须显式配置 `OPEN_ERP_INTEGRATION_TOKEN` 和 `OPEN_ERP_BILLING_LEASE_SECRET`；缺失时 API 启动需 fail fast，不能退回测试默认值。
 - 新增 `open_erp_agent` 无感开通第一阶段接入契约：`/v1/integrations/open-erp/provision` 幂等 provision Agent 内部 tenant/store/platform_account/connector 映射，Connector Token 明文只在首次创建或轮换时返回，服务端只保存 hash/prefix。
 - `POST /v1/reply-decisions` 支持 Connector Token 鉴权时必须校验 `billing_lease`；lease 由外部计费权威签发并绑定 connector、reservation、request、platform、external_store_id 和 `feature=ai_cs.reply_decision`，缺失、过期、签名或 scope 不匹配时拒绝且不生成决策。

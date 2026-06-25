@@ -159,6 +159,8 @@ KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent
 | readiness 不通过 | 检查 `/health` 路径、端口、启动耗时和依赖。 |
 | 旧版本仍在服务 | 检查 GitOps image tag、Flux reconcile、Helm release revision。 |
 
+release gate 会在 HelmRelease 失败、回滚或超时状态下，对新的 GitOps commit 执行一次受控 `resetAt` + `requestedAt`，并记录原始 HelmRelease condition；普通 Progressing 状态只触发常规 reconcile。若 Flux、Helm、目标 image tag、rollout 或 migration 未通过，release gate 会采集 HelmRelease JSON、namespace events 和相关 API/Admin Pod 日志摘要后停止，不继续运行 health / quick live eval。人工接手时先看 release gate artifact 的前置失败项，不要用旧版本 `/health` 成功替代目标版本验收。
+
 ## 8. 何时转到 GitOps / Deploy 仓库
 
 以下问题通常不应只在应用仓库修：
