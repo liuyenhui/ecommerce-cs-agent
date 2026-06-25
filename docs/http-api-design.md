@@ -123,7 +123,7 @@ POST /v1/integrations/open-erp/provision
 PATCH /v1/integrations/open-erp/connectors/{connector_id}
 ```
 
-`POST /v1/integrations/open-erp/provision` 幂等创建或更新 Agent 内部 `tenant`、`store`、`platform_account` 和 `connector` 映射。请求只传外部业务引用，例如 `tenant_ref`、`store_ref`、`platform`、`external_store_id`、`platform_account_ref`，不得传内部 `tenant_id` 作为授权来源。首次创建或显式轮换时返回一次性 `connector_token`；数据库只保存 token hash/prefix，后续重复 provision 只返回映射和 prefix。
+`POST /v1/integrations/open-erp/provision` 幂等创建或更新 Agent 内部 `tenant`、`store`、`platform_account` 和 `connector` 映射。请求只传外部业务引用，例如 `tenant_ref`、`store_ref`、`platform`、`external_store_id`、`external_store_name`、`platform_account_ref`，不得传内部 `tenant_id` 作为授权来源。首次创建或显式轮换时返回一次性 `connector_token`；数据库只保存 token hash/prefix，后续重复 provision 只返回映射、店铺展示名称和 prefix。
 
 `PATCH /v1/integrations/open-erp/connectors/{connector_id}` 用于暂停、恢复或轮换 connector。暂停后的 connector 不能调用 `POST /v1/reply-decisions`；轮换时只返回一次新 token。Connector Token 只允许访问绑定的外部决策、补上下文和动作结果接口，不能访问 `/v1/admin/*` 或 `/v1/system-admin/*`。
 
@@ -502,6 +502,26 @@ GET /v1/message-traces/{decision_id}?message_id=msg-001&external_message_id=pdd-
 - `feedback`：人工是否采用、修改幅度、最终回复、追问或升级结果。
 
 `trace.steps` 用于渲染信息流转图。每个步骤必须包含 `step_id`、`name`、`status`、`started_at`、`ended_at`、`inputs_ref`、`outputs_ref` 和 `error`。默认响应只返回摘要、引用 ID、命中原因和审计元数据；完整 raw payload 只允许有内部排障权限的角色读取。
+
+### 客户后台消息历史、模拟咨询和受控启动票据
+
+`open_erp_agent` 客户端进入 AI 客服客户系统时使用受控授权桥接，不共享 Cookie、不复用微信或 PDD 会话、不读取 open_erp 本地 SQLite。open_erp 服务端以 service token 调用 Agent 签发一次性短期启动票据：
+
+```text
+POST /v1/integrations/open-erp/admin-launch-tickets
+POST /v1/admin/auth/launch/exchange
+```
+
+票据绑定 `external_system_id=open_erp_agent`、`platform`、`external_store_id`、`external_store_name`、`tenant_id`、`store_id`、`connector_id`、`nonce` 和 `expires_at`，建议 60-120 秒内有效且只能兑换一次。兑换成功后只创建 Agent 自有 `agent_admin_session`，并跳转 Customer Admin 对应店铺页面；店铺下拉展示为“平台-店铺-编号”。
+
+Customer Admin 消息历史来自 Agent 决策库：
+
+```text
+GET /v1/admin/message-traces
+POST /v1/admin/message-simulations
+```
+
+`GET /v1/admin/message-traces` 只返回当前 Admin session 可访问租户/店铺下的客户消息、AI 回复、人工回复/反馈、动作、状态、风险和 `trace.steps`。`POST /v1/admin/message-simulations` 用于手动输入客户咨询并生成 `source=simulation` 的决策记录；它复用决策链路，但响应必须明确 `external_send.attempted=false`，不能向 PDD 或其他外部平台发送消息。
 
 ### 提交人工反馈
 

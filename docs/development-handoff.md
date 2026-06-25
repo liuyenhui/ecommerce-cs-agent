@@ -4,6 +4,13 @@
 
 ## 最近文档更新
 
+### 2026-06-25
+
+- 新增 open_erp integration / Customer Admin launch exchange 错误编号文档 `docs/error-codes.md`；相关响应在保留 `error.code` 的同时增加 `errorId`，便于 open_erp_agent 客户端截图排障。
+- open_erp 授权桥接补充店铺展示字段：provision/admin launch ticket 可透传 `external_store_name`，Customer Admin 兑换 launch 后应把店铺下拉展示为“平台-店铺-编号”；消息历史仍只来自 Agent 决策库，connector token 失效需由外部系统刷新后新消息才会入库。
+- 新增 open_erp_agent 到 Customer Admin 的受控授权桥接：open_erp 只能通过服务间接口签发一次性短期启动票据，Customer Admin 兑换后建立 Agent 自有 `agent_admin_session`；仍禁止共享 Cookie、微信/PDD session、open_erp SQLite 或外部系统登录态。
+- Customer Admin 第一版新增“消息历史”和“模拟咨询”：消息历史来自 Agent 决策库，展示客户消息、AI 回复、人工回复和 `trace.steps`；模拟咨询创建 `source=simulation` 决策记录但不得发送给真实买家。
+
 ### 2026-06-24
 
 - 发布链路门禁收紧：release gate 在 Helm reconcile 前校验 `ecommerce-cs-agent-runtime` key contract，缺 `OPEN_ERP_INTEGRATION_TOKEN` / `OPEN_ERP_BILLING_LEASE_SECRET` 等 key 直接失败；Flux / Helm / image tag / rollout / migration 任一步失败时采集 HelmRelease conditions、events 和 Pod 日志摘要后停止，不再对旧版本跑 health / live eval。

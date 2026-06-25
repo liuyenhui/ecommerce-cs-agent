@@ -133,6 +133,59 @@ class InMemoryAdminAuthService:
         )
         return self.me(session), token
 
+    def login_launch(self, ticket: Any) -> tuple[dict[str, Any], str]:
+        organization_id = str(ticket.tenant_id)
+        store_id = str(ticket.store_id)
+        self.organizations.setdefault(
+            organization_id,
+            {"id": organization_id, "name": organization_id, "status": "active", "metadata": {"source": ticket.external_system_id}},
+        )
+        self.stores.setdefault(
+            store_id,
+            {
+                "id": store_id,
+                "organization_id": organization_id,
+                "name": str(getattr(ticket, "external_store_name", "") or ticket.external_store_id),
+                "platform": ticket.platform,
+                "status": "active",
+                "metadata": {"external_store_id": ticket.external_store_id},
+                "settings": {},
+            },
+        )
+        self.stores[store_id]["name"] = str(getattr(ticket, "external_store_name", "") or ticket.external_store_id)
+        self.stores[store_id]["platform"] = ticket.platform
+        self.stores[store_id]["metadata"] = {"external_store_id": ticket.external_store_id}
+        user = self.users["admin-001"]
+        if organization_id not in user["organization_ids"]:
+            user["organization_ids"].append(organization_id)
+        if store_id not in user["store_ids"]:
+            user["store_ids"].append(store_id)
+        token = secrets.token_urlsafe(32)
+        session = AdminSession(
+            token=token,
+            user_id="admin-001",
+            active_organization_id=organization_id,
+            active_store_id=store_id,
+            expires_at=_now_dt() + timedelta(hours=8),
+        )
+        self.sessions[token] = session
+        user["last_login_at"] = _now()
+        self._audit(
+            session.user_id,
+            organization_id,
+            store_id,
+            "auth.launch.exchange",
+            "admin_launch_ticket",
+            ticket.nonce,
+            {
+                "external_system_id": ticket.external_system_id,
+                "platform": ticket.platform,
+                "external_store_id": ticket.external_store_id,
+                "connector_id": ticket.connector_id,
+            },
+        )
+        return self.me(session), token
+
     def link_oidc(self, session: AdminSession, profile: dict[str, Any]) -> dict[str, Any]:
         user = self.users[session.user_id]
         sub = _oidc_sub(profile)
@@ -476,6 +529,75 @@ class PostgresAdminAuthService:
                     {"provider": "fcihome_account", "login_method": "oidc"},
                 )
                 return self._auth_response_from_row(row, session), token
+
+    def login_launch(self, ticket: Any) -> tuple[dict[str, Any], str]:
+        organization_id = str(ticket.tenant_id)
+        store_id = str(ticket.store_id)
+        with self._connect(self.settings.database_url) as conn:
+            with conn.cursor() as cur:
+                self._bootstrap_launch_admin(
+                    cur,
+                    organization_id,
+                    store_id,
+                    str(ticket.platform),
+                    str(getattr(ticket, "external_store_name", "") or ticket.external_store_id),
+                )
+                cur.execute(
+                    """
+                    SELECT admin.id, org.id, st.id, admin.email, admin.password_hash,
+                           admin.display_name, membership.roles, admin.fcihome_account_sub,
+                           org.external_organization_id, st.external_store_id
+                    FROM admin_user admin
+                    JOIN organization org ON org.id = admin.organization_id
+                    JOIN admin_membership membership ON membership.admin_user_id = admin.id
+                     AND membership.organization_id = org.id
+                     AND membership.status = 'active'
+                    JOIN store st ON st.organization_id = org.id
+                    WHERE org.external_organization_id = %s
+                      AND st.external_store_id = %s
+                      AND admin.status = 'active'
+                    ORDER BY admin.created_at ASC
+                    LIMIT 1
+                    """,
+                    (organization_id, store_id),
+                )
+                row = _normalize_admin_auth_row(cur.fetchone())
+                if row is None:
+                    raise api_error(403, "forbidden", "no customer admin user is bound to launch store")
+                token = secrets.token_urlsafe(32)
+                cur.execute(
+                    """
+                    INSERT INTO admin_session (
+                        organization_id, admin_user_id, session_hash, active_store_id,
+                        expires_at, last_seen_at, request_metadata
+                    )
+                    VALUES (%s, %s, %s, %s, now() + interval '8 hours', now(), %s)
+                    """,
+                    (row[1], row[0], _hash_session(token), row[2], Jsonb({"source": "open_erp_launch", "nonce": ticket.nonce})),
+                )
+                session = AdminSession(
+                    token=token,
+                    user_id=str(row[0]),
+                    active_organization_id=str(row[8]),
+                    active_store_id=str(row[9]),
+                    expires_at=_now_dt() + timedelta(hours=8),
+                )
+                self._audit(
+                    cur,
+                    session,
+                    organization_id,
+                    store_id,
+                    "auth.launch.exchange",
+                    "admin_launch_ticket",
+                    str(ticket.nonce),
+                    {
+                        "external_system_id": ticket.external_system_id,
+                        "platform": ticket.platform,
+                        "external_store_id": ticket.external_store_id,
+                        "connector_id": ticket.connector_id,
+                    },
+                )
+                return self.me(session), token
 
     def link_oidc(self, session: AdminSession, profile: dict[str, Any]) -> dict[str, Any]:
         sub = _oidc_sub(profile)
@@ -911,6 +1033,58 @@ class PostgresAdminAuthService:
             DO UPDATE SET roles = EXCLUDED.roles, store_ids = EXCLUDED.store_ids, updated_at = now()
             """,
             (organization_id, organization_id, self.settings.admin_initial_email, organization_id),
+        )
+
+    def _bootstrap_launch_admin(self, cur: Any, organization_id: str, store_id: str, platform: str, store_name: str = "") -> None:
+        cur.execute(
+            """
+            INSERT INTO organization (external_organization_id, name, settings)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (external_organization_id) WHERE external_organization_id IS NOT NULL
+            DO UPDATE SET updated_at = now()
+            """,
+            (organization_id, organization_id, Jsonb({"source": "open_erp_launch"})),
+        )
+        cur.execute(
+            """
+            INSERT INTO store (organization_id, name, platform, external_store_id)
+            VALUES ((SELECT id FROM organization WHERE external_organization_id = %s), %s, %s, %s)
+            ON CONFLICT (organization_id, platform, external_store_id)
+            DO UPDATE SET name = EXCLUDED.name, updated_at = now()
+            """,
+            (organization_id, store_name or store_id, platform, store_id),
+        )
+        cur.execute(
+            """
+            INSERT INTO admin_user (organization_id, email, password_hash, display_name, role)
+            VALUES (
+                (SELECT id FROM organization WHERE external_organization_id = %s),
+                %s,
+                %s,
+                'Customer Admin',
+                'owner'
+            )
+            ON CONFLICT (organization_id, email)
+            DO UPDATE SET password_hash = EXCLUDED.password_hash, updated_at = now()
+            """,
+            (organization_id, self.settings.admin_initial_email, self.settings.admin_initial_password_hash),
+        )
+        cur.execute(
+            """
+            INSERT INTO admin_membership (organization_id, admin_user_id, roles, store_ids)
+            VALUES (
+                (SELECT id FROM organization WHERE external_organization_id = %s),
+                (SELECT admin.id FROM admin_user admin
+                  JOIN organization org ON org.id = admin.organization_id
+                  WHERE org.external_organization_id = %s AND admin.email = %s),
+                ARRAY['owner']::text[],
+                ARRAY[(SELECT st.id FROM store st JOIN organization org ON org.id = st.organization_id
+                  WHERE org.external_organization_id = %s AND st.external_store_id = %s)]::uuid[]
+            )
+            ON CONFLICT (organization_id, admin_user_id)
+            DO UPDATE SET roles = EXCLUDED.roles, store_ids = EXCLUDED.store_ids, updated_at = now()
+            """,
+            (organization_id, organization_id, self.settings.admin_initial_email, organization_id, store_id),
         )
 
     def _auth_response_from_row(self, row: tuple[Any, ...], session: AdminSession) -> dict[str, Any]:

@@ -17,6 +17,7 @@ import {
   Store,
   UploadCloud
 } from "lucide-react";
+import { Graph } from "@antv/x6";
 import { requestJson } from "../../shared/api";
 import {
   AdminFrame,
@@ -36,14 +37,27 @@ import {
 import { arrayFrom, firstId, readRecord } from "../../shared/data";
 import type { JsonRecord, NavItem, Page, ToastState } from "../../shared/types";
 
-type CustomerTab = "overview" | "products" | "knowledge" | "audit";
+type CustomerTab = "overview" | "messages" | "products" | "knowledge" | "audit";
 
 const customerTabs: Array<NavItem<CustomerTab>> = [
   { key: "overview", label: "首页概览", icon: <Activity size={17} /> },
+  { key: "messages", label: "消息历史", icon: <MessageSquareText size={17} /> },
   { key: "products", label: "商品资料", icon: <Boxes size={17} /> },
   { key: "knowledge", label: "知识审核", icon: <FileText size={17} /> },
   { key: "audit", label: "审计查询", icon: <ClipboardList size={17} /> }
 ];
+
+type CustomerTrace = JsonRecord & {
+  decision_id?: string;
+  customer_message?: string;
+  ai_reply?: string;
+  human_reply?: string;
+  action?: string;
+  status?: string;
+  risk_level?: string;
+  source?: string;
+  trace?: JsonRecord;
+};
 
 function normalizePath() {
   if (typeof window === "undefined") return "/";
@@ -67,6 +81,19 @@ function customerLoginErrorFromLocation() {
     oidc_exchange_failed: "OIDC 登录失败，请稍后重试。"
   };
   return error ? errorMessages[error] || "OIDC 登录失败，请稍后重试。" : null;
+}
+
+function platformLabel(value: unknown) {
+  const platform = String(value || "").trim();
+  const labels: Record<string, string> = { pdd: "拼多多" };
+  return labels[platform] || platform || "未知平台";
+}
+
+function storeOptionLabel(store: JsonRecord) {
+  const id = String(store.id || store.store_id || "").trim();
+  const name = String(store.name || "").trim();
+  const displayName = name && name !== id ? name : "未命名店铺";
+  return `${platformLabel(store.platform)}-${displayName}-${id || "未绑定编号"}`;
 }
 
 export function App() {
@@ -129,6 +156,19 @@ export function App() {
         />
         {toast ? <div className={`toast ${toast.tone}`}>{toast.text}</div> : null}
       </main>
+    );
+  }
+
+  if (path === "/launch") {
+    return (
+      <LaunchExchange
+        onExchanged={(session) => {
+          setCustomerSession(session);
+          setCustomerTab("messages");
+          navigate("/admin");
+        }}
+        setToast={setToast}
+      />
     );
   }
 
@@ -328,7 +368,7 @@ function CustomerAdminShell({
         <TopBar
           eyebrow="CUSTOMER ADMIN"
           title="客户资料与知识运营"
-          subtitle="店铺、商品资料、知识审核和审计"
+          subtitle="店铺、消息历史、商品资料、知识审核和审计"
           showNavButton={isAuthenticated}
           navOpen={mobileNavOpen}
           onToggleNav={() => setMobileNavOpen((open) => !open)}
@@ -406,6 +446,9 @@ function CustomerWorkspace({ session, activeTab, setActiveTab, setToast }: {
         {activeTab === "overview" ? (
           <CustomerOverview session={session} data={data} setActiveTab={setActiveTab} />
         ) : null}
+        {activeTab === "messages" ? (
+          <MessageHistory storeId={storeId} setToast={setToast} setSelected={setSelected} />
+        ) : null}
         {activeTab === "products" ? (
           <ProductContent storeId={storeId} setToast={setToast} setSelected={setSelected} onChanged={refresh} />
         ) : null}
@@ -424,7 +467,16 @@ function CustomerWorkspace({ session, activeTab, setActiveTab, setToast }: {
 function CustomerOverview({ session, data, setActiveTab }: { session: JsonRecord; data: Record<string, unknown>; setActiveTab: (tab: CustomerTab) => void }) {
   return (
     <>
-      <SectionHeader label="CUSTOMER" title="首页概览" action={<button onClick={() => setActiveTab("products")}><PackagePlus size={16} />维护商品</button>} />
+      <SectionHeader
+        label="CUSTOMER"
+        title="首页概览"
+        action={
+          <div className="buttonRow">
+            <button onClick={() => setActiveTab("messages")}><MessageSquareText size={16} />消息历史</button>
+            <button onClick={() => setActiveTab("products")}><PackagePlus size={16} />维护商品</button>
+          </div>
+        }
+      />
       <div className="metricGrid">
         <Metric label="可访问店铺" value={String(arrayFrom(session.stores).length)} tone="ok" />
         <Metric label="商品资料" value={String(arrayFrom(data.products).length)} tone="ok" />
@@ -437,6 +489,221 @@ function CustomerOverview({ session, data, setActiveTab }: { session: JsonRecord
       </div>
     </>
   );
+}
+
+function LaunchExchange({ onExchanged, setToast }: { onExchanged: (session: JsonRecord) => void; setToast: (toast: ToastState) => void }) {
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get("token") || "";
+    if (!token) {
+      setError("启动票据缺失，请从 open_erp_agent 客户端重新打开。");
+      return;
+    }
+    requestJson("/v1/admin/auth/launch/exchange", {
+      method: "POST",
+      body: JSON.stringify({ launch_token: token })
+    })
+      .then((session) => {
+        setToast({ tone: "success", text: "已进入对应店铺客户后台" });
+        onExchanged(session);
+      })
+      .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+  }, [onExchanged, setToast]);
+
+  return (
+    <main className="customerLoginShell">
+      <section className="loginPanel">
+        <Bot size={24} />
+        <h2>正在进入 AI 客服客户系统</h2>
+        {error ? (
+          <>
+            <div className="loginError" role="alert"><AlertTriangle size={16} /><span>{error}</span></div>
+            <button className="primaryButton" onClick={() => window.location.assign("/login")}>返回登录页</button>
+          </>
+        ) : (
+          <p className="inlineStatus"><Loader2 size={16} className="spin" />正在校验一次性启动票据</p>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function MessageHistory({ storeId, setToast, setSelected }: {
+  storeId: string;
+  setToast: (toast: ToastState) => void;
+  setSelected: (record: JsonRecord) => void;
+}) {
+  const [rows, setRows] = React.useState<CustomerTrace[]>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [question, setQuestion] = React.useState("");
+  const [selectedTrace, setSelectedTrace] = React.useState<CustomerTrace | null>(null);
+
+  async function load(source = "") {
+    setLoading(true);
+    try {
+      const query = new URLSearchParams({ store_id: storeId });
+      if (source) query.set("source", source);
+      const response = await requestJson<Page>(`/v1/admin/message-traces?${query.toString()}`);
+      setRows(arrayFrom(response.items) as CustomerTrace[]);
+    } catch (error) {
+      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  React.useEffect(() => {
+    void load();
+  }, [storeId]);
+
+  async function simulate(event: React.FormEvent) {
+    event.preventDefault();
+    const content = question.trim();
+    if (!content) {
+      setToast({ tone: "error", text: "请输入模拟客户问题" });
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await requestJson<JsonRecord>("/v1/admin/message-simulations", {
+        method: "POST",
+        body: JSON.stringify({ store_id: storeId, platform: "pdd", message: { content } })
+      });
+      const decision = readRecord(response, "decision");
+      setQuestion("");
+      setToast({ tone: "success", text: "模拟决策已完成" });
+      await load();
+      setSelectedTrace({
+        decision_id: String(decision.decision_id || ""),
+        source: "simulation",
+        customer_message: content,
+        ai_reply: firstCandidateText(decision),
+        action: String(decision.action || ""),
+        status: String(decision.decision_status || ""),
+        risk_level: String(decision.risk_level || ""),
+        trace: readRecord(decision, "trace")
+      });
+    } catch (error) {
+      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <>
+      <SectionHeader label="MESSAGES" title="消息历史" action={<button onClick={() => void load()}><Search size={16} />刷新</button>} />
+      <form className="operationPanel messageSimulator" onSubmit={simulate}>
+        <label>
+          模拟客户咨询
+          <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：这个商品有哪些尺寸？" />
+        </label>
+        <div className="buttonRow end">
+          <button className="primaryButton" disabled={loading}>
+            {loading ? <Loader2 size={16} className="spin" /> : <Bot size={16} />}
+            模拟决策
+          </button>
+        </div>
+      </form>
+      <DataTable
+        title="客服会话消息"
+        rows={rows}
+        fields={["decision_id", "source", "customer_message", "ai_reply", "human_reply", "action", "status", "risk_level"]}
+        onSelect={(row) => setSelectedTrace(row as CustomerTrace)}
+        action={(row) => <button onClick={() => setSelectedTrace(row as CustomerTrace)}><Search size={15} />决策路径</button>}
+        emptyState={{
+          title: loading ? "正在读取消息历史" : "暂无消息历史",
+          description: loading ? "消息历史正在读取，请稍候。" : "收到客户咨询或完成模拟咨询后，AI 决策记录会显示在这里。"
+        }}
+      />
+      {selectedTrace ? (
+        <MessageTraceDrawer
+          trace={selectedTrace}
+          onClose={() => setSelectedTrace(null)}
+          onRaw={() => setSelected(selectedTrace)}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function MessageTraceDrawer({ trace, onClose, onRaw }: { trace: CustomerTrace; onClose: () => void; onRaw: () => void }) {
+  return (
+    <aside className="drawer messageTraceDrawer">
+      <div className="drawerHeader">
+        <h2>决策路径</h2>
+        <button onClick={onClose}>关闭</button>
+      </div>
+      <div className="traceSummary">
+        <Metric label="动作" value={String(trace.action || "-")} tone="info" />
+        <Metric label="状态" value={String(trace.status || "-")} tone="ok" />
+        <Metric label="风险" value={String(trace.risk_level || "-")} tone="warn" />
+      </div>
+      <section className="traceTextBlock">
+        <h3>客户消息</h3>
+        <p>{String(trace.customer_message || "-")}</p>
+        <h3>AI 回复</h3>
+        <p>{String(trace.ai_reply || "当前决策未生成可直接发送回复。")}</p>
+        {trace.human_reply ? (
+          <>
+            <h3>人工回复</h3>
+            <p>{String(trace.human_reply)}</p>
+          </>
+        ) : null}
+      </section>
+      <DecisionFlowGraph trace={trace.trace} status={String(trace.status || trace.action || "")} />
+      <button onClick={onRaw}>查看原始记录</button>
+    </aside>
+  );
+}
+
+function DecisionFlowGraph({ trace, status }: { trace: unknown; status: string }) {
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (!containerRef.current) return undefined;
+    const graph = new Graph({
+      container: containerRef.current,
+      width: containerRef.current.clientWidth || 520,
+      height: 320,
+      interacting: false,
+      panning: false,
+      mousewheel: false,
+      background: { color: "#ffffff" }
+    });
+    const steps = ["接收消息", "字段映射", "上下文检查", "商品/知识/规则", "回复生成", "风险闸门", "输出动作", "反馈/记录"];
+    const runtimeSteps = readTraceSteps(trace);
+    const blocked = status === "waiting_context" || status === "handoff";
+    const nodes = steps.map((label, index) => {
+      const runtime = runtimeSteps[index];
+      const fill = runtime?.status === "failed" ? "#fee2e2" : blocked && index >= 2 ? "#fff7ed" : "#eef2ff";
+      return graph.addNode({
+        id: `node-${index}`,
+        x: 26 + (index % 2) * 230,
+        y: 24 + Math.floor(index / 2) * 70,
+        width: 170,
+        height: 42,
+        label,
+        attrs: {
+          body: { rx: 6, ry: 6, stroke: "#94a3b8", fill },
+          label: { fill: "#1f2937", fontSize: 12, fontWeight: 600 }
+        }
+      });
+    });
+    nodes.slice(0, -1).forEach((node, index) => {
+      graph.addEdge({
+        source: node,
+        target: nodes[index + 1],
+        attrs: { line: { stroke: "#64748b", strokeWidth: 1.4, targetMarker: "block" } },
+        router: { name: "manhattan" }
+      });
+    });
+    graph.centerContent();
+    return () => graph.dispose();
+  }, [trace, status]);
+
+  return <div className="decisionGraph" ref={containerRef} aria-label="AI 客服决策流程图" />;
 }
 
 function ProductContent({ storeId, setToast, setSelected, onChanged }: {
@@ -653,7 +920,7 @@ function ContextStrip({ storeId, stores, setStoreId, loading }: {
     <section className="filterBar">
       <Store size={17} />
       <select value={storeId} onChange={(event) => setStoreId(event.target.value)}>
-        {stores.map((item) => <option key={String(item.id || item.store_id)} value={String(item.id || item.store_id)}>{String(item.name || item.id || item.store_id)}</option>)}
+        {stores.map((item) => <option key={String(item.id || item.store_id)} value={String(item.id || item.store_id)}>{storeOptionLabel(item)}</option>)}
       </select>
       {loading ? <span className="inlineStatus"><Loader2 size={16} className="spin" />读取中</span> : null}
     </section>
@@ -679,4 +946,19 @@ function parseAttributes(value: string): JsonRecord {
   } catch {
     throw new Error("抽取属性 JSON 格式不正确");
   }
+}
+
+function firstCandidateText(decision: JsonRecord): string {
+  const candidates = Array.isArray(decision.candidates) ? decision.candidates : [];
+  const first = candidates[0];
+  if (first && typeof first === "object" && "reply_text" in first) {
+    return String((first as JsonRecord).reply_text || "");
+  }
+  return "";
+}
+
+function readTraceSteps(trace: unknown): JsonRecord[] {
+  if (!trace || typeof trace !== "object") return [];
+  const steps = (trace as JsonRecord).steps;
+  return Array.isArray(steps) ? (steps.filter((item) => item && typeof item === "object") as JsonRecord[]) : [];
 }

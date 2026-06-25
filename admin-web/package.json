@@ -11,6 +11,7 @@
     "test:landing": "node --test scripts/landing-page-copy.test.mjs"
   },
   "dependencies": {
+    "@antv/x6": "^2.19.2",
     "@vitejs/plugin-react": "^5.1.1",
     "lucide-react": "^0.561.0",
     "react": "^19.2.1",
