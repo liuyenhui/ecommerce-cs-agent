@@ -104,6 +104,38 @@ def test_open_erp_provision_returns_one_time_connector_token_and_replays_without
     assert "connector_token" not in second.json()
 
 
+def test_open_erp_provision_refreshes_existing_store_display_name() -> None:
+    client = TestClient(create_app())
+
+    initial = client.post(
+        "/v1/integrations/open-erp/provision",
+        headers=INTEGRATION_HEADERS,
+        json={**provision_payload(), "external_store_name": ""},
+    )
+    refreshed = client.post(
+        "/v1/integrations/open-erp/provision",
+        headers=INTEGRATION_HEADERS,
+        json={**provision_payload(), "request_id": "provision-refresh-name", "external_store_name": "宠萌洗护用品店"},
+    )
+    ticket = client.post(
+        "/v1/integrations/open-erp/admin-launch-tickets",
+        headers=INTEGRATION_HEADERS,
+        json={
+            "request_id": "launch-refresh-name",
+            "platform": "pdd",
+            "external_store_id": "mall-001",
+            "platform_account_ref": "pdd-account-main",
+        },
+    )
+
+    assert initial.status_code == 201
+    assert initial.json()["external_store_name"] == ""
+    assert refreshed.status_code == 200
+    assert refreshed.json()["external_store_name"] == "宠萌洗护用品店"
+    assert ticket.status_code == 201
+    assert ticket.json()["external_store_name"] == "宠萌洗护用品店"
+
+
 def test_connector_token_cannot_access_customer_or_system_admin() -> None:
     client = TestClient(create_app())
     connector = provision(client)

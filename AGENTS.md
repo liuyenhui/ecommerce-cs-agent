@@ -90,6 +90,7 @@ node docs/scripts/validate-business-flow-x6-labels.mjs
 ### Admin Web live hosts and UI/UX review rules
 
 - Customer Admin live host is `https://admin.ecommerce-cs-agent-dev.fcihome.com`; System Admin live host is `https://system-admin.ecommerce-cs-agent-dev.fcihome.com`.
+- `ACS` is the shorthand for the customer-facing AI customer-service system at `https://admin.ecommerce-cs-agent-dev.fcihome.com`; when the user says ACS in this project, treat it as Customer Admin, not System Admin or the public API host.
 - Customer Admin route guards must only call `/v1/admin/auth/me`; System Admin route guards must only call `/v1/system-admin/auth/me`.
 - Customer Admin uses `agent_admin_session`; System Admin uses `agent_system_admin_session`. Do not make either site probe, reuse, or accept the other site's session.
 - Dev public routing currently reuses the existing K3s `frp-system/bpg-frpc` `cs-agent-dev-http` proxy. Do not add a second frpc proxy or configure `type=https` for this split unless the deployment architecture changes deliberately.

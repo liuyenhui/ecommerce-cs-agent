@@ -77,6 +77,34 @@ def test_postgres_admin_auth_login_bootstraps_user_and_persists_hashed_session()
     assert token not in str(session_insert[1])
 
 
+def test_postgres_admin_auth_login_returns_store_display_name() -> None:
+    settings = Settings(database_url="postgresql://example")
+    connection = _FakeConnection(
+        fetch_rows=[
+            (
+                "admin-uuid",
+                "org-uuid",
+                "store-uuid",
+                "admin@example.test",
+                "plain:admin-password",
+                "Customer Admin",
+                ["owner"],
+                None,
+                "org-001",
+                "972824439",
+                "宠萌洗护用品店",
+            )
+        ]
+    )
+    service = PostgresAdminAuthService(settings)
+    service._connect = lambda _url: connection
+
+    response, _token = service.login({"email": "admin@example.test", "password": "admin-password"})
+
+    assert response["stores"][0]["id"] == "972824439"
+    assert response["stores"][0]["name"] == "宠萌洗护用品店"
+
+
 def test_postgres_admin_auth_login_does_not_filter_by_request_organization_id() -> None:
     settings = Settings(database_url="postgresql://example")
     connection = _FakeConnection(

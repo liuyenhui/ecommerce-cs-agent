@@ -392,7 +392,7 @@ class PostgresAdminAuthService:
                     """
                     SELECT admin.id, org.id, st.id, admin.email, admin.password_hash,
                            admin.display_name, membership.roles, admin.fcihome_account_sub,
-                           org.external_organization_id, st.external_store_id
+                           org.external_organization_id, st.external_store_id, st.name
                     FROM admin_user admin
                     JOIN organization org ON org.id = admin.organization_id
                     JOIN admin_membership membership ON membership.admin_user_id = admin.id
@@ -441,7 +441,7 @@ class PostgresAdminAuthService:
                     """
                     SELECT admin.id, org.id, st.id, admin.email, admin.password_hash,
                            admin.display_name, membership.roles, admin.fcihome_account_sub,
-                           org.external_organization_id, st.external_store_id
+                           org.external_organization_id, st.external_store_id, st.name
                     FROM admin_user admin
                     JOIN organization org ON org.id = admin.organization_id
                     JOIN admin_membership membership ON membership.admin_user_id = admin.id
@@ -463,7 +463,7 @@ class PostgresAdminAuthService:
                         """
                         SELECT admin.id, org.id, st.id, admin.email, admin.password_hash,
                                admin.display_name, membership.roles, admin.fcihome_account_sub,
-                               org.external_organization_id, st.external_store_id
+                               org.external_organization_id, st.external_store_id, st.name
                         FROM admin_user admin
                         JOIN organization org ON org.id = admin.organization_id
                         JOIN admin_membership membership ON membership.admin_user_id = admin.id
@@ -1092,6 +1092,8 @@ class PostgresAdminAuthService:
         if row is None:
             raise api_error(401, "unauthorized", "missing customer admin session")
         roles = list(row[6] or ["owner"])
+        store_name = str(row[10]).strip() if len(row) > 10 and row[10] is not None else ""
+        store_name = store_name or str(row[9])
         return {
             "user": {
                 "user_id": str(row[0]),
@@ -1105,7 +1107,7 @@ class PostgresAdminAuthService:
                 "last_login_at": None,
             },
             "organizations": [{"id": str(row[8]), "name": str(row[8]), "status": "active", "metadata": {}}],
-            "stores": [{"id": str(row[9]), "organization_id": str(row[8]), "name": str(row[9]), "platform": "pdd", "status": "active", "metadata": {}}],
+            "stores": [{"id": str(row[9]), "organization_id": str(row[8]), "name": store_name, "platform": "pdd", "status": "active", "metadata": {}}],
             "active_organization_id": session.active_organization_id,
             "active_store_id": session.active_store_id,
         }
