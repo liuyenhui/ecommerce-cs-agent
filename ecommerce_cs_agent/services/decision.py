@@ -192,6 +192,7 @@ class DecisionService:
             "message_id": message.get("external_message_id"),
             "external_message_id": message.get("external_message_id"),
             "request_id": request.get("request_id"),
+            "source": request.get("source") or "external",
             "tenant_id": request.get("tenant_id") or request.get("organization_id"),
             "platform": request.get("platform"),
             "store_id": request.get("store_id"),
@@ -204,6 +205,10 @@ class DecisionService:
             "action": response.get("action"),
             "confidence": response.get("confidence"),
             "risk_level": response.get("risk_level"),
+            "decision_status": response.get("decision_status"),
+            "customer_message": message.get("content"),
+            "ai_reply": _first_candidate_text(response),
+            "human_reply": _latest_human_reply(state.feedback),
             "sections": {
                 "ingest": {"status": "completed"},
                 "normalization": {"status": "completed"},
@@ -518,6 +523,27 @@ def _thread_id_from_refs(outputs_ref: list[str] | None) -> str | None:
         if item.startswith("decision:"):
             return item.split(":", 1)[1]
     return None
+
+
+def _first_candidate_text(response: dict[str, Any]) -> str | None:
+    candidates = response.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        first = candidates[0]
+        if isinstance(first, dict):
+            value = first.get("reply_text")
+            return str(value) if value else None
+    auto_reply = response.get("auto_reply")
+    if isinstance(auto_reply, dict):
+        value = auto_reply.get("reply_text")
+        return str(value) if value else None
+    return None
+
+
+def _latest_human_reply(feedback: list[dict[str, Any]]) -> str | None:
+    if not feedback:
+        return None
+    value = feedback[-1].get("human_reply")
+    return str(value) if value else None
 
 
 def _repository_for(settings: Settings) -> DecisionRepository:

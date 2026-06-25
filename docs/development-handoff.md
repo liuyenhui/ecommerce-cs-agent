@@ -4,6 +4,11 @@
 
 ## 最近文档更新
 
+### 2026-06-25
+
+- 新增 open_erp_agent 到 Customer Admin 的受控授权桥接：open_erp 只能通过服务间接口签发一次性短期启动票据，Customer Admin 兑换后建立 Agent 自有 `agent_admin_session`；仍禁止共享 Cookie、微信/PDD session、open_erp SQLite 或外部系统登录态。
+- Customer Admin 第一版新增“消息历史”和“模拟咨询”：消息历史来自 Agent 决策库，展示客户消息、AI 回复、人工回复和 `trace.steps`；模拟咨询创建 `source=simulation` 决策记录但不得发送给真实买家。
+
 ### 2026-06-24
 
 - open_erp provisioning 与 `billing_lease` 在 production 环境必须显式配置 `OPEN_ERP_INTEGRATION_TOKEN` 和 `OPEN_ERP_BILLING_LEASE_SECRET`；缺失时 API 启动需 fail fast，不能退回测试默认值。

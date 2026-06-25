@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timezone
 from typing import Any, Callable
+import uuid
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -188,6 +189,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response = decisions.get_trace(decision_id)
         if response is None:
             raise api_error(404, "not_found", "decision not found")
+        if _principal.organization_id and response.get("tenant_id") != _principal.organization_id:
+            raise api_error(403, "forbidden", "decision is not available for current admin session")
+        if _principal.store_id and response.get("store_id") != _principal.store_id:
+            raise api_error(403, "forbidden", "decision is not available for current admin session")
         return response
 
     @app.post("/v1/admin/auth/login")
@@ -278,6 +283,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             raise api_error(422, "validation_error", str(exc)) from exc
 
+    @app.post("/v1/integrations/open-erp/admin-launch-tickets")
+    async def issue_open_erp_admin_launch_ticket(request: Request) -> JSONResponse:
+        try:
+            open_erp.require_service_auth(request.headers.get("Authorization"))
+            content = open_erp.issue_admin_launch_ticket(await request.json())
+        except PermissionError as exc:
+            raise api_error(401, "unauthorized", str(exc)) from exc
+        except KeyError as exc:
+            raise api_error(404, "connector_not_bound", "open_erp store is not bound to an active Agent connector") from exc
+        except ValueError as exc:
+            raise api_error(422, "validation_error", str(exc)) from exc
+        return JSONResponse(status_code=201, content=content)
+
+    @app.post("/v1/admin/auth/launch/exchange")
+    async def exchange_admin_launch_ticket(request: Request) -> JSONResponse:
+        payload = await request.json()
+        _require_fields(payload, ["launch_token"])
+        try:
+            ticket = open_erp.consume_admin_launch_ticket(str(payload.get("launch_token") or ""))
+            content, token = admin_auth.login_launch(ticket)
+        except FileExistsError as exc:
+            raise api_error(409, "launch_token_consumed", "launch token has already been used") from exc
+        except TimeoutError as exc:
+            raise api_error(410, "launch_token_expired", "launch token has expired") from exc
+        except KeyError as exc:
+            raise api_error(404, "launch_token_not_found", "launch token was not found") from exc
+        response = JSONResponse(content=content)
+        response.set_cookie("agent_admin_session", token, httponly=True, samesite="lax")
+        return response
+
     @app.post("/v1/admin/auth/oidc/link")
     async def admin_oidc_link(request: Request, session: Any = Depends(admin_session)) -> JSONResponse:
         payload = await request.json()
@@ -328,6 +363,66 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             auth_logs["page"] = _page(len(auth_logs["items"]))
             auth_logs["page_info"] = _page(len(auth_logs["items"]))
         return auth_logs
+
+    @app.get("/v1/admin/message-traces")
+    def list_admin_message_traces(request: Request, _principal: Principal = Depends(admin_principal)) -> dict[str, Any]:
+        filters = _query_filters(request)
+        store_id = str(filters.get("store_id") or _principal.store_id or "")
+        if _principal.store_id and store_id != _principal.store_id:
+            raise api_error(403, "forbidden", "store is not available for current admin session")
+        page = _positive_int(request.query_params.get("page"), default=1, maximum=10_000)
+        page_size = _positive_int(request.query_params.get("page_size"), default=20, maximum=100)
+        traces = decisions.list_traces(_principal.organization_id, store_id, limit=page * page_size)
+        traces = _filter_customer_traces(traces, filters)
+        start = (page - 1) * page_size
+        items = [_customer_trace_summary(item) for item in traces[start : start + page_size]]
+        return {"items": items, "page": _page(len(traces)), "page_info": {"page": page, "page_size": page_size, "total": len(traces)}}
+
+    @app.post("/v1/admin/message-simulations")
+    async def create_admin_message_simulation(request: Request, _principal: Principal = Depends(admin_principal)) -> JSONResponse:
+        payload = await request.json()
+        message = payload.get("message") or {}
+        content = str(message.get("content") or payload.get("content") or "").strip()
+        if not content:
+            raise api_error(422, "validation_error", "message.content is required")
+        store_id = str(payload.get("store_id") or _principal.store_id or "")
+        if _principal.store_id and store_id != _principal.store_id:
+            raise api_error(403, "forbidden", "store is not available for current admin session")
+        request_id = str(payload.get("request_id") or f"simulation-{uuid.uuid4().hex}")
+        decision_payload = _normalize_reply_decision_payload(
+            {
+                "request_id": request_id,
+                "organization_id": _principal.organization_id,
+                "tenant_id": _principal.organization_id,
+                "store_id": store_id,
+                "external_store_id": store_id,
+                "platform": payload.get("platform") or "pdd",
+                "source": "simulation",
+                "message": {
+                    "external_message_id": str(message.get("external_message_id") or f"sim-msg-{uuid.uuid4().hex[:12]}"),
+                    "sender_type": "buyer",
+                    "content": content,
+                    "sent_at": message.get("sent_at") or _now(),
+                },
+                "conversation": payload.get("conversation")
+                or {
+                    "external_conversation_id": f"sim-conv-{uuid.uuid4().hex[:12]}",
+                    "buyer_ref": "simulation-buyer",
+                    "messages": [],
+                },
+                "mode": payload.get("mode") or "assist_first",
+                "context": payload.get("context") or {"products": [], "orders": [], "logistics": [], "rules": []},
+            }
+        )
+        decision = decisions.create_reply_decision(decision_payload)
+        return JSONResponse(
+            status_code=201,
+            content={
+                "source": "simulation",
+                "decision": decision,
+                "external_send": {"attempted": False, "reason": "simulation_only"},
+            },
+        )
 
     @app.post("/v1/product-content/products")
     async def upsert_product_content_product(request: Request, _principal: Principal = Depends(admin_principal)) -> JSONResponse:
@@ -676,6 +771,38 @@ def _page(total: int) -> dict[str, int]:
 
 def _query_filters(request: Request) -> dict[str, Any]:
     return {key: value for key, value in request.query_params.items() if value not in {"", None}}
+
+
+def _filter_customer_traces(traces: list[dict[str, Any]], filters: dict[str, Any]) -> list[dict[str, Any]]:
+    filtered = traces
+    for key in ["decision_id", "request_id", "external_message_id", "conversation_id", "action", "source"]:
+        value = filters.get(key)
+        if value:
+            filtered = [item for item in filtered if str(item.get(key) or "") == str(value)]
+    status = filters.get("status")
+    if status:
+        filtered = [item for item in filtered if str(item.get("decision_status") or "") == str(status)]
+    return filtered
+
+
+def _customer_trace_summary(trace: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "decision_id": trace.get("decision_id"),
+        "request_id": trace.get("request_id"),
+        "source": trace.get("source") or "external",
+        "platform": trace.get("platform"),
+        "store_id": trace.get("store_id"),
+        "external_message_id": trace.get("external_message_id"),
+        "conversation_id": trace.get("conversation_id"),
+        "customer_message": trace.get("customer_message"),
+        "ai_reply": trace.get("ai_reply"),
+        "human_reply": trace.get("human_reply"),
+        "action": trace.get("action"),
+        "status": trace.get("decision_status"),
+        "risk_level": trace.get("risk_level"),
+        "confidence": trace.get("confidence"),
+        "trace": trace.get("trace"),
+    }
 
 
 def _parse_cookie(cookie: str | None) -> dict[str, str]:

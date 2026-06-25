@@ -23,6 +23,7 @@
 | 知识片段审核 | 审核 Markdown 抽取出的知识候选和模拟问答，支持批准、拒绝、改写、脱敏和标注适用范围。 |
 | 规则配置 | 维护店铺级自动回复规则、风险条件、转人工边界和生效版本。 |
 | 动作能力配置 | 维护 `action_type`、自然语言触发表达、参数 schema、风险级别、确认要求和回调地址。 |
+| 消息历史与模拟 | 查询客户消息、AI 回复、人工回复和决策路径，并手动模拟客户咨询验证 AI 决策。 |
 | 审计与追踪 | 查询后台配置变更、知识审核记录、规则版本、动作能力变更和消息决策追踪入口。 |
 | Web 站点边界 | 客户后台使用 `admin.ecommerce-cs-agent-dev.fcihome.com`；不得在客户后台 UI 暴露系统后台入口。 |
 
@@ -86,6 +87,7 @@
 - dev 客户后台主机名为 `admin.ecommerce-cs-agent-dev.fcihome.com`。
 - 客户后台只承载公开宣传页、客户登录页和客户运营后台 shell。
 - `www.fcihome.com` 可作为 Fcihome 总门户展示 ERP AI Agent、AI 客服、在线咨询、开发者/API 和客户入口，但只负责导航和品牌叙事；从门户跳转到客户后台后仍必须走 Agent 自有登录和 `agent_admin_session`，不能复用微信登录态或门户 Cookie。
+- `open_erp_agent` 客户端可在用户完成微信/店铺登录后，通过一次性短期启动票据进入对应店铺 Customer Admin。该桥接不共享 Cookie、不上传微信/PDD session、不读取 open_erp SQLite；兑换成功后仍只建立 Agent 自有 `agent_admin_session`。
 - `system-admin.ecommerce-cs-agent-dev.fcihome.com` 或 `ops-admin.ecommerce-cs-agent-dev.fcihome.com` 不属于客户后台站点；客户后台前端不提供跳转或切换入口。
 
 路由口径：
@@ -137,6 +139,8 @@
 | 知识审核 | 对 `product_knowledge_candidate`、`knowledge_candidate`、`knowledge_eval_case` 执行批准、拒绝、改写、脱敏和标注。 |
 | 规则配置 | 维护 `rule_set`，包括规则类型、优先级、条件、动作、启用状态、版本和生效时间。 |
 | 动作能力 | 维护 `action_capability`，包括 `action_type`、触发表达、payload schema、风险级别、人工确认要求和回调地址。 |
+| 消息历史 | 查询本店铺客户消息、AI 回复、人工回复/反馈、决策状态、风险等级和 `trace.steps`；详情页用 X6 渲染决策路径。 |
+| 模拟咨询 | 手动输入客户问题并创建 `source=simulation` 的决策记录；只展示 AI 决策和路径，不发送给真实买家。 |
 | 审计与追踪 | 查询后台变更日志，并跳转到 `message-traces` 查看具体决策依据。 |
 
 关键工作流：
@@ -165,6 +169,7 @@
 | 价格快照 | `POST /v1/product-content/price-snapshots`、`GET /v1/product-content/products/{product_id}/health` | 维护价格快照并检查资料健康状态。 |
 | 规则配置 | `POST /v1/rules/store-rules`、`POST /v1/rules/platform-rules` | 维护店铺级和平台级规则。 |
 | 动作能力 | `POST /v1/capabilities/action-capabilities` | 维护外部动作能力清单和触发表达。 |
+| 消息历史与模拟 | `GET /v1/admin/message-traces`、`GET /v1/message-traces/{decision_id}`、`POST /v1/admin/message-simulations` | 查询本店铺消息历史、AI/人工回复和决策路径；模拟咨询只创建 trace，不外发。 |
 | 审计查询 | `GET /v1/admin/audit-logs`、`GET /v1/message-traces/{decision_id}` | 查询后台变更和消息决策追踪。 |
 
 接口约束：
@@ -173,6 +178,7 @@
 - 登录 session 应使用客户后台专用 HttpOnly Cookie，例如 `agent_admin_session`；服务端会话状态必须持久化到数据库、Redis 或等价外部存储，不能依赖单容器内存。
 - 后台接口只信任 Agent 自有 Admin session 和成员权限；外部系统 token 只能用于外部系统接入 API，不能直接访问 Admin API。
 - 客户后台路由守卫只能调用 `/v1/admin/auth/me`；不得调用 `/v1/system-admin/auth/me` 探测或复用系统后台登录态。
+- `POST /v1/admin/auth/launch/exchange` 只能兑换 Agent 签发的一次性短期 launch token；成功后设置 `agent_admin_session`，不得读取或接受 open_erp、微信或 PDD Cookie。
 - 后台批量导入可以复用同一接口语义，但必须返回每条记录的成功、失败和错误原因。
 - 商品导入草稿确认前不得创建正式商品；上传正文、`content_base64`、Cookie、Authorization 和临时对象存储凭证不得进入审计明文。
 - 同步问答接口 `POST /v1/reply-decisions` 不接收说明书、照片、视频或完整 SKU 资料；这些长期资料必须通过后台 API 维护。
@@ -204,6 +210,8 @@
 | `POST /v1/admin/invitations` | 租户所有者或租户管理员 | `tenant_id`、`email`、`roles`、`store_ids`、`reason`、`idempotency_key` | `invitation_id`、`email`、`roles`、`status`、`expires_at`、`audit_log_id` | 必须记录邀请对象、角色和原因；不记录邀请 token 明文 | 无 | 401、403、409、422、`ROLE_FORBIDDEN`、`IDEMPOTENCY_CONFLICT` |
 | `PATCH /v1/admin/users/{user_id}/roles` | 租户所有者或租户管理员；不能越权授予自身没有的角色 | `tenant_id`、`roles`、`store_ids`、`reason`、`idempotency_key` | `user`、`audit_log_id` | 必须记录前后角色差异 `diff_summary` 和原因 | 无 | 401、403、404、409、422、`ROLE_FORBIDDEN`、`AUDIT_REASON_REQUIRED` |
 | `GET /v1/admin/audit-logs` | 租户所有者、租户管理员、只读审计 | `tenant_id`、`store_id`、`object_type`、`action`、`created_at_from`、`created_at_to`、`page`、`page_size` | `items[].audit_log_id`、`actor_admin_user_id`、`tenant_id`、`store_id`、`object_type`、`object_id`、`action`、`reason`、`diff_summary`、`sensitive_access`、`created_at`、`page_info` | 查询本身可记录敏感审计查询；不能返回其他租户日志 | 租户、店铺、对象、动作、时间、分页 | 401、403、404 |
+| `GET /v1/admin/message-traces` | 店铺管理员、客服主管、只读审计 | `store_id`、`decision_id`、`external_message_id`、`source`、`page`、`page_size` | `items[].decision_id`、`customer_message`、`ai_reply`、`human_reply`、`action`、`status`、`risk_level`、`trace`、`page_info` | 只返回当前 session 可访问店铺；raw payload 不返回给客户后台 | 店铺、消息、来源、分页 | 401、403、404 |
+| `POST /v1/admin/message-simulations` | 店铺管理员、客服主管、知识审核员 | `store_id`、`platform`、`message.content`、可选 `context` | `source=simulation`、`decision`、`external_send.attempted=false` | 写入模拟决策 trace；不得调用外部发送动作 | 无 | 401、403、422 |
 
 统一错误响应：
 

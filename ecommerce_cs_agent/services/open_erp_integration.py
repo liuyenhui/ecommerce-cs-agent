@@ -7,6 +7,7 @@ import hmac
 import json
 import secrets
 import time
+import uuid
 from typing import Any
 
 from ecommerce_cs_agent.core.config import Settings
@@ -28,6 +29,21 @@ class OpenErpConnector:
     machine_ref: str
 
 
+@dataclass
+class OpenErpAdminLaunchTicket:
+    launch_token: str
+    nonce: str
+    expires_at: int
+    external_system_id: str
+    platform: str
+    external_store_id: str
+    platform_account_ref: str
+    tenant_id: str
+    store_id: str
+    connector_id: str
+    consumed_at: int | None = None
+
+
 class BillingLeaseError(ValueError):
     def __init__(self, status_code: int, code: str, message: str):
         super().__init__(message)
@@ -41,6 +57,7 @@ class OpenErpIntegrationService:
         self.settings = settings
         self._connectors_by_key: dict[tuple[str, str, str], OpenErpConnector] = {}
         self._connectors_by_id: dict[str, OpenErpConnector] = {}
+        self._launch_tickets: dict[str, OpenErpAdminLaunchTicket] = {}
 
     def require_service_auth(self, authorization: str | None) -> None:
         expected = f"Bearer {self.settings.open_erp_integration_token}"
@@ -106,6 +123,44 @@ class OpenErpIntegrationService:
         if connector_token:
             response["connector_token"] = connector_token
         return response
+
+    def issue_admin_launch_ticket(self, payload: dict[str, Any]) -> dict[str, Any]:
+        platform = _required_text(payload, "platform")
+        external_store_id = _required_text(payload, "external_store_id")
+        platform_account_ref = _required_text(payload, "platform_account_ref")
+        connector = self._connectors_by_key.get((platform, external_store_id, platform_account_ref))
+        if not connector or connector.status != "active":
+            raise KeyError("connector_not_bound")
+        now = int(time.time())
+        ttl_seconds = _positive_int(payload.get("ttl_seconds"), default=90, maximum=120)
+        token = f"cslaunch_{secrets.token_urlsafe(32)}"
+        ticket = OpenErpAdminLaunchTicket(
+            launch_token=token,
+            nonce=f"nonce-{uuid.uuid4().hex}",
+            expires_at=now + ttl_seconds,
+            external_system_id="open_erp_agent",
+            platform=connector.platform,
+            external_store_id=connector.external_store_id,
+            platform_account_ref=connector.platform_account_ref,
+            tenant_id=connector.tenant_id,
+            store_id=connector.external_store_id,
+            connector_id=connector.connector_id,
+        )
+        self._launch_tickets[token] = ticket
+        return self._public_launch_ticket(ticket)
+
+    def consume_admin_launch_ticket(self, launch_token: str) -> OpenErpAdminLaunchTicket:
+        token = _text(launch_token)
+        ticket = self._launch_tickets.get(token)
+        if not ticket:
+            raise KeyError("launch_token_not_found")
+        now = int(time.time())
+        if ticket.consumed_at is not None:
+            raise FileExistsError("launch_token_consumed")
+        if ticket.expires_at <= now:
+            raise TimeoutError("launch_token_expired")
+        ticket.consumed_at = now
+        return ticket
 
     def authenticate_connector(self, authorization: str | None) -> OpenErpConnector:
         token = _bearer_token(authorization)
@@ -193,6 +248,20 @@ class OpenErpIntegrationService:
             "platform_account_ref": connector.platform_account_ref,
         }
 
+    def _public_launch_ticket(self, ticket: OpenErpAdminLaunchTicket) -> dict[str, Any]:
+        return {
+            "launch_token": ticket.launch_token,
+            "nonce": ticket.nonce,
+            "expires_at": ticket.expires_at,
+            "external_system_id": ticket.external_system_id,
+            "platform": ticket.platform,
+            "external_store_id": ticket.external_store_id,
+            "platform_account_ref": ticket.platform_account_ref,
+            "tenant_id": ticket.tenant_id,
+            "store_id": ticket.store_id,
+            "connector_id": ticket.connector_id,
+        }
+
 
 def _required_text(payload: dict[str, Any], key: str) -> str:
     value = _text(payload.get(key))
@@ -203,6 +272,14 @@ def _required_text(payload: dict[str, Any], key: str) -> str:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _positive_int(value: Any, *, default: int, maximum: int) -> int:
+    try:
+        parsed = int(value or default)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(parsed, maximum))
 
 
 def _stable_id(prefix: str, raw: str) -> str:
