@@ -83,6 +83,19 @@ function customerLoginErrorFromLocation() {
   return error ? errorMessages[error] || "OIDC 登录失败，请稍后重试。" : null;
 }
 
+function platformLabel(value: unknown) {
+  const platform = String(value || "").trim();
+  const labels: Record<string, string> = { pdd: "拼多多" };
+  return labels[platform] || platform || "未知平台";
+}
+
+function storeOptionLabel(store: JsonRecord) {
+  const id = String(store.id || store.store_id || "").trim();
+  const name = String(store.name || "").trim();
+  const displayName = name && name !== id ? name : "未命名店铺";
+  return `${platformLabel(store.platform)}-${displayName}-${id || "未绑定编号"}`;
+}
+
 export function App() {
   const [path, setPath] = React.useState(() => normalizePath());
   const [customerTab, setCustomerTab] = React.useState<CustomerTab>("overview");
@@ -907,7 +920,7 @@ function ContextStrip({ storeId, stores, setStoreId, loading }: {
     <section className="filterBar">
       <Store size={17} />
       <select value={storeId} onChange={(event) => setStoreId(event.target.value)}>
-        {stores.map((item) => <option key={String(item.id || item.store_id)} value={String(item.id || item.store_id)}>{String(item.name || item.id || item.store_id)}</option>)}
+        {stores.map((item) => <option key={String(item.id || item.store_id)} value={String(item.id || item.store_id)}>{storeOptionLabel(item)}</option>)}
       </select>
       {loading ? <span className="inlineStatus"><Loader2 size={16} className="spin" />读取中</span> : null}
     </section>

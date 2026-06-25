@@ -2319,6 +2319,9 @@ components:
           description: Agent 内部 platform_account ID。
         connector_id:
           type: string
+        external_store_name:
+          type: string
+          description: 外部系统传入的可读店铺名称，用于 Customer Admin 店铺展示。
         connector_token:
           type: string
           description: 仅首次创建或轮换时返回一次，后续不得再返回明文。
@@ -2342,6 +2345,9 @@ components:
           $ref: "#/components/schemas/Platform"
         external_store_id:
           type: string
+        external_store_name:
+          type: string
+          description: 外部系统传入的可读店铺名称，用于 Customer Admin 店铺展示。
         platform_account_ref:
           type: string
         ttl_seconds:
@@ -2369,6 +2375,8 @@ components:
         platform:
           $ref: "#/components/schemas/Platform"
         external_store_id:
+          type: string
+        external_store_name:
           type: string
         platform_account_ref:
           type: string

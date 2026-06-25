@@ -21,6 +21,7 @@ class OpenErpConnector:
     platform_account_id: str
     platform: str
     external_store_id: str
+    external_store_name: str
     platform_account_ref: str
     token_hash: str
     token_prefix: str
@@ -37,6 +38,7 @@ class OpenErpAdminLaunchTicket:
     external_system_id: str
     platform: str
     external_store_id: str
+    external_store_name: str
     platform_account_ref: str
     tenant_id: str
     store_id: str
@@ -69,6 +71,7 @@ class OpenErpIntegrationService:
     def provision(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         platform = _required_text(payload, "platform")
         external_store_id = _required_text(payload, "external_store_id")
+        external_store_name = _text(payload.get("external_store_name"))
         platform_account_ref = _required_text(payload, "platform_account_ref")
         key = (platform, external_store_id, platform_account_ref)
         existing = self._connectors_by_key.get(key)
@@ -88,6 +91,7 @@ class OpenErpIntegrationService:
             platform_account_id=platform_account_id,
             platform=platform,
             external_store_id=external_store_id,
+            external_store_name=external_store_name,
             platform_account_ref=platform_account_ref,
             token_hash=_hash_token(connector_token),
             token_prefix=connector_token[:14],
@@ -131,6 +135,7 @@ class OpenErpIntegrationService:
         connector = self._connectors_by_key.get((platform, external_store_id, platform_account_ref))
         if not connector or connector.status != "active":
             raise KeyError("connector_not_bound")
+        external_store_name = connector.external_store_name or _text(payload.get("external_store_name"))
         now = int(time.time())
         ttl_seconds = _positive_int(payload.get("ttl_seconds"), default=90, maximum=120)
         token = f"cslaunch_{secrets.token_urlsafe(32)}"
@@ -141,6 +146,7 @@ class OpenErpIntegrationService:
             external_system_id="open_erp_agent",
             platform=connector.platform,
             external_store_id=connector.external_store_id,
+            external_store_name=external_store_name,
             platform_account_ref=connector.platform_account_ref,
             tenant_id=connector.tenant_id,
             store_id=connector.external_store_id,
@@ -245,6 +251,7 @@ class OpenErpIntegrationService:
             "readiness_status": connector.readiness_status,
             "platform": connector.platform,
             "external_store_id": connector.external_store_id,
+            "external_store_name": connector.external_store_name,
             "platform_account_ref": connector.platform_account_ref,
         }
 
@@ -256,6 +263,7 @@ class OpenErpIntegrationService:
             "external_system_id": ticket.external_system_id,
             "platform": ticket.platform,
             "external_store_id": ticket.external_store_id,
+            "external_store_name": ticket.external_store_name,
             "platform_account_ref": ticket.platform_account_ref,
             "tenant_id": ticket.tenant_id,
             "store_id": ticket.store_id,

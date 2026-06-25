@@ -201,6 +201,7 @@ def test_open_erp_launch_ticket_exchanges_to_customer_admin_session() -> None:
     assert body["launch_token"].startswith("cslaunch_")
     assert body["tenant_id"] == connector["tenant_id"]
     assert body["store_id"] == "mall-001"
+    assert body["external_store_name"] == "测试店铺"
 
     exchange = client.post("/v1/admin/auth/launch/exchange", json={"launch_token": body["launch_token"]})
 
@@ -209,6 +210,8 @@ def test_open_erp_launch_ticket_exchanges_to_customer_admin_session() -> None:
     content = exchange.json()
     assert content["active_organization_id"] == connector["tenant_id"]
     assert content["active_store_id"] == "mall-001"
+    assert content["stores"][0]["name"] == "测试店铺"
+    assert content["stores"][0]["platform"] == "pdd"
 
     replay = client.post("/v1/admin/auth/launch/exchange", json={"launch_token": body["launch_token"]})
     assert replay.status_code == 409
