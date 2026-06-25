@@ -20,6 +20,28 @@ DEFAULT_NAMESPACE = "ecommerce-cs-agent-dev"
 DEFAULT_API_URL = "https://api.ecommerce-cs-agent-dev.fcihome.com"
 DEFAULT_CUSTOMER_ADMIN_URL = "https://admin.ecommerce-cs-agent-dev.fcihome.com"
 DEFAULT_SYSTEM_ADMIN_URL = "https://system-admin.ecommerce-cs-agent-dev.fcihome.com"
+DEFAULT_RUNTIME_SECRET_GROUPS = (
+    ("AGENT_API_TOKEN",),
+    ("SESSION_SECRET", "ADMIN_SESSION_SECRET"),
+    ("JWT_SECRET", "SYSTEM_ADMIN_SESSION_SECRET"),
+    ("ADMIN_INITIAL_EMAIL",),
+    ("ADMIN_INITIAL_PASSWORD_HASH",),
+    ("SYSTEM_ADMIN_INITIAL_EMAIL", "ADMIN_INITIAL_EMAIL"),
+    ("SYSTEM_ADMIN_INITIAL_PASSWORD_HASH", "ADMIN_INITIAL_PASSWORD_HASH"),
+    ("DATABASE_URL",),
+    ("OPEN_ERP_INTEGRATION_TOKEN",),
+    ("OPEN_ERP_BILLING_LEASE_SECRET",),
+)
+HELM_RESET_REASON_MARKERS = (
+    "failed",
+    "failure",
+    "rollback",
+    "remediation",
+    "retriesexceeded",
+    "timeout",
+    "timed out",
+    "deadline",
+)
 
 
 @dataclass(frozen=True)
@@ -79,6 +101,7 @@ class DevReleaseGateConfig:
     timeout_seconds: int = 900
     health_timeout_seconds: float = 10.0
     extra_secrets: tuple[str, ...] = field(default_factory=tuple)
+    required_runtime_secret_groups: tuple[tuple[str, ...], ...] = DEFAULT_RUNTIME_SECRET_GROUPS
 
 
 CommandRunner = Callable[[Sequence[str]], CommandResult]
@@ -118,20 +141,56 @@ def run_dev_release_gate(
     checks: list[GateCheck] = []
 
     if config.run_kubectl:
-        if config.reconcile:
-            checks.extend(_trigger_reconcile(config, runner, secrets))
-        checks.extend(_wait_for_flux(config, runner, secrets))
-        checks.extend(_verify_deployed_images(config, runner, secrets))
-        checks.extend(_wait_for_rollouts(config, runner, secrets))
-        checks.append(_check_schema_migrations(config, runner, secrets))
+        checks.append(_check_runtime_secret_contract(config, runner, secrets))
+        if _has_failed(checks):
+            return _write_report(config, checks, secrets)
 
-    checks.append(_check_http_health("api health", config.target_url, getter, config, secrets))
-    checks.append(_check_http_health("customer admin health", config.customer_admin_url, getter, config, secrets))
-    checks.append(_check_http_health("system admin health", config.system_admin_url, getter, config, secrets))
+        if config.reconcile:
+            reset_checks, helm_reconcile_requested = _reset_failed_helm_release_if_needed(config, runner, secrets)
+            checks.extend(reset_checks)
+            if _has_failed(reset_checks):
+                checks.extend(_collect_failure_diagnostics(config, runner, secrets))
+                return _write_report(config, checks, secrets)
+            checks.extend(_trigger_reconcile(config, runner, secrets, include_helm_release=not helm_reconcile_requested))
+        checks.extend(_wait_for_flux(config, runner, secrets))
+        if _has_failed(checks):
+            checks.extend(_collect_failure_diagnostics(config, runner, secrets))
+            return _write_report(config, checks, secrets)
+
+        checks.extend(_verify_deployed_images(config, runner, secrets))
+        if _has_failed(checks):
+            checks.extend(_collect_failure_diagnostics(config, runner, secrets))
+            return _write_report(config, checks, secrets)
+
+        checks.extend(_wait_for_rollouts(config, runner, secrets))
+        if _has_failed(checks):
+            checks.extend(_collect_failure_diagnostics(config, runner, secrets))
+            return _write_report(config, checks, secrets)
+
+        checks.append(_check_schema_migrations(config, runner, secrets))
+        if _has_failed(checks):
+            checks.extend(_collect_failure_diagnostics(config, runner, secrets))
+            return _write_report(config, checks, secrets)
+
+    checks.extend(
+        [
+            _check_http_health("api health", config.target_url, getter, config, secrets),
+            _check_http_health("customer admin health", config.customer_admin_url, getter, config, secrets),
+            _check_http_health("system admin health", config.system_admin_url, getter, config, secrets),
+        ]
+    )
 
     if config.run_live_eval:
         checks.append(_run_live_eval(config, runner, secrets))
 
+    return _write_report(config, checks, secrets)
+
+
+def _write_report(
+    config: DevReleaseGateConfig,
+    checks: list[GateCheck],
+    secrets: tuple[str, ...],
+) -> ReleaseGateReport:
     report = ReleaseGateReport(
         generated_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         config=config,
@@ -142,18 +201,201 @@ def run_dev_release_gate(
     return report
 
 
+def _has_failed(checks: list[GateCheck]) -> bool:
+    return any(not check.passed for check in checks)
+
+
+def _check_runtime_secret_contract(
+    config: DevReleaseGateConfig,
+    runner: Callable[..., CommandResult],
+    secrets: tuple[str, ...],
+) -> GateCheck:
+    command = [
+        "kubectl",
+        "-n",
+        config.namespace,
+        "get",
+        "secret",
+        config.runtime_secret,
+        "-o",
+        "json",
+    ]
+    result = runner(command, timeout=60)
+    if not result.passed:
+        return GateCheck(
+            name="runtime secret contract",
+            passed=False,
+            details=_summarize_command_failure(result, secrets),
+            command=command,
+        )
+
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return GateCheck(
+            name="runtime secret contract",
+            passed=False,
+            details="runtime Secret JSON could not be parsed",
+            command=command,
+        )
+    keys = set((payload.get("data") or {}).keys())
+    missing = [
+        "|".join(group)
+        for group in config.required_runtime_secret_groups
+        if not any(key in keys for key in group)
+    ]
+    if missing:
+        return GateCheck(
+            name="runtime secret contract",
+            passed=False,
+            details=f"missing key groups: {', '.join(missing)}",
+            command=command,
+        )
+    present = ", ".join("|".join(group) for group in config.required_runtime_secret_groups)
+    return GateCheck(
+        name="runtime secret contract",
+        passed=True,
+        details=f"required key groups present: {present}",
+        command=command,
+    )
+
+
+def _reset_failed_helm_release_if_needed(
+    config: DevReleaseGateConfig,
+    runner: Callable[..., CommandResult],
+    secrets: tuple[str, ...],
+) -> tuple[list[GateCheck], bool]:
+    status_command = [
+        "kubectl",
+        "-n",
+        config.namespace,
+        "get",
+        "helmrelease",
+        config.helm_release,
+        "-o",
+        "json",
+    ]
+    status_result = runner(status_command, timeout=60)
+    if not status_result.passed:
+        return (
+            [
+                GateCheck(
+                    name="helm release reset",
+                    passed=False,
+                    details=_summarize_command_failure(status_result, secrets),
+                    command=status_command,
+                )
+            ],
+            False,
+        )
+
+    ready, should_reset, summary = _helm_release_status_summary(status_result.stdout)
+    if ready:
+        return (
+            [
+                GateCheck(
+                    name="helm release reset",
+                    passed=True,
+                    details=f"ready; reset not needed; {summary}",
+                    command=status_command,
+                )
+            ],
+            False,
+        )
+
+    if not should_reset:
+        return (
+            [
+                GateCheck(
+                    name="helm release reset",
+                    passed=True,
+                    details=f"not ready, but reset not needed; {summary}",
+                    command=status_command,
+                )
+            ],
+            False,
+        )
+
+    requested_at = str(int(time.time()))
+    reset_command = [
+        "kubectl",
+        "-n",
+        config.namespace,
+        "annotate",
+        f"helmrelease/{config.helm_release}",
+        f"reconcile.fluxcd.io/resetAt={requested_at}",
+        f"reconcile.fluxcd.io/requestedAt={requested_at}",
+        "--overwrite",
+    ]
+    reset_result = runner(reset_command, timeout=60)
+    details = f"reset requested after failed HelmRelease: {summary}"
+    if reset_result.stdout.strip() or reset_result.stderr.strip():
+        details = f"{details}; {_summarize_command_failure(reset_result, secrets)}"
+    return (
+        [
+            GateCheck(
+                name="helm release reset",
+                passed=reset_result.passed,
+                details=redact_text(details, secrets=secrets),
+                command=reset_command,
+            )
+        ],
+        reset_result.passed,
+    )
+
+
+def _helm_release_ready_summary(text: str) -> tuple[bool, str]:
+    ready, _, summary = _helm_release_status_summary(text)
+    return ready, summary
+
+
+def _helm_release_status_summary(text: str) -> tuple[bool, bool, str]:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return False, False, "HelmRelease JSON could not be parsed"
+    conditions = payload.get("status", {}).get("conditions", [])
+    parts = []
+    ready = False
+    should_reset = False
+    for condition in conditions:
+        condition_type = str(condition.get("type") or "")
+        status = str(condition.get("status") or "")
+        reason = str(condition.get("reason") or "")
+        message = str(condition.get("message") or "")
+        if condition_type == "Ready" and status == "True":
+            ready = True
+        if status == "False" and _helm_release_condition_needs_reset(reason, message):
+            should_reset = True
+        detail = f"{condition_type}={status}"
+        if reason:
+            detail = f"{detail} reason={reason}"
+        if message:
+            detail = f"{detail} message={message[:240]}"
+        parts.append(detail)
+    return ready, should_reset and not ready, "; ".join(parts) or "no status conditions"
+
+
+def _helm_release_condition_needs_reset(reason: str, message: str) -> bool:
+    text = f"{reason} {message}".lower()
+    return any(marker in text for marker in HELM_RESET_REASON_MARKERS)
+
+
 def _trigger_reconcile(
     config: DevReleaseGateConfig,
     runner: Callable[..., CommandResult],
     secrets: tuple[str, ...],
+    *,
+    include_helm_release: bool = True,
 ) -> list[GateCheck]:
     requested_at = str(int(time.time()))
     targets = [
         (config.flux_namespace, f"gitrepository/{config.flux_root_source}"),
         (config.flux_namespace, f"kustomization/{config.flux_kustomization}"),
         (config.namespace, f"gitrepository/{config.app_source}"),
-        (config.namespace, f"helmrelease/{config.helm_release}"),
     ]
+    if include_helm_release:
+        targets.append((config.namespace, f"helmrelease/{config.helm_release}"))
     checks: list[GateCheck] = []
     for namespace, target in targets:
         command = [
@@ -167,6 +409,80 @@ def _trigger_reconcile(
         ]
         checks.append(_command_check(f"reconcile {target}", command, runner, secrets, timeout=60))
     return checks
+
+
+def _collect_failure_diagnostics(
+    config: DevReleaseGateConfig,
+    runner: Callable[..., CommandResult],
+    secrets: tuple[str, ...],
+) -> list[GateCheck]:
+    diagnostics = [
+        (
+            "helmrelease diagnostics",
+            [
+                "kubectl",
+                "-n",
+                config.namespace,
+                "get",
+                "helmrelease",
+                config.helm_release,
+                "-o",
+                "json",
+            ],
+        ),
+        (
+            "recent namespace events",
+            [
+                "kubectl",
+                "-n",
+                config.namespace,
+                "get",
+                "events",
+                "--sort-by=.lastTimestamp",
+            ],
+        ),
+        (
+            "api pod logs",
+            [
+                "kubectl",
+                "-n",
+                config.namespace,
+                "logs",
+                "-l",
+                "app.kubernetes.io/component=api",
+                "--all-containers=true",
+                "--tail=80",
+                "--prefix=true",
+            ],
+        ),
+        (
+            "admin pod logs",
+            [
+                "kubectl",
+                "-n",
+                config.namespace,
+                "logs",
+                "-l",
+                "app.kubernetes.io/component=admin",
+                "--all-containers=true",
+                "--tail=80",
+                "--prefix=true",
+            ],
+        ),
+    ]
+    checks: list[GateCheck] = []
+    for name, command in diagnostics:
+        result = runner(command, timeout=120)
+        details = _diagnostic_details(name, result, secrets)
+        checks.append(GateCheck(name=name, passed=result.passed, details=details, command=command))
+    return checks
+
+
+def _diagnostic_details(name: str, result: CommandResult, secrets: tuple[str, ...]) -> str:
+    if name == "helmrelease diagnostics" and result.passed:
+        _, summary = _helm_release_ready_summary(result.stdout)
+        return redact_text(summary, secrets=secrets)
+    return _summarize_command_failure(result, secrets)
 
 
 def _wait_for_flux(

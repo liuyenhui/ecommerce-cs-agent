@@ -51,7 +51,7 @@ Secret 只以引用形式跨文档和配置流转。
 | 层级 | 保存内容 | 说明 |
 | --- | --- | --- |
 | GitHub Secrets | Registry 推送凭据、SMTP 通知凭据、后续 GitOps 写入凭据。 | 只通过 Actions 注入，不写入仓库。 |
-| Kubernetes Secrets | `DATABASE_URL`、对象存储凭据、LLM 配置、`AGENT_API_TOKEN`、session/JWT secret。 | 应用 Pod 通过环境变量或挂载读取。 |
+| Kubernetes Secrets | `DATABASE_URL`、对象存储凭据、LLM 配置、`AGENT_API_TOKEN`、session/JWT secret、`OPEN_ERP_INTEGRATION_TOKEN`、`OPEN_ERP_BILLING_LEASE_SECRET`。 | 应用 Pod 通过环境变量或挂载读取；release gate 只校验 key contract，不输出值。 |
 | 应用数据库 | Secret 引用、审计记录、配置状态。 | 不保存明文平台 token 或私钥。 |
 | 文档 | Secret key 名、Secret 对象名、占位符 `<from-secret>`。 | 不保存真实值。 |
 
@@ -74,11 +74,11 @@ GitOps / Flux 仓库应维护：
 - 资源请求、探针、环境变量注入、代理和 `NO_PROXY`。
 - PostgreSQL、MinIO、pgvector、TLS、域名和 Flux 状态。
 
-如果业务改动需要新增环境变量，应用 PR 必须同时更新文档，GitOps PR 再更新 values 和 Secret 引用。不得在应用代码里写死 dev 域名、数据库地址或 Secret 值。
+如果业务改动需要新增环境变量，应用 PR 必须同时更新文档和 release gate runtime Secret contract，GitOps PR 再更新 values 和 Secret 引用。不得在应用代码里写死 dev 域名、数据库地址或 Secret 值。
 
 ## 5. 部署验收
 
-部署完成后至少执行：
+部署完成后 release gate 会先校验 runtime Secret contract、Flux / Helm 状态、目标 image tag、rollout 和 migration；任一步失败时采集 HelmRelease conditions、namespace events 和相关 Pod 日志摘要后停止，不继续对旧版本跑 health / live eval。前置检查通过后至少执行：
 
 ```bash
 curl -fsS https://api.ecommerce-cs-agent-dev.fcihome.com/health
