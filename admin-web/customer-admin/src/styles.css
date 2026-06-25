@@ -1,1 +1,61 @@
 @import "../../shared/styles/base.css";
+
+.messageSimulator {
+  margin-bottom: 16px;
+}
+
+.messageSimulator textarea {
+  min-height: 88px;
+}
+
+.messageTraceDrawer {
+  width: min(680px, calc(100vw - 28px));
+}
+
+.traceSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.traceTextBlock {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.traceTextBlock h3 {
+  margin: 0;
+}
+
+.traceTextBlock p {
+  color: #334155;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.decisionGraph {
+  width: 100%;
+  min-height: 320px;
+  margin: 12px 0;
+  overflow: hidden;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+@media (max-width: 720px) {
+  .traceSummary {
+    grid-template-columns: 1fr;
+  }
+
+  .messageTraceDrawer {
+    width: calc(100vw - 18px);
+  }
+}

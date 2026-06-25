@@ -333,6 +333,56 @@ def test_feedback_and_message_trace_round_trip():
     assert trace.json()["request_id"] == "req-feedback"
 
 
+def test_customer_admin_message_traces_are_scoped_to_session_store():
+    api = client()
+    visible = api.post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=minimal_reply_request("req-customer-visible", "这个商品有什么材质？"),
+    ).json()
+    api.post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json={**minimal_reply_request("req-customer-hidden", "这个商品有什么材质？"), "store_id": "store-other"},
+    )
+
+    response = api.get(
+        "/v1/admin/message-traces",
+        headers={"Cookie": "agent_admin_session=test-admin-session"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["decision_id"] for item in body["items"]] == [visible["decision_id"]]
+    assert body["items"][0]["store_id"] == "store-001"
+    assert body["items"][0]["customer_message"] == "这个商品有什么材质？"
+
+
+def test_customer_admin_simulation_creates_trace_without_external_send():
+    api = client()
+
+    response = api.post(
+        "/v1/admin/message-simulations",
+        headers={"Cookie": "agent_admin_session=test-admin-session"},
+        json={"message": {"content": "这个商品有哪些尺寸？"}, "platform": "pdd"},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["source"] == "simulation"
+    assert body["decision"]["decision_id"]
+    assert body["decision"]["trace"]["steps"]
+    assert body["external_send"] == {"attempted": False, "reason": "simulation_only"}
+
+    traces = api.get(
+        "/v1/admin/message-traces?source=simulation",
+        headers={"Cookie": "agent_admin_session=test-admin-session"},
+    )
+    assert traces.status_code == 200
+    assert traces.json()["items"][0]["decision_id"] == body["decision"]["decision_id"]
+    assert traces.json()["items"][0]["source"] == "simulation"
+
+
 def test_future_contract_routes_return_explicit_501():
     response = client().post(
         "/v1/events/messages",

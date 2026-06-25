@@ -503,6 +503,26 @@ GET /v1/message-traces/{decision_id}?message_id=msg-001&external_message_id=pdd-
 
 `trace.steps` 用于渲染信息流转图。每个步骤必须包含 `step_id`、`name`、`status`、`started_at`、`ended_at`、`inputs_ref`、`outputs_ref` 和 `error`。默认响应只返回摘要、引用 ID、命中原因和审计元数据；完整 raw payload 只允许有内部排障权限的角色读取。
 
+### 客户后台消息历史、模拟咨询和受控启动票据
+
+`open_erp_agent` 客户端进入 AI 客服客户系统时使用受控授权桥接，不共享 Cookie、不复用微信或 PDD 会话、不读取 open_erp 本地 SQLite。open_erp 服务端以 service token 调用 Agent 签发一次性短期启动票据：
+
+```text
+POST /v1/integrations/open-erp/admin-launch-tickets
+POST /v1/admin/auth/launch/exchange
+```
+
+票据绑定 `external_system_id=open_erp_agent`、`platform`、`external_store_id`、`tenant_id`、`store_id`、`connector_id`、`nonce` 和 `expires_at`，建议 60-120 秒内有效且只能兑换一次。兑换成功后只创建 Agent 自有 `agent_admin_session`，并跳转 Customer Admin 对应店铺页面。
+
+Customer Admin 消息历史来自 Agent 决策库：
+
+```text
+GET /v1/admin/message-traces
+POST /v1/admin/message-simulations
+```
+
+`GET /v1/admin/message-traces` 只返回当前 Admin session 可访问租户/店铺下的客户消息、AI 回复、人工回复/反馈、动作、状态、风险和 `trace.steps`。`POST /v1/admin/message-simulations` 用于手动输入客户咨询并生成 `source=simulation` 的决策记录；它复用决策链路，但响应必须明确 `external_send.attempted=false`，不能向 PDD 或其他外部平台发送消息。
+
 ### 提交人工反馈
 
 ```text

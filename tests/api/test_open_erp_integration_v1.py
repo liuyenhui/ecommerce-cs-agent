@@ -179,3 +179,66 @@ def test_context_refill_returns_candidate_when_required_context_is_complete() ->
     assert body["decision_status"] == "candidate"
     assert body["action"] == "candidate"
     assert body["candidates"][0]["reply_text"]
+
+
+def test_open_erp_launch_ticket_exchanges_to_customer_admin_session() -> None:
+    client = TestClient(create_app())
+    connector = provision(client)
+
+    ticket = client.post(
+        "/v1/integrations/open-erp/admin-launch-tickets",
+        headers=INTEGRATION_HEADERS,
+        json={
+            "request_id": "launch-001",
+            "platform": "pdd",
+            "external_store_id": "mall-001",
+            "platform_account_ref": "pdd-account-main",
+        },
+    )
+    assert ticket.status_code == 201
+    body = ticket.json()
+    assert body["launch_token"].startswith("cslaunch_")
+    assert body["tenant_id"] == connector["tenant_id"]
+    assert body["store_id"] == "mall-001"
+
+    exchange = client.post("/v1/admin/auth/launch/exchange", json={"launch_token": body["launch_token"]})
+
+    assert exchange.status_code == 200
+    assert "agent_admin_session=" in exchange.headers["set-cookie"]
+    content = exchange.json()
+    assert content["active_organization_id"] == connector["tenant_id"]
+    assert content["active_store_id"] == "mall-001"
+
+    replay = client.post("/v1/admin/auth/launch/exchange", json={"launch_token": body["launch_token"]})
+    assert replay.status_code == 409
+    assert replay.json()["error"]["code"] == "launch_token_consumed"
+
+
+def test_open_erp_launch_ticket_rejects_unbound_or_unauthorized_store() -> None:
+    client = TestClient(create_app())
+    provision(client)
+
+    missing = client.post(
+        "/v1/integrations/open-erp/admin-launch-tickets",
+        headers=INTEGRATION_HEADERS,
+        json={
+            "request_id": "launch-missing",
+            "platform": "pdd",
+            "external_store_id": "mall-other",
+            "platform_account_ref": "pdd-account-main",
+        },
+    )
+    bad_auth = client.post(
+        "/v1/integrations/open-erp/admin-launch-tickets",
+        headers={"Authorization": "Bearer wrong"},
+        json={
+            "request_id": "launch-bad",
+            "platform": "pdd",
+            "external_store_id": "mall-001",
+            "platform_account_ref": "pdd-account-main",
+        },
+    )
+
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "connector_not_bound"
+    assert bad_auth.status_code == 401

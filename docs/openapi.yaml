@@ -100,6 +100,34 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /v1/integrations/open-erp/admin-launch-tickets:
+    post:
+      tags: [Open ERP Integrations]
+      operationId: issueOpenErpAdminLaunchTicket
+      summary: 签发 Customer Admin 一次性启动票据
+      description: 仅供已登记的 open_erp 服务端调用。校验外部店铺已绑定 active Connector 后，返回 60-120 秒内一次性可兑换的 launch_token。
+      security:
+        - OpenErpIntegrationAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenErpAdminLaunchTicketRequest"
+      responses:
+        "201":
+          description: 启动票据已签发。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenErpAdminLaunchTicketResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
   /v1/reply-decisions:
     post:
       tags: [Reply Decisions]
@@ -607,6 +635,40 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /v1/admin/auth/launch/exchange:
+    post:
+      tags: [Admin Auth]
+      operationId: exchangeAdminLaunchToken
+      summary: 兑换 Customer Admin 一次性启动票据
+      description: open_erp_agent 客户端打开 `/launch?token=...` 后由 Customer Admin 调用。成功后只建立 Agent 自有 `agent_admin_session`，不读取或复用微信、PDD、ERP Cookie。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminLaunchExchangeRequest"
+      responses:
+        "200":
+          description: 兑换成功并设置客户后台 session。
+          headers:
+            Set-Cookie:
+              description: HttpOnly 客户后台 session cookie，建议名为 `agent_admin_session`。
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAuthResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
   /v1/admin/auth/oidc/start:
     get:
       tags: [Admin Auth]
@@ -943,6 +1005,74 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+
+  /v1/admin/message-traces:
+    get:
+      tags: [Admin Context]
+      operationId: listCustomerMessageTraces
+      summary: 查询客户店铺消息历史与 AI 决策摘要
+      description: Customer Admin 按当前 session 的租户/店铺权限查询 Agent 决策库中的客户消息、AI 回复、人工回复和 trace 摘要。
+      security:
+        - AdminSession: []
+      parameters:
+        - $ref: "#/components/parameters/StoreIdQuery"
+        - name: decision_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: external_message_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [external, simulation]
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: 客户店铺消息历史分页列表。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerMessageTraceListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/admin/message-simulations:
+    post:
+      tags: [Admin Context]
+      operationId: createCustomerMessageSimulation
+      summary: 模拟客户咨询并生成 AI 决策
+      description: Customer Admin 手动输入客户问题，复用回复决策链路创建 `source=simulation` 的 trace；不会调用外部平台发送消息。
+      security:
+        - AdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminMessageSimulationRequest"
+      responses:
+        "201":
+          description: 模拟决策已创建。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminMessageSimulationResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
 
   /v1/admin/connectors:
     get:
@@ -2202,6 +2332,53 @@ components:
           type: string
           description: 知识准备、运行或暂停状态。
 
+    OpenErpAdminLaunchTicketRequest:
+      type: object
+      required: [request_id, platform, external_store_id, platform_account_ref]
+      properties:
+        request_id:
+          type: string
+        platform:
+          $ref: "#/components/schemas/Platform"
+        external_store_id:
+          type: string
+        platform_account_ref:
+          type: string
+        ttl_seconds:
+          type: integer
+          minimum: 1
+          maximum: 120
+          default: 90
+
+    OpenErpAdminLaunchTicketResponse:
+      type: object
+      required: [launch_token, nonce, expires_at, external_system_id, platform, external_store_id, tenant_id, store_id, connector_id]
+      properties:
+        launch_token:
+          type: string
+          writeOnly: true
+          description: 一次性短期启动票据，只能通过 Customer Admin `/launch` 兑换一次。
+        nonce:
+          type: string
+        expires_at:
+          type: integer
+          format: int64
+        external_system_id:
+          type: string
+          enum: [open_erp_agent]
+        platform:
+          $ref: "#/components/schemas/Platform"
+        external_store_id:
+          type: string
+        platform_account_ref:
+          type: string
+        tenant_id:
+          type: string
+        store_id:
+          type: string
+        connector_id:
+          type: string
+
     ReplyDecisionCreateRequest:
       type: object
       required: [request_id, platform, external_store_id, message, conversation, mode]
@@ -2827,6 +3004,15 @@ components:
           writeOnly: true
           description: OIDC state，必须和 HttpOnly state cookie 通过 state / PKCE 校验。
 
+    AdminLaunchExchangeRequest:
+      type: object
+      required: [launch_token]
+      properties:
+        launch_token:
+          type: string
+          writeOnly: true
+          description: open_erp_agent 通过受控服务间接口签发的一次性短期票据。
+
     AdminAuthResponse:
       type: object
       required: [user, tenants, stores]
@@ -2855,6 +3041,51 @@ components:
               type:
                 - string
                 - "null"
+
+    AdminMessageSimulationRequest:
+      type: object
+      required: [message]
+      properties:
+        store_id:
+          type: string
+        platform:
+          $ref: "#/components/schemas/Platform"
+        message:
+          type: object
+          required: [content]
+          properties:
+            content:
+              type: string
+            external_message_id:
+              type: string
+            sent_at:
+              type: string
+              format: date-time
+        conversation:
+          type: object
+          additionalProperties: true
+        context:
+          type: object
+          additionalProperties: true
+
+    AdminMessageSimulationResponse:
+      type: object
+      required: [source, decision, external_send]
+      properties:
+        source:
+          type: string
+          enum: [simulation]
+        decision:
+          $ref: "#/components/schemas/ReplyDecisionResponse"
+        external_send:
+          type: object
+          required: [attempted, reason]
+          properties:
+            attempted:
+              type: boolean
+              enum: [false]
+            reason:
+              type: string
 
     AdminStoreSettingsUpdateRequest:
       type: object
@@ -3539,6 +3770,58 @@ components:
             $ref: "#/components/schemas/SystemMessageTraceSummary"
         page_info:
           $ref: "#/components/schemas/PageInfo"
+
+    CustomerMessageTraceListResponse:
+      type: object
+      required: [items, page_info]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CustomerMessageTraceSummary"
+        page_info:
+          $ref: "#/components/schemas/PageInfo"
+
+    CustomerMessageTraceSummary:
+      type: object
+      required: [decision_id, store_id, action, status, risk_level]
+      properties:
+        decision_id:
+          type: string
+        request_id:
+          type: string
+        source:
+          type: string
+          enum: [external, simulation]
+        platform:
+          $ref: "#/components/schemas/Platform"
+        store_id:
+          type: string
+        external_message_id:
+          type: string
+        conversation_id:
+          type: string
+        customer_message:
+          type: string
+        ai_reply:
+          type:
+            - string
+            - "null"
+        human_reply:
+          type:
+            - string
+            - "null"
+        action:
+          $ref: "#/components/schemas/DecisionAction"
+        status:
+          type: string
+        risk_level:
+          $ref: "#/components/schemas/RiskLevel"
+        confidence:
+          type: number
+          format: double
+        trace:
+          $ref: "#/components/schemas/DecisionTrace"
 
     SystemMessageTraceResponse:
       type: object
