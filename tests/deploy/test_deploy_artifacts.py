@@ -188,7 +188,7 @@ def test_ci_validates_built_admin_nginx_image_before_publish() -> None:
     for workflow in (pr_checks, publish):
         assert "Admin image nginx config check" in workflow
         assert "docker build -f admin-web/Dockerfile" in workflow
-        assert "docker run --rm ecommerce-cs-agent-admin:nginx-check nginx -t" in workflow
+        assert "docker run --rm --add-host ecommerce-cs-agent-api:127.0.0.1 ecommerce-cs-agent-admin:nginx-check nginx -t" in workflow
 
 
 def test_deploy_workflow_archives_dev_release_gate_report() -> None:
