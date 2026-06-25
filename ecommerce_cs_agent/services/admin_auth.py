@@ -145,13 +145,16 @@ class InMemoryAdminAuthService:
             {
                 "id": store_id,
                 "organization_id": organization_id,
-                "name": store_id,
+                "name": str(getattr(ticket, "external_store_name", "") or ticket.external_store_id),
                 "platform": ticket.platform,
                 "status": "active",
                 "metadata": {"external_store_id": ticket.external_store_id},
                 "settings": {},
             },
         )
+        self.stores[store_id]["name"] = str(getattr(ticket, "external_store_name", "") or ticket.external_store_id)
+        self.stores[store_id]["platform"] = ticket.platform
+        self.stores[store_id]["metadata"] = {"external_store_id": ticket.external_store_id}
         user = self.users["admin-001"]
         if organization_id not in user["organization_ids"]:
             user["organization_ids"].append(organization_id)
@@ -532,7 +535,13 @@ class PostgresAdminAuthService:
         store_id = str(ticket.store_id)
         with self._connect(self.settings.database_url) as conn:
             with conn.cursor() as cur:
-                self._bootstrap_launch_admin(cur, organization_id, store_id, str(ticket.platform))
+                self._bootstrap_launch_admin(
+                    cur,
+                    organization_id,
+                    store_id,
+                    str(ticket.platform),
+                    str(getattr(ticket, "external_store_name", "") or ticket.external_store_id),
+                )
                 cur.execute(
                     """
                     SELECT admin.id, org.id, st.id, admin.email, admin.password_hash,
@@ -588,7 +597,7 @@ class PostgresAdminAuthService:
                         "connector_id": ticket.connector_id,
                     },
                 )
-                return self._auth_response_from_row(row, session), token
+                return self.me(session), token
 
     def link_oidc(self, session: AdminSession, profile: dict[str, Any]) -> dict[str, Any]:
         sub = _oidc_sub(profile)
@@ -1026,7 +1035,7 @@ class PostgresAdminAuthService:
             (organization_id, organization_id, self.settings.admin_initial_email, organization_id),
         )
 
-    def _bootstrap_launch_admin(self, cur: Any, organization_id: str, store_id: str, platform: str) -> None:
+    def _bootstrap_launch_admin(self, cur: Any, organization_id: str, store_id: str, platform: str, store_name: str = "") -> None:
         cur.execute(
             """
             INSERT INTO organization (external_organization_id, name, settings)
@@ -1041,9 +1050,9 @@ class PostgresAdminAuthService:
             INSERT INTO store (organization_id, name, platform, external_store_id)
             VALUES ((SELECT id FROM organization WHERE external_organization_id = %s), %s, %s, %s)
             ON CONFLICT (organization_id, platform, external_store_id)
-            DO UPDATE SET updated_at = now()
+            DO UPDATE SET name = EXCLUDED.name, updated_at = now()
             """,
-            (organization_id, store_id, platform, store_id),
+            (organization_id, store_name or store_id, platform, store_id),
         )
         cur.execute(
             """

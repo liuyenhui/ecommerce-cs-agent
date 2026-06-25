@@ -123,7 +123,7 @@ POST /v1/integrations/open-erp/provision
 PATCH /v1/integrations/open-erp/connectors/{connector_id}
 ```
 
-`POST /v1/integrations/open-erp/provision` 幂等创建或更新 Agent 内部 `tenant`、`store`、`platform_account` 和 `connector` 映射。请求只传外部业务引用，例如 `tenant_ref`、`store_ref`、`platform`、`external_store_id`、`platform_account_ref`，不得传内部 `tenant_id` 作为授权来源。首次创建或显式轮换时返回一次性 `connector_token`；数据库只保存 token hash/prefix，后续重复 provision 只返回映射和 prefix。
+`POST /v1/integrations/open-erp/provision` 幂等创建或更新 Agent 内部 `tenant`、`store`、`platform_account` 和 `connector` 映射。请求只传外部业务引用，例如 `tenant_ref`、`store_ref`、`platform`、`external_store_id`、`external_store_name`、`platform_account_ref`，不得传内部 `tenant_id` 作为授权来源。首次创建或显式轮换时返回一次性 `connector_token`；数据库只保存 token hash/prefix，后续重复 provision 只返回映射、店铺展示名称和 prefix。
 
 `PATCH /v1/integrations/open-erp/connectors/{connector_id}` 用于暂停、恢复或轮换 connector。暂停后的 connector 不能调用 `POST /v1/reply-decisions`；轮换时只返回一次新 token。Connector Token 只允许访问绑定的外部决策、补上下文和动作结果接口，不能访问 `/v1/admin/*` 或 `/v1/system-admin/*`。
 
@@ -512,7 +512,7 @@ POST /v1/integrations/open-erp/admin-launch-tickets
 POST /v1/admin/auth/launch/exchange
 ```
 
-票据绑定 `external_system_id=open_erp_agent`、`platform`、`external_store_id`、`tenant_id`、`store_id`、`connector_id`、`nonce` 和 `expires_at`，建议 60-120 秒内有效且只能兑换一次。兑换成功后只创建 Agent 自有 `agent_admin_session`，并跳转 Customer Admin 对应店铺页面。
+票据绑定 `external_system_id=open_erp_agent`、`platform`、`external_store_id`、`external_store_name`、`tenant_id`、`store_id`、`connector_id`、`nonce` 和 `expires_at`，建议 60-120 秒内有效且只能兑换一次。兑换成功后只创建 Agent 自有 `agent_admin_session`，并跳转 Customer Admin 对应店铺页面；店铺下拉展示为“平台-店铺-编号”。
 
 Customer Admin 消息历史来自 Agent 决策库：
 
