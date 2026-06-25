@@ -10,6 +10,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from ecommerce_cs_agent.api.app import create_app
+from ecommerce_cs_agent.services import open_erp_integration as open_erp_module
 
 
 INTEGRATION_HEADERS = {"Authorization": "Bearer test-open-erp-integration-token"}
@@ -212,6 +213,7 @@ def test_open_erp_launch_ticket_exchanges_to_customer_admin_session() -> None:
     replay = client.post("/v1/admin/auth/launch/exchange", json={"launch_token": body["launch_token"]})
     assert replay.status_code == 409
     assert replay.json()["error"]["code"] == "launch_token_consumed"
+    assert replay.json()["errorId"] == "ECS-LAUNCH-001"
 
 
 def test_open_erp_launch_ticket_rejects_unbound_or_unauthorized_store() -> None:
@@ -241,4 +243,56 @@ def test_open_erp_launch_ticket_rejects_unbound_or_unauthorized_store() -> None:
 
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "connector_not_bound"
+    assert missing.json()["errorId"] == "ECS-OE-002"
     assert bad_auth.status_code == 401
+    assert bad_auth.json()["errorId"] == "ECS-OE-001"
+
+
+def test_open_erp_provision_errors_have_stable_error_ids() -> None:
+    client = TestClient(create_app())
+
+    missing_auth = client.post("/v1/integrations/open-erp/provision", json=provision_payload())
+    invalid_payload = client.post(
+        "/v1/integrations/open-erp/provision",
+        headers=INTEGRATION_HEADERS,
+        json={k: v for k, v in provision_payload().items() if k != "platform"},
+    )
+
+    assert missing_auth.status_code == 401
+    assert missing_auth.json()["error"]["code"] == "unauthorized"
+    assert missing_auth.json()["errorId"] == "ECS-OE-001"
+    assert invalid_payload.status_code == 422
+    assert invalid_payload.json()["error"]["code"] == "validation_error"
+    assert invalid_payload.json()["errorId"] == "ECS-OE-003"
+
+
+def test_launch_exchange_failures_have_stable_error_ids(monkeypatch) -> None:
+    client = TestClient(create_app())
+    provision(client)
+    monkeypatch.setattr(open_erp_module.time, "time", lambda: 100)
+    ticket = client.post(
+        "/v1/integrations/open-erp/admin-launch-tickets",
+        headers=INTEGRATION_HEADERS,
+        json={
+            "request_id": "launch-expiring",
+            "platform": "pdd",
+            "external_store_id": "mall-001",
+            "platform_account_ref": "pdd-account-main",
+            "ttl_seconds": 1,
+        },
+    ).json()
+    monkeypatch.setattr(open_erp_module.time, "time", lambda: 102)
+
+    missing = client.post("/v1/admin/auth/launch/exchange", json={})
+    not_found = client.post("/v1/admin/auth/launch/exchange", json={"launch_token": "cslaunch_missing"})
+    expired = client.post("/v1/admin/auth/launch/exchange", json={"launch_token": ticket["launch_token"]})
+
+    assert missing.status_code == 422
+    assert missing.json()["error"]["code"] == "validation_error"
+    assert missing.json()["errorId"] == "ECS-LAUNCH-004"
+    assert not_found.status_code == 404
+    assert not_found.json()["error"]["code"] == "launch_token_not_found"
+    assert not_found.json()["errorId"] == "ECS-LAUNCH-003"
+    assert expired.status_code == 410
+    assert expired.json()["error"]["code"] == "launch_token_expired"
+    assert expired.json()["errorId"] == "ECS-LAUNCH-002"

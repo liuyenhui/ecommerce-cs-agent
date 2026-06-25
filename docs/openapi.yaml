@@ -4934,6 +4934,9 @@ components:
       type: object
       required: [error]
       properties:
+        errorId:
+          type: string
+          description: 稳定错误编号；仅已登记链路保证返回，例如 ECS-OE-001。
         error:
           $ref: "#/components/schemas/ErrorDetail"
         request_id:
@@ -4957,6 +4960,10 @@ components:
             - conflict
             - rate_limited
             - idempotency_conflict
+            - connector_not_bound
+            - launch_token_consumed
+            - launch_token_expired
+            - launch_token_not_found
             - validation_error
             - object_storage_error
             - object_storage_unavailable
@@ -4979,6 +4986,9 @@ components:
             - TASK_RETRY_EXHAUSTED
         message:
           type: string
+        errorId:
+          type: string
+          description: 与顶层 `errorId` 相同；便于只解析 `error` 对象的客户端定位。
         details:
           $ref: "#/components/schemas/Metadata"
 

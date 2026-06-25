@@ -13,6 +13,15 @@ from ecommerce_cs_agent.api.auth import (
     Principal,
     require_agent_api,
 )
+from ecommerce_cs_agent.api.error_codes import (
+    ECS_LAUNCH_001,
+    ECS_LAUNCH_002,
+    ECS_LAUNCH_003,
+    ECS_LAUNCH_004,
+    ECS_OE_001,
+    ECS_OE_002,
+    ECS_OE_003,
+)
 from ecommerce_cs_agent.api.errors import api_error
 from ecommerce_cs_agent.core.config import Settings, load_settings
 from ecommerce_cs_agent.core.passwords import password_matches
@@ -266,9 +275,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             open_erp.require_service_auth(request.headers.get("Authorization"))
             status_code, content = open_erp.provision(await request.json())
         except PermissionError as exc:
-            raise api_error(401, "unauthorized", str(exc)) from exc
+            raise api_error(401, "unauthorized", str(exc), error_id=ECS_OE_001) from exc
         except ValueError as exc:
-            raise api_error(422, "validation_error", str(exc)) from exc
+            raise api_error(422, "validation_error", str(exc), error_id=ECS_OE_003) from exc
         return JSONResponse(status_code=status_code, content=content)
 
     @app.patch("/v1/integrations/open-erp/connectors/{connector_id}")
@@ -277,11 +286,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             open_erp.require_service_auth(request.headers.get("Authorization"))
             return open_erp.patch_connector(connector_id, await request.json())
         except PermissionError as exc:
-            raise api_error(401, "unauthorized", str(exc)) from exc
+            raise api_error(401, "unauthorized", str(exc), error_id=ECS_OE_001) from exc
         except KeyError as exc:
-            raise api_error(404, "not_found", "connector not found") from exc
+            raise api_error(404, "not_found", "connector not found", error_id=ECS_OE_002) from exc
         except ValueError as exc:
-            raise api_error(422, "validation_error", str(exc)) from exc
+            raise api_error(422, "validation_error", str(exc), error_id=ECS_OE_003) from exc
 
     @app.post("/v1/integrations/open-erp/admin-launch-tickets")
     async def issue_open_erp_admin_launch_ticket(request: Request) -> JSONResponse:
@@ -289,26 +298,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             open_erp.require_service_auth(request.headers.get("Authorization"))
             content = open_erp.issue_admin_launch_ticket(await request.json())
         except PermissionError as exc:
-            raise api_error(401, "unauthorized", str(exc)) from exc
+            raise api_error(401, "unauthorized", str(exc), error_id=ECS_OE_001) from exc
         except KeyError as exc:
-            raise api_error(404, "connector_not_bound", "open_erp store is not bound to an active Agent connector") from exc
+            raise api_error(404, "connector_not_bound", "open_erp store is not bound to an active Agent connector", error_id=ECS_OE_002) from exc
         except ValueError as exc:
-            raise api_error(422, "validation_error", str(exc)) from exc
+            raise api_error(422, "validation_error", str(exc), error_id=ECS_OE_003) from exc
         return JSONResponse(status_code=201, content=content)
 
     @app.post("/v1/admin/auth/launch/exchange")
     async def exchange_admin_launch_ticket(request: Request) -> JSONResponse:
         payload = await request.json()
-        _require_fields(payload, ["launch_token"])
+        launch_token = str(payload.get("launch_token") or "").strip()
+        if not launch_token:
+            raise api_error(422, "validation_error", "missing required fields: launch_token", error_id=ECS_LAUNCH_004)
         try:
-            ticket = open_erp.consume_admin_launch_ticket(str(payload.get("launch_token") or ""))
+            ticket = open_erp.consume_admin_launch_ticket(launch_token)
             content, token = admin_auth.login_launch(ticket)
         except FileExistsError as exc:
-            raise api_error(409, "launch_token_consumed", "launch token has already been used") from exc
+            raise api_error(409, "launch_token_consumed", "launch token has already been used", error_id=ECS_LAUNCH_001) from exc
         except TimeoutError as exc:
-            raise api_error(410, "launch_token_expired", "launch token has expired") from exc
+            raise api_error(410, "launch_token_expired", "launch token has expired", error_id=ECS_LAUNCH_002) from exc
         except KeyError as exc:
-            raise api_error(404, "launch_token_not_found", "launch token was not found") from exc
+            raise api_error(404, "launch_token_not_found", "launch token was not found", error_id=ECS_LAUNCH_003) from exc
         response = JSONResponse(content=content)
         response.set_cookie("agent_admin_session", token, httponly=True, samesite="lax")
         return response

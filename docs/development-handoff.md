@@ -6,6 +6,7 @@
 
 ### 2026-06-25
 
+- 新增 open_erp integration / Customer Admin launch exchange 错误编号文档 `docs/error-codes.md`；相关响应在保留 `error.code` 的同时增加 `errorId`，便于 open_erp_agent 客户端截图排障。
 - 新增 open_erp_agent 到 Customer Admin 的受控授权桥接：open_erp 只能通过服务间接口签发一次性短期启动票据，Customer Admin 兑换后建立 Agent 自有 `agent_admin_session`；仍禁止共享 Cookie、微信/PDD session、open_erp SQLite 或外部系统登录态。
 - Customer Admin 第一版新增“消息历史”和“模拟咨询”：消息历史来自 Agent 决策库，展示客户消息、AI 回复、人工回复和 `trace.steps`；模拟咨询创建 `source=simulation` 决策记录但不得发送给真实买家。
 
