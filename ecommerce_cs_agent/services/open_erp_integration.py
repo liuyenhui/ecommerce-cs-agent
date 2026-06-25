@@ -76,6 +76,9 @@ class OpenErpIntegrationService:
         key = (platform, external_store_id, platform_account_ref)
         existing = self._connectors_by_key.get(key)
         if existing:
+            if external_store_name and external_store_name != existing.external_store_name:
+                existing = OpenErpConnector(**{**existing.__dict__, "external_store_name": external_store_name})
+                self._save(existing)
             return 200, self._public_connector(existing)
 
         tenant_ref = _text(payload.get("tenant_ref")) or f"open_erp:{platform}:{external_store_id}"
