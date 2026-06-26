@@ -4,6 +4,10 @@
 
 ## 最近文档更新
 
+### 2026-06-26
+
+- Customer Admin 消息历史 UI 调整为会话工作台：左侧会话搜索列表，右侧聊天时间线和模拟咨询；主界面不做“全部 / 待回复 / 买家 / 含订单 / 本地历史”筛选，也不展示已读 / 状态标签，决策状态保留在决策路径详情中用于排障。
+
 ### 2026-06-25
 
 - 新增 open_erp integration / Customer Admin launch exchange 错误编号文档 `docs/error-codes.md`；相关响应在保留 `error.code` 的同时增加 `errorId`，便于 open_erp_agent 客户端截图排障。
