@@ -21,6 +21,7 @@ const loginPanel = sharedComponents.slice(sharedComponents.indexOf('function Log
 const topBar = sharedComponents.slice(sharedComponents.indexOf('function TopBar'), sharedComponents.indexOf('function LoginPanelBase'));
 const customerWorkspace = customerApp.slice(customerApp.indexOf('function CustomerWorkspace'), customerApp.indexOf('function CustomerOverview'));
 const customerOverview = customerApp.slice(customerApp.indexOf('function CustomerOverview'), customerApp.indexOf('function ProductContent'));
+const messageHistory = customerApp.slice(customerApp.indexOf('function MessageHistory'), customerApp.indexOf('function MessageTraceDrawer'));
 const productContent = customerApp.slice(customerApp.indexOf('function ProductContent'), customerApp.indexOf('function ProductUploadModal'));
 const allSource = [customerApp, systemApp, sharedComponents, sharedData].join('\n');
 
@@ -39,6 +40,9 @@ const checks = [
   ['Customer workspace hides organization context panel', !customerWorkspace.includes('客户上下文') && !customerWorkspace.includes('label="组织"')],
   ['Customer context selector has no refresh button', !customerWorkspace.includes('onRefresh={refresh}') && !customerWorkspace.includes('刷新</button>')],
   ['Customer overview copy avoids organization wording', !customerOverview.includes('可访问组织') && !customerOverview.includes('ListPanel title="组织"')],
+  ['Customer message history renders conversation workspace instead of table', messageHistory.includes('messageHistoryWorkspace') && messageHistory.includes('conversationList') && messageHistory.includes('conversationTimeline') && !messageHistory.includes('<DataTable')],
+  ['Customer message history has no status filters or read-state labels', !messageHistory.includes('待回复') && !messageHistory.includes('含订单') && !messageHistory.includes('本地历史') && !messageHistory.includes('客户已读') && !messageHistory.includes('已读/状态')],
+  ['Customer decision graph loads X6 lazily to keep the initial bundle below warning size', !customerApp.includes('from "@antv/x6"') && customerApp.includes('import("@antv/x6")')],
   ['Product content renders a product list and upload CTA', productContent.includes('上传商品') && productContent.includes('DataTable') && productContent.includes('商品列表')],
   ['Product content no longer exposes manual maintenance forms', !productContent.includes('保存商品') && !productContent.includes('登记资产') && !productContent.includes('转换并抽取') && !productContent.includes('保存价格快照')],
   ['DataTable cells expose mobile data labels', sharedComponents.includes('data-label={fieldLabel(field)}') && sharedComponents.includes('data-label="操作"')],

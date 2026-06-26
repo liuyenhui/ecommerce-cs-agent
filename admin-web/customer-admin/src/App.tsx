@@ -17,7 +17,6 @@ import {
   Store,
   UploadCloud
 } from "lucide-react";
-import { Graph } from "@antv/x6";
 import { requestJson } from "../../shared/api";
 import {
   AdminFrame,
@@ -49,6 +48,11 @@ const customerTabs: Array<NavItem<CustomerTab>> = [
 
 type CustomerTrace = JsonRecord & {
   decision_id?: string;
+  request_id?: string;
+  platform?: string;
+  store_id?: string;
+  external_message_id?: string;
+  conversation_id?: string;
   customer_message?: string;
   ai_reply?: string;
   human_reply?: string;
@@ -57,6 +61,17 @@ type CustomerTrace = JsonRecord & {
   risk_level?: string;
   source?: string;
   trace?: JsonRecord;
+};
+
+type CustomerConversation = {
+  id: string;
+  title: string;
+  subtitle: string;
+  lastMessage: string;
+  lastTime: string;
+  orderLabel: string;
+  source: string;
+  traces: CustomerTrace[];
 };
 
 function normalizePath() {
@@ -538,6 +553,11 @@ function MessageHistory({ storeId, setToast, setSelected }: {
   const [loading, setLoading] = React.useState(false);
   const [question, setQuestion] = React.useState("");
   const [selectedTrace, setSelectedTrace] = React.useState<CustomerTrace | null>(null);
+  const [selectedConversationId, setSelectedConversationId] = React.useState("");
+  const [searchText, setSearchText] = React.useState("");
+
+  const conversations = React.useMemo(() => buildCustomerConversations(rows, searchText), [rows, searchText]);
+  const selectedConversation = conversations.find((conversation) => conversation.id === selectedConversationId) || conversations[0] || null;
 
   async function load(source = "") {
     setLoading(true);
@@ -556,6 +576,16 @@ function MessageHistory({ storeId, setToast, setSelected }: {
   React.useEffect(() => {
     void load();
   }, [storeId]);
+
+  React.useEffect(() => {
+    if (!conversations.length) {
+      setSelectedConversationId("");
+      return;
+    }
+    if (!selectedConversationId || !conversations.some((conversation) => conversation.id === selectedConversationId)) {
+      setSelectedConversationId(conversations[0].id);
+    }
+  }, [conversations, selectedConversationId]);
 
   async function simulate(event: React.FormEvent) {
     event.preventDefault();
@@ -579,6 +609,7 @@ function MessageHistory({ storeId, setToast, setSelected }: {
         source: "simulation",
         customer_message: content,
         ai_reply: firstCandidateText(decision),
+        conversation_id: String(readRecord(decision, "request").conversation_id || decision.conversation_id || decision.decision_id || ""),
         action: String(decision.action || ""),
         status: String(decision.decision_status || ""),
         risk_level: String(decision.risk_level || ""),
@@ -594,29 +625,108 @@ function MessageHistory({ storeId, setToast, setSelected }: {
   return (
     <>
       <SectionHeader label="MESSAGES" title="消息历史" action={<button onClick={() => void load()}><Search size={16} />刷新</button>} />
-      <form className="operationPanel messageSimulator" onSubmit={simulate}>
-        <label>
-          模拟客户咨询
-          <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：这个商品有哪些尺寸？" />
-        </label>
-        <div className="buttonRow end">
-          <button className="primaryButton" disabled={loading}>
-            {loading ? <Loader2 size={16} className="spin" /> : <Bot size={16} />}
-            模拟决策
-          </button>
-        </div>
-      </form>
-      <DataTable
-        title="客服会话消息"
-        rows={rows}
-        fields={["decision_id", "source", "customer_message", "ai_reply", "human_reply", "action", "status", "risk_level"]}
-        onSelect={(row) => setSelectedTrace(row as CustomerTrace)}
-        action={(row) => <button onClick={() => setSelectedTrace(row as CustomerTrace)}><Search size={15} />决策路径</button>}
-        emptyState={{
-          title: loading ? "正在读取消息历史" : "暂无消息历史",
-          description: loading ? "消息历史正在读取，请稍候。" : "收到客户咨询或完成模拟咨询后，AI 决策记录会显示在这里。"
-        }}
-      />
+      <section className="messageHistoryWorkspace" aria-label="客服消息历史工作台">
+        <aside className="conversationList" aria-label="会话列表">
+          <label className="conversationSearch">
+            <Search size={16} />
+            <input
+              value={searchText}
+              onChange={(event) => setSearchText(event.target.value)}
+              placeholder="搜索买家、订单、会话"
+            />
+          </label>
+          <div className="conversationListBody">
+            {conversations.length ? conversations.map((conversation) => (
+              <button
+                type="button"
+                key={conversation.id}
+                className={`conversationItem ${conversation.id === selectedConversation?.id ? "active" : ""}`}
+                onClick={() => setSelectedConversationId(conversation.id)}
+              >
+                <span className="conversationAvatar">{conversation.source === "simulation" ? "测" : "客"}</span>
+                <span className="conversationText">
+                  <strong>{conversation.title}</strong>
+                  <span>{conversation.subtitle}</span>
+                  <em>{conversation.lastMessage}</em>
+                  <small>{conversation.orderLabel}</small>
+                </span>
+                <time>{conversation.lastTime || "-"}</time>
+              </button>
+            )) : (
+              <div className="emptyState">
+                <strong>{loading ? "正在读取消息历史" : "暂无会话历史"}</strong>
+                <p>{loading ? "消息历史正在读取，请稍候。" : "收到客户咨询或完成模拟咨询后，会话会显示在这里。"}</p>
+              </div>
+            )}
+          </div>
+        </aside>
+        <section className="conversationDetail" aria-label="会话详情">
+          {selectedConversation ? (
+            <>
+              <header className="conversationHeader">
+                <div>
+                  <h3>{selectedConversation.title}</h3>
+                  <p>{platformLabel(selectedConversation.traces[0]?.platform)} · 店铺 {selectedConversation.traces[0]?.store_id || storeId} · 会话 {selectedConversation.id}</p>
+                </div>
+                <span>{selectedConversation.traces.length} 条历史</span>
+              </header>
+              <div className="conversationTimeline">
+                {selectedConversation.traces.map((trace, index) => (
+                  <React.Fragment key={String(trace.decision_id || trace.external_message_id || index)}>
+                    <ChatBubble
+                      side="buyer"
+                      roleLabel={trace.source === "simulation" ? "模拟买家" : "买家"}
+                      time={messageTimeLabel(trace)}
+                      text={String(trace.customer_message || "-")}
+                    />
+                    {trace.ai_reply ? (
+                      <ChatBubble
+                        side="agent"
+                        roleLabel="AI 客服"
+                        time={messageTimeLabel(trace)}
+                        text={String(trace.ai_reply)}
+                        meta={decisionMeta(trace)}
+                        action={<button onClick={() => setSelectedTrace(trace)}><Search size={15} />决策路径</button>}
+                      />
+                    ) : null}
+                    {trace.human_reply ? (
+                      <ChatBubble
+                        side="agent"
+                        roleLabel="人工客服"
+                        time={messageTimeLabel(trace)}
+                        text={String(trace.human_reply)}
+                        action={<button onClick={() => setSelectedTrace(trace)}><Search size={15} />决策路径</button>}
+                      />
+                    ) : null}
+                    {!trace.ai_reply && !trace.human_reply ? (
+                      <div className="conversationActionOnly">
+                        <button onClick={() => setSelectedTrace(trace)}><Search size={15} />决策路径</button>
+                      </div>
+                    ) : null}
+                  </React.Fragment>
+                ))}
+              </div>
+              <form className="messageSimulator composerSimulator" onSubmit={simulate}>
+                <label>
+                  模拟客户咨询
+                  <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：这个商品有哪些尺寸？" />
+                </label>
+                <div className="buttonRow end">
+                  <button className="primaryButton" disabled={loading}>
+                    {loading ? <Loader2 size={16} className="spin" /> : <Bot size={16} />}
+                    模拟决策
+                  </button>
+                </div>
+              </form>
+            </>
+          ) : (
+            <div className="emptyState">
+              <strong>{loading ? "正在读取消息历史" : "暂无会话历史"}</strong>
+              <p>{loading ? "消息历史正在读取，请稍候。" : "收到客户咨询或完成模拟咨询后，右侧会显示完整对话。"}</p>
+            </div>
+          )}
+        </section>
+      </section>
       {selectedTrace ? (
         <MessageTraceDrawer
           trace={selectedTrace}
@@ -626,6 +736,100 @@ function MessageHistory({ storeId, setToast, setSelected }: {
       ) : null}
     </>
   );
+}
+
+function ChatBubble({ side, roleLabel, time, text, meta, action }: {
+  side: "buyer" | "agent";
+  roleLabel: string;
+  time: string;
+  text: string;
+  meta?: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <article className={`chatBubble ${side}`}>
+      <div className="chatBubbleMeta">
+        <span>{roleLabel}</span>
+        {time ? <time>{time}</time> : null}
+      </div>
+      <p>{text}</p>
+      {meta || action ? (
+        <div className="chatBubbleFooter">
+          {meta ? <small>{meta}</small> : <span />}
+          {action}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function buildCustomerConversations(rows: CustomerTrace[], searchText: string): CustomerConversation[] {
+  const groups = new Map<string, CustomerTrace[]>();
+  rows.forEach((row) => {
+    const key = String(row.conversation_id || row.external_message_id || row.decision_id || "unknown");
+    groups.set(key, [...(groups.get(key) || []), row]);
+  });
+  const query = searchText.trim().toLowerCase();
+  return Array.from(groups.entries())
+    .map(([id, traces]) => {
+      const last = traces[traces.length - 1] || {};
+      return {
+        id,
+        title: conversationTitle(last, id),
+        subtitle: `会话 ${id}`,
+        lastMessage: conversationLastMessage(last),
+        lastTime: messageTimeLabel(last),
+        orderLabel: orderLabel(last),
+        source: String(last.source || "external"),
+        traces
+      };
+    })
+    .filter((conversation) => {
+      if (!query) return true;
+      return [
+        conversation.title,
+        conversation.subtitle,
+        conversation.lastMessage,
+        conversation.orderLabel,
+        conversation.id,
+        ...conversation.traces.flatMap((trace) => [
+          trace.decision_id,
+          trace.request_id,
+          trace.external_message_id,
+          trace.customer_message,
+          trace.ai_reply,
+          trace.human_reply
+        ])
+      ].some((value) => String(value || "").toLowerCase().includes(query));
+    });
+}
+
+function conversationTitle(trace: CustomerTrace, fallback: string) {
+  if (trace.source === "simulation") return "模拟咨询";
+  const id = String(trace.conversation_id || fallback || "").trim();
+  if (!id) return "客户会话";
+  return id.length > 10 ? `${id.slice(0, 4)}****${id.slice(-4)}` : id;
+}
+
+function conversationLastMessage(trace: CustomerTrace) {
+  return String(trace.customer_message || trace.ai_reply || trace.human_reply || "暂无消息内容");
+}
+
+function orderLabel(trace: CustomerTrace) {
+  const listing = String(trace.listing_ref || "").trim();
+  return listing ? `商品 ${listing}` : "无订单号";
+}
+
+function messageTimeLabel(trace: CustomerTrace) {
+  const value = String(trace.sent_at || trace.created_at || trace.updated_at || "").trim();
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function decisionMeta(trace: CustomerTrace) {
+  return [trace.action ? `动作 ${trace.action}` : "", trace.risk_level ? `风险 ${trace.risk_level}` : ""].filter(Boolean).join(" · ");
 }
 
 function MessageTraceDrawer({ trace, onClose, onRaw }: { trace: CustomerTrace; onClose: () => void; onRaw: () => void }) {
@@ -663,44 +867,59 @@ function DecisionFlowGraph({ trace, status }: { trace: unknown; status: string }
 
   React.useEffect(() => {
     if (!containerRef.current) return undefined;
-    const graph = new Graph({
-      container: containerRef.current,
-      width: containerRef.current.clientWidth || 520,
-      height: 320,
-      interacting: false,
-      panning: false,
-      mousewheel: false,
-      background: { color: "#ffffff" }
-    });
-    const steps = ["接收消息", "字段映射", "上下文检查", "商品/知识/规则", "回复生成", "风险闸门", "输出动作", "反馈/记录"];
-    const runtimeSteps = readTraceSteps(trace);
-    const blocked = status === "waiting_context" || status === "handoff";
-    const nodes = steps.map((label, index) => {
-      const runtime = runtimeSteps[index];
-      const fill = runtime?.status === "failed" ? "#fee2e2" : blocked && index >= 2 ? "#fff7ed" : "#eef2ff";
-      return graph.addNode({
-        id: `node-${index}`,
-        x: 26 + (index % 2) * 230,
-        y: 24 + Math.floor(index / 2) * 70,
-        width: 170,
-        height: 42,
-        label,
-        attrs: {
-          body: { rx: 6, ry: 6, stroke: "#94a3b8", fill },
-          label: { fill: "#1f2937", fontSize: 12, fontWeight: 600 }
-        }
+    let disposed = false;
+    let graph: {
+      dispose: () => void;
+      addNode: (options: JsonRecord) => unknown;
+      addEdge: (options: JsonRecord) => unknown;
+      centerContent: () => void;
+    } | null = null;
+
+    void import("@antv/x6").then(({ Graph }) => {
+      if (disposed || !containerRef.current) return;
+      graph = new Graph({
+        container: containerRef.current,
+        width: containerRef.current.clientWidth || 520,
+        height: 320,
+        interacting: false,
+        panning: false,
+        mousewheel: false,
+        background: { color: "#ffffff" }
       });
-    });
-    nodes.slice(0, -1).forEach((node, index) => {
-      graph.addEdge({
-        source: node,
-        target: nodes[index + 1],
-        attrs: { line: { stroke: "#64748b", strokeWidth: 1.4, targetMarker: "block" } },
-        router: { name: "manhattan" }
+      const steps = ["接收消息", "字段映射", "上下文检查", "商品/知识/规则", "回复生成", "风险闸门", "输出动作", "反馈/记录"];
+      const runtimeSteps = readTraceSteps(trace);
+      const blocked = status === "waiting_context" || status === "handoff";
+      const nodes = steps.map((label, index) => {
+        const runtime = runtimeSteps[index];
+        const fill = runtime?.status === "failed" ? "#fee2e2" : blocked && index >= 2 ? "#fff7ed" : "#eef2ff";
+        return graph?.addNode({
+          id: `node-${index}`,
+          x: 26 + (index % 2) * 230,
+          y: 24 + Math.floor(index / 2) * 70,
+          width: 170,
+          height: 42,
+          label,
+          attrs: {
+            body: { rx: 6, ry: 6, stroke: "#94a3b8", fill },
+            label: { fill: "#1f2937", fontSize: 12, fontWeight: 600 }
+          }
+        });
       });
+      nodes.slice(0, -1).forEach((node, index) => {
+        if (!node || !nodes[index + 1]) return;
+        graph?.addEdge({
+          source: node,
+          target: nodes[index + 1],
+          attrs: { line: { stroke: "#64748b", strokeWidth: 1.4, targetMarker: "block" } },
+          router: { name: "manhattan" }
+        });
+      });
+      graph.centerContent();
     });
-    graph.centerContent();
-    return () => graph.dispose();
+    return () => {
+      disposed = true;
+      graph?.dispose();
+    };
   }, [trace, status]);
 
   return <div className="decisionGraph" ref={containerRef} aria-label="AI 客服决策流程图" />;

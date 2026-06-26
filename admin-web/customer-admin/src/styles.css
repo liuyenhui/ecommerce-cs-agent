@@ -1,11 +1,223 @@
 @import "../../shared/styles/base.css";
 
 .messageSimulator {
-  margin-bottom: 16px;
+  display: grid;
+  gap: 10px;
 }
 
 .messageSimulator textarea {
-  min-height: 88px;
+  min-height: 76px;
+}
+
+.messageHistoryWorkspace {
+  min-height: 620px;
+  display: grid;
+  grid-template-columns: minmax(260px, 0.36fr) minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid #d9e0e8;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.conversationList {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-right: 1px solid #d9e0e8;
+  background: #f8fafc;
+}
+
+.conversationSearch {
+  position: relative;
+  display: block;
+  padding: 12px;
+}
+
+.conversationSearch svg {
+  position: absolute;
+  left: 22px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #667489;
+}
+
+.conversationSearch input {
+  padding-left: 34px;
+}
+
+.conversationListBody {
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid #e5eaf0;
+}
+
+.conversationItem {
+  width: 100%;
+  min-height: 112px;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  border: 0;
+  border-bottom: 1px solid #e5eaf0;
+  border-radius: 0;
+  background: transparent;
+  padding: 14px 12px;
+  text-align: left;
+  white-space: normal;
+}
+
+.conversationItem:hover,
+.conversationItem.active {
+  background: #eaf4ff;
+}
+
+.conversationAvatar {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #94a3b8;
+  border-radius: 50%;
+  background: #0f172a;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.conversationText {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.conversationText strong,
+.conversationText span,
+.conversationText em,
+.conversationText small,
+.conversationItem time {
+  min-width: 0;
+  overflow: hidden;
+  color: #526071;
+  text-overflow: ellipsis;
+}
+
+.conversationText strong {
+  color: #1f2937;
+  font-size: 15px;
+}
+
+.conversationText em {
+  display: -webkit-box;
+  font-style: normal;
+  line-height: 1.45;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.conversationItem time {
+  max-width: 72px;
+  font-size: 12px;
+}
+
+.conversationDetail {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: linear-gradient(128deg, #ffffff 0%, #f6fbff 100%);
+}
+
+.conversationHeader {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid #d9e0e8;
+  background: #ffffff;
+}
+
+.conversationHeader h3 {
+  margin: 0 0 4px;
+}
+
+.conversationHeader > div {
+  min-width: 0;
+}
+
+.conversationHeader h3,
+.conversationHeader p {
+  overflow-wrap: anywhere;
+}
+
+.conversationHeader p,
+.conversationHeader span {
+  color: #667489;
+  font-size: 13px;
+}
+
+.conversationTimeline {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: auto;
+  padding: 22px;
+}
+
+.chatBubble {
+  width: min(540px, 72%);
+  display: grid;
+  gap: 8px;
+  border: 1px solid #d9e0e8;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 12px 14px;
+}
+
+.chatBubble.agent {
+  align-self: flex-end;
+  border-color: #9ac3e8;
+  background: #e8f4ff;
+}
+
+.chatBubble.buyer {
+  align-self: flex-start;
+}
+
+.chatBubbleMeta,
+.chatBubbleFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: #667489;
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.chatBubble p {
+  color: #1f2937;
+  line-height: 1.58;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chatBubbleFooter small {
+  color: #526071;
+}
+
+.conversationActionOnly {
+  display: flex;
+  justify-content: center;
+}
+
+.composerSimulator {
+  border-top: 1px solid #d9e0e8;
+  padding: 14px 18px;
+  background: #ffffff;
 }
 
 .messageTraceDrawer {
@@ -51,6 +263,37 @@
 }
 
 @media (max-width: 720px) {
+  .messageHistoryWorkspace {
+    min-height: auto;
+    grid-template-columns: 1fr;
+  }
+
+  .conversationList {
+    border-right: 0;
+    border-bottom: 1px solid #d9e0e8;
+  }
+
+  .conversationListBody {
+    max-height: 360px;
+  }
+
+  .conversationDetail {
+    min-height: 520px;
+  }
+
+  .conversationHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .conversationTimeline {
+    padding: 14px;
+  }
+
+  .chatBubble {
+    width: 92%;
+  }
+
   .traceSummary {
     grid-template-columns: 1fr;
   }
