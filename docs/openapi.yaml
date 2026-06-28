@@ -675,7 +675,7 @@ paths:
       operationId: adminOidcStart
       summary: 发起客户 Admin Fcihome Account OIDC 登录
       description: |
-        仅用于客户 Admin 登录页的 Fcihome Account 入口。接口创建短期 OIDC state / PKCE cookie 并重定向到 Fcihome Account；不会创建租户、店铺或权限，也不会设置系统后台 Cookie。
+        Fcihome Account OIDC 预留入口。当前客户 Admin 登录页的外部入口优先使用 open_erp_agent 微信授权桥接；本接口创建短期 OIDC state / PKCE cookie 并重定向到 Fcihome Account，不会创建租户、店铺或权限，也不会设置系统后台 Cookie。
       security: []
       responses:
         "307":

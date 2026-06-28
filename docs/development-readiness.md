@@ -54,7 +54,7 @@
 | 独立数据仓库和实时 BI | 第一版先用 PostgreSQL、trace、评测报告和后台查询满足排障与上线判断。 | [System Architecture](system-architecture.md)、[System Admin Design](system-admin-design.md) |
 | Redis 作为必需依赖 | dev 部署明确 Redis 暂不部署；后续需要 session cache、队列或异步任务时再引入。 | [Deployment](deployment.md) |
 | 供应商锁定 SSO / MFA / 复杂审批流 | 第一版使用 Agent 自有登录和权限；企业 SSO、MFA、规则灰度、审批流后续扩展。 | [Customer Admin Design](customer-admin-design.md)、[System Admin Design](system-admin-design.md) |
-| Fcihome Account / OIDC 统一身份 | PN-04 第一阶段只做统一门户入口、REST 契约和租户 / 店铺 / listing 映射；不共享 Cookie/session，不让微信登录自动登录 AI 客服后台。 | [HTTP API Design](http-api-design.md)、[Customer Admin Design](customer-admin-design.md) |
+| Fcihome Account / OIDC 统一身份 | PN-04 第一阶段允许 open_erp_agent 微信用户通过受控 launch ticket 桥接进入 Customer Admin；不共享 Cookie/session，不复用微信会话，不把微信或 ERP 登录态作为 Agent 默认身份源。Fcihome Account OIDC API 保留为后续统一身份能力。 | [HTTP API Design](http-api-design.md)、[Customer Admin Design](customer-admin-design.md) |
 | 买家会话接待界面 | 外部客服系统继续负责客服工作台、消息接收和真实发送。 | [Customer Admin Design](customer-admin-design.md)、[System Admin Design](system-admin-design.md) |
 | 系统后台替客户批量审核业务知识 | 系统后台做运营、排障和治理，不默认代替客户完成知识审核。 | [System Admin Design](system-admin-design.md) |
 | 大规模 LLM 盲测作为 PR 默认项 | PR 默认跑确定性自动化；盲测用于每日、发布前和失败沉淀回归。 | [Automated Blind Testing Design](superpowers/specs/2026-06-14-automated-blind-testing-design.md) |

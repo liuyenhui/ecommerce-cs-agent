@@ -46,6 +46,8 @@ const customerTabs: Array<NavItem<CustomerTab>> = [
   { key: "audit", label: "审计查询", icon: <ClipboardList size={17} /> }
 ];
 
+const openErpAiCsLoginUrl = "https://www.fcihome.com/ai-cs/customer-admin-login";
+
 type CustomerTrace = JsonRecord & {
   decision_id?: string;
   request_id?: string;
@@ -163,8 +165,8 @@ export function App() {
             navigate("/admin");
           }}
           secondaryAction={{
-            label: "使用 Fcihome Account 登录",
-            onClick: () => window.location.assign("/v1/admin/auth/oidc/start"),
+            label: "使用 open_erp_agent 微信登录",
+            onClick: () => window.location.assign(openErpAiCsLoginUrl),
             icon: <ShieldCheck size={16} />
           }}
           setToast={setToast}

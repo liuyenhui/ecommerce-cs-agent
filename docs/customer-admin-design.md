@@ -130,7 +130,7 @@
 | 页面 | 核心能力 |
 | --- | --- |
 | 公开宣传页 | 产品介绍、能力摘要、后台产品预览和登录按钮；Hero 下方展示商品信息、AI 自学习、AI 客服回复可控 3 张产品演示轮播；“怎么工作”段落使用短 GIF 或等效动效展示上传商品说明书 → AI 学习 → 模拟问答 → AI 自动回复；不展示租户数据。 |
-| 登录页 | 用户使用邮箱和密码登录，或通过“使用 Fcihome Account 登录”发起客户后台 OIDC；会话续期、退出登录、登录失败提示；不要求或展示组织 ID。 |
+| 登录页 | 用户使用邮箱和密码登录，或通过“使用 open_erp_agent 微信登录”进入受控授权桥接；会话续期、退出登录、登录失败提示；不要求或展示组织 ID。 |
 | 店铺选择 | 显示当前用户可访问店铺；内部租户归属由 session 和权限模型确定，不在客户 UI 中展示组织 ID。 |
 | 首页概览 | 展示资料缺口、待审核知识、价格过期、规则未启用、动作能力异常和最近变更。 |
 | 商品资料 | 以商品主数据列表为第一入口，展示商品名称、外部商品 ID、店铺、状态、资料健康和更新时间。 |
@@ -263,16 +263,18 @@
 
 第一版不设计 ERP 专属 SSO，也不把任何外部系统作为统一身份源。客户 Admin 默认使用 Agent 自有登录、租户、店铺、成员和 session 模型。
 
-Customer Admin 第一版允许接入 Fcihome Account OIDC，但它只确认“是谁”，不自动创建租户、店铺或权限：
+Customer Admin 第一版允许保留 Fcihome Account OIDC API，但公开登录页的外部入口优先使用 open_erp_agent 微信授权桥接。桥接只确认“当前 open_erp_agent 微信用户可管理某个已绑定店铺”，不把微信登录态升级为 Agent 身份源：
 
-- Fcihome Account 入口只在 Customer Admin 登录页出现，按钮文案为“使用 Fcihome Account 登录”；System Admin 第一版不接 OIDC。
+- Customer Admin 登录页外部入口按钮文案为“使用 open_erp_agent 微信登录”，跳转到 `https://www.fcihome.com/ai-cs/customer-admin-login`。
+- open_erp_agent 完成微信 web session 校验和店铺管理权限校验后，通过服务间接口签发一次性短期 launch ticket；Customer Admin `/launch?token=...` 兑换成功后只设置客户后台 `agent_admin_session`。
+- Fcihome Account OIDC API 可保留为后续企业统一身份能力；System Admin 第一版不接 OIDC。
 - OIDC 成功后只设置客户后台 `agent_admin_session`，不得设置、读取或复用 `agent_system_admin_session`。
 - 已绑定 `admin_user.fcihome_account_sub` 的 active 用户可直接登录。
 - 未绑定时，仅当 OIDC email 精确匹配唯一 active `admin_user`，才允许写入 `fcihome_account_sub` 并记录客户后台审计。
 - 不匹配、重复匹配、未验证或缺失必要 OIDC 身份信息时必须拒绝登录，并在登录页区分“OIDC 未绑定账号”“OIDC 配置未启用”“state/PKCE 校验失败”等错误。
 - `POST /v1/admin/auth/oidc/link` 必须由后端校验 OIDC code / state / PKCE 并换取 userinfo 后再绑定，不能信任前端直接提交的 subject 或 email。
 - 审计只记录 provider、绑定原因、动作和对象，不记录 token、code、Cookie、client_secret、密码或完整 OIDC 响应。
-- 不读取 `open_erp_agent` SQLite，不共享 Cookie，不把微信登录或任何 ERP 登录态当作 AI 客服 Admin 身份源。
+- Customer Admin 不读取 `open_erp_agent` SQLite，不共享 Cookie，不接收微信或 ERP session；只接受 Agent 签发并可一次性兑换的 launch token。
 
 后续如果需要企业 SSO，应使用 provider-agnostic 的 OIDC、SAML 或企业 IdP 接入模型，并满足：
 

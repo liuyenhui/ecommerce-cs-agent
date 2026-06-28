@@ -67,7 +67,7 @@ test("customer admin source stays inside customer auth and host boundary", () =>
   assert.doesNotMatch(source, /\b(SystemSite|SystemWorkspace|SystemHome|TenantManagement|TraceTable|TaskCenter|HealthPanel|SystemCreateModal)\b/);
 });
 
-test("customer admin login page keeps customer-only email password and fcihome account entry", () => {
+test("customer admin login page keeps customer-only email password and open erp wechat bridge entry", () => {
   const customerApp = readRelative("customer-admin/src/App.tsx");
   const sharedComponents = readRelative("shared/components.tsx");
   const loginRoute = sliceBetween(customerApp, 'if (path === "/login")', 'if (path.startsWith("/admin"))');
@@ -75,8 +75,8 @@ test("customer admin login page keeps customer-only email password and fcihome a
   const loginSource = `${loginRoute}\n${loginPanel}`;
 
   assert.match(loginSource, /客户后台登录/);
-  assert.match(loginSource, /使用 Fcihome Account 登录/);
-  assert.match(loginSource, /\/v1\/admin\/auth\/oidc\/start/);
+  assert.match(loginSource, /使用 open_erp_agent 微信登录/);
+  assert.match(customerApp, /https:\/\/www\.fcihome\.com\/ai-cs\/customer-admin-login/);
   assert.match(loginSource, /邮箱/);
   assert.match(loginSource, /密码/);
   assert.doesNotMatch(loginSource, /组织 ID/);
