@@ -4,6 +4,10 @@
 
 ## 最近文档更新
 
+### 2026-06-29
+
+- Customer Admin 登录页的外部入口改为 open_erp_agent 微信授权桥接：用户先在 `www.fcihome.com/ai-cs/customer-admin-login` 完成 open_erp_agent 微信登录和店铺校验，再由 open_erp_agent 服务端签发一次性短期 launch ticket 进入 Customer Admin；仍禁止共享 Cookie、微信/PDD session、open_erp SQLite 或外部系统登录态。
+
 ### 2026-06-26
 
 - Customer Admin 消息历史 UI 调整为会话工作台：左侧会话搜索列表，右侧聊天时间线和模拟咨询；主界面不做“全部 / 待回复 / 买家 / 含订单 / 本地历史”筛选，也不展示已读 / 状态标签，决策状态保留在决策路径详情中用于排障。
