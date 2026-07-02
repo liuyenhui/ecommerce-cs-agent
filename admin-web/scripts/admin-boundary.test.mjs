@@ -85,6 +85,17 @@ test("customer admin login page keeps customer-only email password and open erp 
   assert.doesNotMatch(loginSource, /system-admin/i);
 });
 
+test("customer admin launch exchange submits each one-time token only once in dev", () => {
+  const customerApp = readRelative("customer-admin/src/App.tsx");
+  const launchExchange = sliceBetween(customerApp, "function LaunchExchange", "function MessageHistory");
+
+  assert.match(launchExchange, /useRef/);
+  assert.match(launchExchange, /exchangedLaunchTokenRef/);
+  assert.match(launchExchange, /exchangedLaunchTokenRef\.current === token/);
+  assert.match(launchExchange, /exchangedLaunchTokenRef\.current = token/);
+  assert.match(launchExchange, /\/v1\/admin\/auth\/launch\/exchange/);
+});
+
 test("system admin source stays inside system auth boundary", () => {
   const source = collectSource("system-admin/src");
 

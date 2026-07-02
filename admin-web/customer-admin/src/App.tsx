@@ -511,6 +511,7 @@ function CustomerOverview({ session, data, setActiveTab }: { session: JsonRecord
 
 function LaunchExchange({ onExchanged, setToast }: { onExchanged: (session: JsonRecord) => void; setToast: (toast: ToastState) => void }) {
   const [error, setError] = React.useState<string | null>(null);
+  const exchangedLaunchTokenRef = React.useRef("");
 
   React.useEffect(() => {
     const token = new URLSearchParams(window.location.search).get("token") || "";
@@ -518,6 +519,8 @@ function LaunchExchange({ onExchanged, setToast }: { onExchanged: (session: Json
       setError("启动票据缺失，请从 open_erp_agent 客户端重新打开。");
       return;
     }
+    if (exchangedLaunchTokenRef.current === token) return;
+    exchangedLaunchTokenRef.current = token;
     requestJson("/v1/admin/auth/launch/exchange", {
       method: "POST",
       body: JSON.stringify({ launch_token: token })

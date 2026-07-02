@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import pytest
@@ -41,6 +42,13 @@ def test_admin_auth_password_matches_bcrypt_hashes() -> None:
     assert _password_matches("admin@example.test", "password", "admin@example.test", bcrypt_hash)
     assert not _password_matches("admin@example.test", "wrong", "admin@example.test", bcrypt_hash)
     assert not _password_matches("other@example.test", "password", "admin@example.test", bcrypt_hash)
+
+
+def test_postgres_launch_login_commits_bootstrap_before_loading_session_context() -> None:
+    source = inspect.getsource(PostgresAdminAuthService.login_launch)
+
+    assert "conn.commit()" in source
+    assert source.index("conn.commit()") < source.index("return self.me(session), token")
 
 
 def test_postgres_admin_auth_login_bootstraps_user_and_persists_hashed_session() -> None:

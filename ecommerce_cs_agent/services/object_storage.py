@@ -5,6 +5,7 @@ import base64
 from datetime import datetime, timezone
 import hashlib
 import hmac
+import os
 from pathlib import Path
 from typing import Any, Protocol
 from urllib import request as urllib_request
@@ -279,11 +280,17 @@ def _validate_object_storage_endpoint(endpoint: str) -> str:
         if parsed.username or parsed.password:
             raise ObjectStorageValidationError("object storage endpoint must not contain credentials") from exc
         host = (parsed.hostname or "").lower().rstrip(".")
+        if _is_local_acs_debug_endpoint(parsed.scheme, host):
+            return endpoint.rstrip("/")
         if parsed.scheme in {"http", "https"} and _is_kubernetes_service_host(host):
             return endpoint.rstrip("/")
         raise ObjectStorageValidationError(
             "object storage endpoint must be a public https URL or Kubernetes service URL"
         ) from exc
+
+
+def _is_local_acs_debug_endpoint(scheme: str, host: str) -> bool:
+    return os.environ.get("ACS_DEBUG_MODE") == "local-acs" and scheme == "http" and host in {"127.0.0.1", "localhost", "::1"}
 
 
 def _is_kubernetes_service_host(host: str) -> bool:

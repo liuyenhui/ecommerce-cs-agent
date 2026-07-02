@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev:customer": "vite --mode customer --host 127.0.0.1 --port 5173",
     "build": "npm run build:customer && npm run build:system",
     "build:customer": "vite build --mode customer",
     "build:system": "vite build --mode system",

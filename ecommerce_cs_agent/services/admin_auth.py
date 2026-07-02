@@ -597,6 +597,7 @@ class PostgresAdminAuthService:
                         "connector_id": ticket.connector_id,
                     },
                 )
+                conn.commit()
                 return self.me(session), token
 
     def link_oidc(self, session: AdminSession, profile: dict[str, Any]) -> dict[str, Any]:
