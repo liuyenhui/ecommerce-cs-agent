@@ -91,6 +91,79 @@ def test_decision_graph_action_request_and_trace_match_contract() -> None:
         "persistence",
         "feedback",
     }
+    graph = response["trace"]["graph"]
+    assert [node["id"] for node in graph["nodes"]] == [
+        "normalize_request",
+        "retrieve_context",
+        "classify_intent",
+        "context_gate",
+        "action_gate",
+        "generate_candidate",
+        "policy_gate",
+        "persist_trace",
+    ]
+    assert graph["edges"][-1] == {
+        "source": "policy_gate",
+        "target": "persist_trace",
+        "label": "记录检查点",
+        "condition": "persist",
+        "taken": True,
+    }
+    assert any(edge["condition"] == "action_request" and edge["taken"] for edge in graph["edges"])
+
+
+def test_decision_graph_trace_graph_marks_context_request_branch() -> None:
+    service = DecisionService(Settings(environment="test"), repository=InMemoryDecisionRepository())
+
+    response = service.create_reply_decision(_request("req-context-graph", "这个商品什么时候发货？"))
+
+    assert response["action"] == "context_request"
+    graph = response["trace"]["graph"]
+    assert response["trace"]["thread_id"] == response["decision_id"]
+    assert [step["step_id"] for step in response["trace"]["steps"]] == [node["id"] for node in graph["nodes"]]
+    assert any(edge["condition"] == "context_request" and edge["taken"] for edge in graph["edges"])
+    assert any(edge["condition"] == "candidate" and not edge["taken"] for edge in graph["edges"])
+    context_gate = next(node for node in graph["nodes"] if node["id"] == "context_gate")
+    assert any(item.startswith("context_request:") for item in context_gate["outputs_ref"])
+
+
+def test_context_refill_resumes_same_thread_and_completes_graph() -> None:
+    repository = InMemoryDecisionRepository()
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    response = service.create_reply_decision(_request("req-refill-graph", "什么时候发货？"))
+    decision_id = response["decision_id"]
+
+    first = service.refill_context(
+        decision_id,
+        "orders",
+        {
+            "context_request_id": response["context_requests"][0]["context_request_id"],
+            "idempotency_key": "ctx-orders",
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "items": [{"external_order_id": "order-001", "status": "paid"}],
+        },
+    )
+    second = service.refill_context(
+        decision_id,
+        "logistics",
+        {
+            "context_request_id": response["context_requests"][1]["context_request_id"],
+            "idempotency_key": "ctx-logistics",
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "items": [{"external_logistics_id": "ship-001", "status": "in_transit"}],
+        },
+    )
+
+    assert first is not None
+    assert first["next_action"] == "wait_context"
+    assert second is not None
+    assert second["decision_id"] == decision_id
+    assert second["trace"]["thread_id"] == decision_id
+    assert second["action"] == "candidate"
+    assert second["missing_context"] == []
+    assert any(edge["condition"] == "candidate" and edge["taken"] for edge in second["trace"]["graph"]["edges"])
 
 
 def test_postgres_decision_repository_recalls_only_approved_accepted_knowledge() -> None:

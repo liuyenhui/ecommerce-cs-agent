@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
-import re
 import uuid
 from typing import Any
 
 from ecommerce_cs_agent.core.config import Settings
+from ecommerce_cs_agent.services.decision_graph import ReplyDecisionGraph
 from ecommerce_cs_agent.services.decision_types import DecisionState
 from ecommerce_cs_agent.services.llm import DeterministicReplyProvider, ReplyProvider
 from ecommerce_cs_agent.services.repository import (
@@ -14,13 +14,6 @@ from ecommerce_cs_agent.services.repository import (
     InMemoryDecisionRepository,
     PostgresDecisionRepository,
 )
-
-
-HIGH_RISK_KEYWORDS = ("退款", "赔偿", "投诉", "平台介入", "处罚", "refund", "complaint")
-TENANT_SECURITY_KEYWORDS = ("隔壁店", "别的店", "其他店", "别人店", "其它店", "跨店", "其他租户", "别的租户")
-SHIPPING_KEYWORDS = ("发货", "物流", "快递", "什么时候到", "ship", "shipping", "delivery")
-PRODUCT_KEYWORDS = ("商品", "产品", "材质", "尺寸", "颜色", "规格", "参数", "material", "size")
-ACTION_KEYWORDS = ("改备注", "备注", "改地址", "修改地址", "收货地址", "update note", "change address")
 
 
 class DecisionService:
@@ -33,6 +26,14 @@ class DecisionService:
         self.settings = settings
         self.repository = repository or _repository_for(settings)
         self.reply_provider = reply_provider or DeterministicReplyProvider()
+        self.graph = ReplyDecisionGraph(
+            settings=settings,
+            repository=self.repository,
+            reply_provider=self.reply_provider,
+            request_key=_request_key,
+            context_request_factory=self._context_request,
+            action_request_factory=self._action_request,
+        )
 
     def create_reply_decision(self, payload: dict[str, Any]) -> dict[str, Any]:
         organization_id, store_id, request_id = _request_key(payload)
@@ -79,10 +80,15 @@ class DecisionService:
         if existing and existing.get("_request_payload") != comparable:
             raise FileExistsError("idempotency conflict")
         if not existing:
+            accepted_request_ids = {
+                existing_payload.get("context_request_id")
+                for existing_payload in state.context_refills.values()
+            }
+            accepted_request_ids.add(context_request_id)
             remaining = [
                 item
                 for item in state.response.get("context_requests", [])
-                if item.get("context_request_id") != context_request_id
+                if item.get("context_request_id") not in accepted_request_ids
             ]
             accepted = {
                 "decision_id": decision_id,
@@ -101,9 +107,9 @@ class DecisionService:
                     thread_id=decision_id,
                 ),
             }
-            state.context_refills[key] = {**accepted, "_request_payload": comparable}
+            state.context_refills[key] = {**accepted, "_request_payload": comparable, "_context_type": context_type}
             if not remaining:
-                updated_request = _request_with_refill_context(state.request, context_type, payload)
+                updated_request = _request_with_refill_contexts(state.request, state.context_refills)
                 final_response = self._build_response(decision_id, updated_request, str(updated_request.get("message", {}).get("content", "")))
                 state.request = updated_request
                 state.response = final_response
@@ -222,106 +228,7 @@ class DecisionService:
         }
 
     def _build_response(self, decision_id: str, payload: dict[str, Any], content: str) -> dict[str, Any]:
-        lowered = content.lower()
-        organization_id, store_id, _request_id = _request_key(payload)
-        matched_knowledge = self.repository.recall_knowledge(organization_id, store_id, _knowledge_query(content), limit=5)
-        risk_flags: list[str] = []
-        if any(word in lowered or word in content for word in HIGH_RISK_KEYWORDS):
-            risk_flags.append("refund_or_complaint")
-        if any(word in lowered or word in content for word in TENANT_SECURITY_KEYWORDS) and (
-            "订单" in content or "信息" in content or "数据" in content or "order" in lowered or "data" in lowered
-        ):
-            risk_flags.append("cross_tenant_data_access")
-        missing_context = self._missing_context(payload, lowered, content, has_product_knowledge=bool(matched_knowledge))
-        action_requests: list[dict[str, Any]] = []
-        evidence = [_knowledge_evidence(item) for item in matched_knowledge]
-
-        if risk_flags:
-            action = "handoff"
-            status = "handoff"
-            confidence = 0.34
-            risk_level = "high"
-            candidates: list[dict[str, Any]] = []
-            handoff_reason = "cross_tenant_data_access" if "cross_tenant_data_access" in risk_flags else "high_risk_request"
-        elif any(word in lowered or word in content for word in ACTION_KEYWORDS):
-            action = "action_request"
-            status = "action_request"
-            confidence = 0.66
-            risk_level = "medium"
-            candidates = []
-            handoff_reason = None
-            action_requests = [self._action_request(decision_id, payload, content)]
-        elif missing_context:
-            action = "context_request"
-            status = "waiting_context"
-            confidence = 0.72
-            risk_level = "medium"
-            candidates = []
-            handoff_reason = None
-        else:
-            action = "candidate"
-            status = "candidate"
-            confidence = 0.68
-            risk_level = "low"
-            candidates = [
-                {
-                    "suggestion_id": f"suggestion-{decision_id[-8:]}",
-                    "reply_text": self.reply_provider.generate_candidate(message=content, knowledge=matched_knowledge),
-                    "evidence": evidence,
-                    "confidence": 0.68,
-                }
-            ]
-            handoff_reason = None
-
-        context_requests = [
-            self._context_request(decision_id, context_type, payload)
-            for context_type in missing_context
-        ]
-        trace = self._trace(
-            "classify_intent",
-            "classify_intent",
-            inputs_ref=[f"message:{payload.get('message', {}).get('external_message_id', '')}"],
-            outputs_ref=[f"decision:{decision_id}"],
-            rule_hits=risk_flags,
-            matched_knowledge=matched_knowledge,
-            graph=True,
-        )
-        trace["tenant_id"] = payload.get("tenant_id") or payload.get("organization_id")
-        trace["external_store_id"] = payload.get("external_store_id") or payload.get("store_id")
-        trace["platform_account_ref"] = payload.get("platform_account_ref")
-        trace["listing_ref"] = payload.get("listing_ref")
-        trace["connector_id"] = payload.get("connector_id")
-        trace["billing_reservation_id"] = payload.get("billing_reservation_id")
-        return {
-            "decision_id": decision_id,
-            "decision_status": status,
-            "action": action,
-            "candidates": candidates,
-            "auto_reply": None,
-            "context_requests": context_requests,
-            "action_requests": action_requests,
-            "action_request": action_requests[0] if action_requests else None,
-            "confidence": confidence,
-            "risk_level": risk_level,
-            "risk_flags": risk_flags,
-            "missing_context": missing_context,
-            "handoff_reason": handoff_reason,
-            "trace": trace,
-        }
-
-    def _missing_context(self, payload: dict[str, Any], lowered: str, content: str, *, has_product_knowledge: bool = False) -> list[str]:
-        context = payload.get("context") or {}
-        missing: list[str] = []
-        asks_shipping = any(word in lowered or word in content for word in SHIPPING_KEYWORDS)
-        if asks_shipping:
-            if not context.get("orders"):
-                missing.append("orders")
-            if not context.get("logistics"):
-                missing.append("logistics")
-        asks_product = any(word in lowered or word in content for word in PRODUCT_KEYWORDS)
-        if asks_product and not context.get("products") and not has_product_knowledge:
-            missing.append("products")
-        return missing
+        return self.graph.invoke(decision_id, payload, content)
 
     def _context_request(self, decision_id: str, context_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         context_request_id = f"ctx-{context_type}-{decision_id[-8:]}"
@@ -492,30 +399,21 @@ def _request_with_refill_context(request: dict[str, Any], context_type: str, pay
     return updated
 
 
-def _knowledge_evidence(item: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "knowledge_entry_id": item.get("knowledge_entry_id"),
-        "product_id": item.get("product_id"),
-        "scope": item.get("scope"),
-        "source_type": "approved_knowledge",
-        "chunk_index": item.get("chunk_index", 0),
-    }
-
-
-def _knowledge_query(content: str) -> str:
-    normalized = content.lower()
-    terms: list[str] = []
-    for keyword in (*PRODUCT_KEYWORDS, *SHIPPING_KEYWORDS, *ACTION_KEYWORDS):
-        if keyword in normalized or keyword in content:
-            terms.append(keyword)
-    terms.extend(re.findall(r"[a-zA-Z0-9][a-zA-Z0-9_-]{1,31}", normalized))
-    seen: set[str] = set()
-    unique_terms = []
-    for term in terms:
-        if term not in seen:
-            seen.add(term)
-            unique_terms.append(term)
-    return " ".join(unique_terms)
+def _request_with_refill_contexts(request: dict[str, Any], refills: dict[tuple[str, str], dict[str, Any]]) -> dict[str, Any]:
+    updated = dict(request)
+    context = dict(updated.get("context") or {})
+    for refill in refills.values():
+        context_type = str(refill.get("_context_type") or "")
+        if not context_type:
+            continue
+        existing = context.get(context_type)
+        items = list(refill.get("_request_payload", {}).get("items") or [])
+        if isinstance(existing, list):
+            context[context_type] = [*existing, *items]
+        else:
+            context[context_type] = items
+    updated["context"] = context
+    return updated
 
 
 def _thread_id_from_refs(outputs_ref: list[str] | None) -> str | None:

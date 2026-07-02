@@ -30,6 +30,7 @@ import {
   useCloseOnEscape
 } from "../../shared/components";
 import { arrayFrom, buildQuery, readRecord, toneFor } from "../../shared/data";
+import { DecisionTraceReplay } from "../../shared/trace-replay";
 import type { JsonRecord, NavItem, Page, ToastState } from "../../shared/types";
 
 type SystemTab = "home" | "tenants" | "traces" | "tasks" | "audit" | "health";
@@ -134,6 +135,7 @@ function SystemWorkspace({ session, activeTab, setActiveTab, setToast }: {
   const [filters, setFilters] = React.useState<SystemFiltersState>({ organization_id: "", store_id: "", status: "", trace_id: "" });
   const [data, setData] = React.useState<Record<string, unknown>>({});
   const [selected, setSelected] = React.useState<JsonRecord | null>(null);
+  const [traceDetail, setTraceDetail] = React.useState<JsonRecord | null>(null);
   const [modal, setModal] = React.useState<"organization" | "store" | null>(null);
 
   async function refresh() {
@@ -168,13 +170,28 @@ function SystemWorkspace({ session, activeTab, setActiveTab, setToast }: {
     void refresh();
   }, []);
 
+  async function openTraceReplay(record: JsonRecord) {
+    const decisionId = String(record.decision_id || "").trim();
+    if (!decisionId) {
+      setToast({ tone: "error", text: "缺少 Decision ID，无法打开回放" });
+      return;
+    }
+    try {
+      const detail = await requestJson<JsonRecord>(`/v1/system-admin/message-traces/${decisionId}`);
+      setTraceDetail(detail);
+      setSelected(null);
+    } catch (error) {
+      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
   return (
     <div className="workGrid">
       <section className="contentPane">
         <SystemFilters filters={filters} setFilters={setFilters} refresh={refresh} />
         {activeTab === "home" ? <SystemHome data={data} setActiveTab={setActiveTab} /> : null}
         {activeTab === "tenants" ? <TenantManagement data={data} setModal={setModal} setSelected={setSelected} /> : null}
-        {activeTab === "traces" ? <TraceTable rows={arrayFrom(data.traces)} filters={filters} setSelected={setSelected} /> : null}
+        {activeTab === "traces" ? <TraceTable rows={arrayFrom(data.traces)} filters={filters} setSelected={setSelected} openTraceReplay={openTraceReplay} /> : null}
         {activeTab === "tasks" ? <TaskCenter rows={arrayFrom(data.tasks)} setToast={setToast} refresh={refresh} setSelected={setSelected} /> : null}
         {activeTab === "audit" ? <AuditTable title="系统审计" rows={arrayFrom(data.audit)} onSelect={setSelected} /> : null}
         {activeTab === "health" ? <HealthPanel health={readRecord(data, "health")} /> : null}
@@ -186,6 +203,7 @@ function SystemWorkspace({ session, activeTab, setActiveTab, setToast }: {
         <Metric label="任务" value={String(arrayFrom(data.tasks).length)} tone="bad" />
         <SystemUserSummary user={readRecord(session, "user")} />
       </ContextPanel>
+      {traceDetail ? <SystemTraceDrawer detail={traceDetail} onClose={() => setTraceDetail(null)} /> : null}
       {selected ? <Drawer title="详情" record={selected} onClose={() => setSelected(null)} /> : null}
       {modal ? <SystemCreateModal type={modal} onClose={() => setModal(null)} setToast={setToast} refresh={refresh} /> : null}
     </div>
@@ -226,13 +244,62 @@ function TenantManagement({ data, setModal, setSelected }: { data: Record<string
   );
 }
 
-function TraceTable({ rows, filters, setSelected }: { rows: JsonRecord[]; filters: Record<string, string>; setSelected: (record: JsonRecord) => void }) {
+function TraceTable({
+  rows,
+  filters,
+  setSelected,
+  openTraceReplay
+}: {
+  rows: JsonRecord[];
+  filters: Record<string, string>;
+  setSelected: (record: JsonRecord) => void;
+  openTraceReplay: (record: JsonRecord) => Promise<void>;
+}) {
   const filtered = filters.trace_id ? rows.filter((row) => String(row.decision_id || "").includes(filters.trace_id)) : rows;
   return (
     <>
       <SectionHeader label="TRACE" title="决策追踪" />
-      <DataTable title="消息决策" rows={filtered} fields={["decision_id", "organization_id", "store_id", "status", "risk_level", "created_at"]} onSelect={setSelected} emptyState={{ title: filters.trace_id ? "未找到匹配决策" : "暂无消息决策", description: filters.trace_id ? "当前 Decision ID 没有匹配记录；请检查 ID 是否完整，或清空筛选后重新查询。" : "填写组织 ID、店铺 ID 或 Decision ID 后查询决策追踪记录。" }} />
+      <DataTable
+        title="消息决策"
+        rows={filtered}
+        fields={["decision_id", "organization_id", "store_id", "status", "risk_level", "created_at"]}
+        onSelect={setSelected}
+        action={(row) => <button onClick={() => void openTraceReplay(row)}><Search size={15} />运行回放</button>}
+        emptyState={{ title: filters.trace_id ? "未找到匹配决策" : "暂无消息决策", description: filters.trace_id ? "当前 Decision ID 没有匹配记录；请检查 ID 是否完整，或清空筛选后重新查询。" : "填写组织 ID、店铺 ID 或 Decision ID 后查询决策追踪记录。" }}
+      />
     </>
+  );
+}
+
+function SystemTraceDrawer({ detail, onClose }: { detail: JsonRecord; onClose: () => void }) {
+  const trace = readRecord(detail, "trace");
+  const runtimeTrace = readRecord(trace, "trace");
+  return (
+    <aside className="drawer messageTraceDrawer">
+      <div className="drawerHeader">
+        <h2>决策运行回放</h2>
+        <button onClick={onClose}>关闭</button>
+      </div>
+      <div className="traceSummary">
+        <Metric label="动作" value={String(trace.action || "-")} tone="info" />
+        <Metric label="状态" value={String(trace.decision_status || "-")} tone="ok" />
+        <Metric label="风险" value={String(trace.risk_level || "-")} tone="warn" />
+      </div>
+      <section className="traceTextBlock">
+        <h3>客户消息</h3>
+        <p>{String(trace.customer_message || "-")}</p>
+        <h3>AI 回复</h3>
+        <p>{String(trace.ai_reply || "当前决策未生成可直接发送回复。")}</p>
+        {trace.human_reply ? (
+          <>
+            <h3>人工回复</h3>
+            <p>{String(trace.human_reply)}</p>
+          </>
+        ) : null}
+      </section>
+      <DecisionTraceReplay trace={runtimeTrace} status={String(trace.decision_status || trace.action || "")} />
+      <pre className="recordSummary">{JSON.stringify({ audit_log_id: detail.audit_log_id, trace_ref: trace.decision_id }, null, 2)}</pre>
+    </aside>
   );
 }
 

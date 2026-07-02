@@ -344,13 +344,12 @@ trace_steps[]
 
 | LangGraph 节点 | 职责 | 可中断 / 恢复点 |
 | --- | --- | --- |
-| `ingest_request` | 接收最小问答请求，创建 `decision_id` 和初始 graph state | 否 |
-| `context_gap_check` | 轻量判断当前问题需要哪些商品、订单、物流或规则上下文 | 缺上下文时返回 `context_requests[]` |
-| `merge_context_refill` | 合并 `/contexts/*` 回填数据，选择最近有效快照 | 部分回填时保持 `partial_context` |
-| `intent_and_risk` | 规则优先识别意图和风险，LLM 只做辅助分类 | 高风险可直接 `handoff` |
-| `retrieval` | 召回审核通过知识、商品知识、规则和历史人工回复 | 否 |
-| `reply_generation` | 生成候选回复，不决定是否可自动发送 | 否 |
-| `action_planning` | 把“改备注”“改地址”等诉求转成 `action_request` | 等待外部 `actions/results` |
+| `normalize_request` | 归一化外部请求、绑定 `decision_id/thread_id`、记录消息引用 | 否 |
+| `retrieve_context` | 召回审核通过知识、商品知识、规则和历史人工回复引用 | 否 |
+| `classify_intent` | 规则优先识别意图、风险和缺失上下文，LLM 只做辅助分类 | 高风险可进入 `handoff` |
+| `context_gate` | 判断是否需要 `context_requests[]`，并标记本次运行走过的条件边 | 缺上下文时返回 `context_requests[]` |
+| `action_gate` | 把“改备注”“改地址”等诉求转成 `action_request` | 等待外部 `actions/results` |
+| `generate_candidate` | 生成候选回复，不决定是否可自动发送 | 否 |
 | `policy_gate` | 规则闸门最终输出 `auto_reply`、`candidate` 或 `handoff` | 人工确认可作为 interrupt |
 | `persist_trace` | 将节点输入输出引用、耗时、错误和降级原因写入 `decision_record.trace.steps` | 否 |
 
@@ -358,6 +357,7 @@ trace_steps[]
 
 - LangGraph state 只保存引用、状态和结构化中间结果；原始消息、商品、订单、物流、规则和知识正文仍落业务表或对象存储。
 - 每个 graph 节点必须输出可映射到 `decision_record.trace.steps[]` 的 step 记录。
+- `decision_record.trace.graph.nodes[]` / `edges[]` 是 Admin 单条消息运行回放的数据源；Customer Admin 只显示本店铺脱敏回放，System Admin 详情继续按 raw payload 权限和原因审计控制。
 - `decision_id` 是外部 API 主键，也是 graph `thread_id`；补上下文和动作结果只恢复同一个 thread，不新建决策。
 - `graph_version` 必须写入 checkpoint 和 trace，避免后续节点、状态 schema 变化导致旧决策无法回放。
 - API 服务保持 k8s 无状态；LangGraph checkpoint 使用 PostgreSQL、Redis 或等价外部存储，不能使用进程内内存作为生产状态。

@@ -10,6 +10,7 @@ const customerApp = read('admin-web/customer-admin/src/App.tsx');
 const systemApp = read('admin-web/system-admin/src/App.tsx');
 const sharedComponents = read('admin-web/shared/components.tsx');
 const sharedData = read('admin-web/shared/data.tsx');
+const sharedTraceReplay = read('admin-web/shared/trace-replay.tsx');
 const styles = [
   read('admin-web/shared/styles/base.css'),
   read('admin-web/customer-admin/src/styles.css'),
@@ -23,7 +24,7 @@ const customerWorkspace = customerApp.slice(customerApp.indexOf('function Custom
 const customerOverview = customerApp.slice(customerApp.indexOf('function CustomerOverview'), customerApp.indexOf('function ProductContent'));
 const messageHistory = customerApp.slice(customerApp.indexOf('function MessageHistory'), customerApp.indexOf('function MessageTraceDrawer'));
 const productContent = customerApp.slice(customerApp.indexOf('function ProductContent'), customerApp.indexOf('function ProductUploadModal'));
-const allSource = [customerApp, systemApp, sharedComponents, sharedData].join('\n');
+const allSource = [customerApp, systemApp, sharedComponents, sharedData, sharedTraceReplay].join('\n');
 
 const checks = [
   ['Admin Web regression guard is wired into npm test', packageJson.includes('assert-ui-regressions.mjs')],
@@ -42,7 +43,9 @@ const checks = [
   ['Customer overview copy avoids organization wording', !customerOverview.includes('可访问组织') && !customerOverview.includes('ListPanel title="组织"')],
   ['Customer message history renders conversation workspace instead of table', messageHistory.includes('messageHistoryWorkspace') && messageHistory.includes('conversationList') && messageHistory.includes('conversationTimeline') && !messageHistory.includes('<DataTable')],
   ['Customer message history has no status filters or read-state labels', !messageHistory.includes('待回复') && !messageHistory.includes('含订单') && !messageHistory.includes('本地历史') && !messageHistory.includes('客户已读') && !messageHistory.includes('已读/状态')],
-  ['Customer decision graph loads X6 lazily to keep the initial bundle below warning size', !customerApp.includes('from "@antv/x6"') && customerApp.includes('import("@antv/x6")')],
+  ['Customer decision graph loads X6 lazily to keep the initial bundle below warning size', !allSource.includes('from "@antv/x6"') && sharedTraceReplay.includes('import("@antv/x6")')],
+  ['Customer decision graph renders runtime trace.graph instead of fixed eight-step placeholder', customerApp.includes('DecisionTraceReplay') && sharedTraceReplay.includes('readTraceGraph') && sharedTraceReplay.includes('graphData.nodes') && sharedTraceReplay.includes('edge.taken') && !sharedTraceReplay.includes('接收消息", "字段映射"')],
+  ['System Admin decision trace detail fetches per-decision replay and renders the shared graph', systemApp.includes('/v1/system-admin/message-traces/${decisionId}') && systemApp.includes('DecisionTraceReplay') && systemApp.includes('traceDetail')],
   ['Product content renders a product list and upload CTA', productContent.includes('上传商品') && productContent.includes('DataTable') && productContent.includes('商品列表')],
   ['Product content no longer exposes manual maintenance forms', !productContent.includes('保存商品') && !productContent.includes('登记资产') && !productContent.includes('转换并抽取') && !productContent.includes('保存价格快照')],
   ['DataTable cells expose mobile data labels', sharedComponents.includes('data-label={fieldLabel(field)}') && sharedComponents.includes('data-label="操作"')],

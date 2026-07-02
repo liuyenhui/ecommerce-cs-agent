@@ -165,15 +165,21 @@ def test_reply_decision_trace_contains_replayable_graph_steps():
     steps = response.json()["trace"]["steps"]
     names = [step["name"] for step in steps]
     assert names == [
-        "normalize",
+        "normalize_request",
         "retrieve_context",
         "classify_intent",
-        "risk_policy",
+        "context_gate",
+        "action_gate",
         "generate_candidate",
+        "policy_gate",
         "persist_trace",
     ]
     assert all(step["status"] == "completed" for step in steps)
     assert all(step["outputs_ref"] for step in steps)
+    graph = response.json()["trace"]["graph"]
+    assert [node["id"] for node in graph["nodes"]] == names
+    assert graph["edges"]
+    assert any(edge["condition"] == "context_request" and edge["taken"] for edge in graph["edges"])
 
 
 def test_high_risk_message_is_not_auto_replied():
@@ -331,6 +337,8 @@ def test_feedback_and_message_trace_round_trip():
     assert trace.status_code == 200
     assert trace.json()["decision_id"] == decision["decision_id"]
     assert trace.json()["request_id"] == "req-feedback"
+    assert trace.json()["trace"]["graph"]["nodes"]
+    assert trace.json()["trace"]["graph"]["edges"]
 
 
 def test_customer_admin_message_traces_are_scoped_to_session_store():
@@ -356,6 +364,7 @@ def test_customer_admin_message_traces_are_scoped_to_session_store():
     assert [item["decision_id"] for item in body["items"]] == [visible["decision_id"]]
     assert body["items"][0]["store_id"] == "store-001"
     assert body["items"][0]["customer_message"] == "这个商品有什么材质？"
+    assert body["items"][0]["trace"]["graph"]["nodes"]
 
 
 def test_customer_admin_simulation_creates_trace_without_external_send():

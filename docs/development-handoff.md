@@ -4,6 +4,10 @@
 
 ## 最近文档更新
 
+### 2026-06-30
+
+- ACS 决策编排第一版接入 LangGraph 运行回放契约：`trace.steps` 继续保留线性节点记录，新增 `trace.graph.nodes[]` / `trace.graph.edges[]` 供 Customer Admin 本店铺脱敏回放和 System Admin 跨租户排障回放使用；`decision_id` 仍映射 `thread_id`，checkpoint 继续复用 `decision_graph_checkpoint`。
+
 ### 2026-06-29
 
 - Customer Admin 登录页的外部入口改为 open_erp_agent 微信授权桥接：用户先在 `www.fcihome.com/ai-cs/customer-admin-login` 完成 open_erp_agent 微信登录和店铺校验，再由 open_erp_agent 服务端签发一次性短期 launch ticket 进入 Customer Admin；仍禁止共享 Cookie、微信/PDD session、open_erp SQLite 或外部系统登录态。

@@ -169,7 +169,7 @@
 | 价格快照 | `POST /v1/product-content/price-snapshots`、`GET /v1/product-content/products/{product_id}/health` | 维护价格快照并检查资料健康状态。 |
 | 规则配置 | `POST /v1/rules/store-rules`、`POST /v1/rules/platform-rules` | 维护店铺级和平台级规则。 |
 | 动作能力 | `POST /v1/capabilities/action-capabilities` | 维护外部动作能力清单和触发表达。 |
-| 消息历史与模拟 | `GET /v1/admin/message-traces`、`GET /v1/message-traces/{decision_id}`、`POST /v1/admin/message-simulations` | 查询本店铺消息历史、AI/人工回复和决策路径；模拟咨询只创建 trace，不外发。 |
+| 消息历史与模拟 | `GET /v1/admin/message-traces`、`GET /v1/message-traces/{decision_id}`、`POST /v1/admin/message-simulations` | 查询本店铺消息历史、AI/人工回复和 LangGraph 运行回放；模拟咨询只创建 trace，不外发。 |
 | 审计查询 | `GET /v1/admin/audit-logs`、`GET /v1/message-traces/{decision_id}` | 查询后台变更和消息决策追踪。 |
 
 接口约束：
@@ -210,7 +210,7 @@
 | `POST /v1/admin/invitations` | 租户所有者或租户管理员 | `tenant_id`、`email`、`roles`、`store_ids`、`reason`、`idempotency_key` | `invitation_id`、`email`、`roles`、`status`、`expires_at`、`audit_log_id` | 必须记录邀请对象、角色和原因；不记录邀请 token 明文 | 无 | 401、403、409、422、`ROLE_FORBIDDEN`、`IDEMPOTENCY_CONFLICT` |
 | `PATCH /v1/admin/users/{user_id}/roles` | 租户所有者或租户管理员；不能越权授予自身没有的角色 | `tenant_id`、`roles`、`store_ids`、`reason`、`idempotency_key` | `user`、`audit_log_id` | 必须记录前后角色差异 `diff_summary` 和原因 | 无 | 401、403、404、409、422、`ROLE_FORBIDDEN`、`AUDIT_REASON_REQUIRED` |
 | `GET /v1/admin/audit-logs` | 租户所有者、租户管理员、只读审计 | `tenant_id`、`store_id`、`object_type`、`action`、`created_at_from`、`created_at_to`、`page`、`page_size` | `items[].audit_log_id`、`actor_admin_user_id`、`tenant_id`、`store_id`、`object_type`、`object_id`、`action`、`reason`、`diff_summary`、`sensitive_access`、`created_at`、`page_info` | 查询本身可记录敏感审计查询；不能返回其他租户日志 | 租户、店铺、对象、动作、时间、分页 | 401、403、404 |
-| `GET /v1/admin/message-traces` | 店铺管理员、客服主管、只读审计 | `store_id`、`decision_id`、`external_message_id`、`source`、`page`、`page_size` | `items[].decision_id`、`customer_message`、`ai_reply`、`human_reply`、`action`、`status`、`risk_level`、`trace`、`page_info` | 只返回当前 session 可访问店铺；raw payload 不返回给客户后台 | 店铺、消息、来源、分页 | 401、403、404 |
+| `GET /v1/admin/message-traces` | 店铺管理员、客服主管、只读审计 | `store_id`、`decision_id`、`external_message_id`、`source`、`page`、`page_size` | `items[].decision_id`、`customer_message`、`ai_reply`、`human_reply`、`action`、`status`、`risk_level`、`trace.graph`、`page_info` | 只返回当前 session 可访问店铺；raw payload 不返回给客户后台；运行回放只显示脱敏引用 | 店铺、消息、来源、分页 | 401、403、404 |
 | `POST /v1/admin/message-simulations` | 店铺管理员、客服主管、知识审核员 | `store_id`、`platform`、`message.content`、可选 `context` | `source=simulation`、`decision`、`external_send.attempted=false` | 写入模拟决策 trace；不得调用外部发送动作 | 无 | 401、403、422 |
 
 统一错误响应：
