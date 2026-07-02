@@ -980,6 +980,150 @@ tbody tr:hover {
   margin-bottom: 12px;
 }
 
+.messageTraceDrawer {
+  width: min(760px, calc(100vw - 28px));
+  overflow: auto;
+}
+
+.traceSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.traceTextBlock {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.traceTextBlock h3 {
+  margin: 0;
+}
+
+.traceTextBlock p {
+  color: #334155;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.traceReplay {
+  display: grid;
+  gap: 12px;
+}
+
+.traceReplayMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #526071;
+  font-size: 12px;
+}
+
+.traceReplayMeta span {
+  padding: 4px 8px;
+  border: 1px solid #d8dee8;
+  border-radius: 999px;
+  background: #ffffff;
+}
+
+.decisionGraph {
+  width: 100%;
+  min-height: 360px;
+  overflow: hidden;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.traceTimeline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.traceTimeline button {
+  width: 100%;
+  min-height: 58px;
+  justify-content: space-between;
+  border-color: #d8dee8;
+  background: #ffffff;
+  color: #334155;
+  white-space: normal;
+}
+
+.traceTimeline li.active button {
+  border-color: #2563eb;
+  background: #dbeafe;
+}
+
+.traceTimeline strong,
+.traceTimeline span {
+  overflow-wrap: anywhere;
+}
+
+.traceNodeDetail {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.traceNodeDetail h3 {
+  margin: 0;
+}
+
+.traceNodeDetail dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.traceNodeDetail dt {
+  color: #667489;
+  font-size: 12px;
+}
+
+.traceNodeDetail dd {
+  margin: 2px 0 0;
+  color: #1f2937;
+  overflow-wrap: anywhere;
+}
+
+.traceRefs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.traceRefs div {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.traceRefs code {
+  display: block;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.traceError {
+  color: #b91c1c;
+}
+
 .modalBackdrop {
   position: fixed;
   inset: 0;
@@ -1209,7 +1353,22 @@ tbody tr:hover {
   .metricGrid,
   .twoColumns,
   .formGrid,
-  .contextPanel {
+  .contextPanel,
+  .traceSummary,
+  .traceNodeDetail dl,
+  .traceRefs {
+    grid-template-columns: 1fr;
+  }
+
+  .messageTraceDrawer {
+    width: calc(100vw - 18px);
+  }
+
+  .decisionGraph {
+    display: none;
+  }
+
+  .traceTimeline {
     grid-template-columns: 1fr;
   }
 

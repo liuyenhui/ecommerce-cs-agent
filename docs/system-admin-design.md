@@ -279,7 +279,7 @@
 | 资料体检 | `GET /v1/system-admin/product-health` | 汇总资料缺口、价格过期、解析失败和知识未审核状态。 |
 | 规则治理 | `GET /v1/system-admin/rules`、`POST /v1/system-admin/rule-templates`、`PATCH /v1/system-admin/rule-templates/{template_id}` | 查看规则状态，维护系统默认规则模板。 |
 | 动作治理 | `GET /v1/system-admin/action-capabilities`、`POST /v1/system-admin/action-templates` | 查看动作能力和维护默认动作模板。 |
-| 决策追踪 | `GET /v1/system-admin/message-traces`、`GET /v1/system-admin/message-traces/{decision_id}` | 跨租户查询消息决策摘要和排障信息。 |
+| 决策追踪 | `GET /v1/system-admin/message-traces`、`GET /v1/system-admin/message-traces/{decision_id}` | 跨租户查询消息决策摘要、LangGraph 运行回放和排障信息。 |
 | 任务中心 | `GET /v1/system-admin/tasks`、`POST /v1/system-admin/tasks/{task_id}/retry` | 查看和重试幂等安全任务。 |
 | 模型与用量 | `GET /v1/system-admin/llm-usage`、`GET /v1/system-admin/provider-health` | 查看模型调用、成本、延迟和 provider 健康。 |
 | 评测与发布 | `GET /v1/system-admin/eval-runs`、`GET /v1/system-admin/releases`、`POST /v1/system-admin/releases` | 查看评测报告和发布版本。 |
@@ -324,7 +324,7 @@
 | `POST /v1/system-admin/stores` | 平台运营或更高权限 | `tenant_id`、`name`、`platform`、`external_store_id`、`status`、`reason`、`idempotency_key` | `store`、`audit_log_id` | 必须记录目标租户、店铺和开通原因 | 无 | 401、403、404、409、422 |
 | `GET /v1/system-admin/readiness/stores` | 平台运营、技术支持、安全审计 | `tenant_id`、`store_id`、`status`、`page`、`page_size` | `items[].tenant_id`、`store_id`、`status`、`checks[]`、`updated_at`、`page_info` | 跨租户 readiness 查询写访问审计 | 租户、店铺、状态、分页 | 401、403 |
 | `GET /v1/system-admin/message-traces` | 技术支持或更高权限；raw payload 需专门能力 | `tenant_id`、`store_id`、`decision_id`、`external_message_id`、`include_raw_payload`、`reason`、时间、分页 | `items[].decision_id`、`tenant_id`、`store_id`、`action`、`risk_level`、`sensitive_access`、`created_at`、`page_info` | 跨租户查询必须写审计；`include_raw_payload=true` 必须记录 `reason` 和 `sensitive_access=true` | 租户、店铺、决策、消息、时间、分页 | 401、403、422、`RAW_PAYLOAD_ACCESS_DENIED`、`AUDIT_REASON_REQUIRED` |
-| `GET /v1/system-admin/message-traces/{decision_id}` | 技术支持或更高权限 | `include_raw_payload`、`reason` | `trace`、`raw_payload`、`audit_log_id` | 查看详情写跨租户审计；raw payload 访问必须单独审计 | 无 | 401、403、404、422、`RAW_PAYLOAD_ACCESS_DENIED` |
+| `GET /v1/system-admin/message-traces/{decision_id}` | 技术支持或更高权限 | `include_raw_payload`、`reason` | `trace`、`trace.graph`、`raw_payload`、`audit_log_id` | 查看详情写跨租户审计；运行回放默认显示脱敏引用；raw payload 访问必须单独审计 | 无 | 401、403、404、422、`RAW_PAYLOAD_ACCESS_DENIED` |
 | `GET /v1/system-admin/tasks` | 技术支持、发布管理员、安全审计 | `tenant_id`、`store_id`、`task_type`、`status`、时间、分页 | `items[].task_id`、`task_type`、`status`、`input_ref`、`output_ref`、`error_summary`、`retry_count`、`page_info` | 跨租户任务查询写访问审计 | 租户、店铺、任务类型、状态、时间、分页 | 401、403 |
 | `POST /v1/system-admin/tasks/{task_id}/retry` | 技术支持或发布管理员 | `idempotency_key`、`reason` | `task_id`、`status`、`audit_log_id` | 必须记录重试原因、幂等键和目标任务 | 无 | 401、403、404、409、422、`IDEMPOTENCY_CONFLICT` |
 | `GET /v1/system-admin/audit-logs` | 安全审计、超级管理员 | `tenant_id`、`store_id`、`actor_user_id`、`sensitive_access`、时间、分页 | `items[].audit_log_id`、`actor_system_user_id`、`tenant_id`、`store_id`、`object_type`、`object_id`、`action`、`reason`、`diff_summary`、`sensitive_access`、`created_at`、`page_info` | 查询审计日志本身可写二级审计；不得返回明文 secret | 租户、店铺、操作者、敏感访问、时间、分页 | 401、403 |

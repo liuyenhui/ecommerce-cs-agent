@@ -4563,6 +4563,79 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TraceStep"
+        graph:
+          $ref: "#/components/schemas/DecisionTraceGraph"
+
+    DecisionTraceGraph:
+      type: object
+      description: 单条消息 LangGraph 运行回放图；对外 API 不暴露可编辑 graph，只用于 Admin 排障和解释。
+      required: [nodes, edges]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/DecisionTraceGraphNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/DecisionTraceGraphEdge"
+
+    DecisionTraceGraphNode:
+      type: object
+      required: [id, label, kind, status, inputs_ref, outputs_ref, error]
+      properties:
+        id:
+          type: string
+          examples: [context_gate]
+        label:
+          type: string
+          examples: [上下文闸门]
+        kind:
+          type: string
+          examples: [langgraph_node]
+        status:
+          type: string
+          enum: [completed, skipped, degraded, failed]
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+        inputs_ref:
+          type: array
+          items:
+            type: string
+        outputs_ref:
+          type: array
+          items:
+            type: string
+        error:
+          anyOf:
+            - $ref: "#/components/schemas/ErrorDetail"
+            - type: "null"
+
+    DecisionTraceGraphEdge:
+      type: object
+      required: [source, target, label, condition, taken]
+      properties:
+        source:
+          type: string
+          examples: [context_gate]
+        target:
+          type: string
+          examples: [policy_gate]
+        label:
+          type: string
+          examples: [等待上下文]
+        condition:
+          type: string
+          examples: [context_request]
+        taken:
+          type: boolean
+          description: 本次运行是否实际走过该条件边。
 
     TraceStep:
       type: object

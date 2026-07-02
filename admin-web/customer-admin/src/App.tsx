@@ -34,6 +34,7 @@ import {
   useCloseOnEscape
 } from "../../shared/components";
 import { arrayFrom, firstId, readRecord } from "../../shared/data";
+import { DecisionTraceReplay } from "../../shared/trace-replay";
 import type { JsonRecord, NavItem, Page, ToastState } from "../../shared/types";
 
 type CustomerTab = "overview" | "messages" | "products" | "knowledge" | "audit";
@@ -858,73 +859,10 @@ function MessageTraceDrawer({ trace, onClose, onRaw }: { trace: CustomerTrace; o
           </>
         ) : null}
       </section>
-      <DecisionFlowGraph trace={trace.trace} status={String(trace.status || trace.action || "")} />
+      <DecisionTraceReplay trace={trace.trace} status={String(trace.status || trace.action || "")} />
       <button onClick={onRaw}>查看原始记录</button>
     </aside>
   );
-}
-
-function DecisionFlowGraph({ trace, status }: { trace: unknown; status: string }) {
-  const containerRef = React.useRef<HTMLDivElement | null>(null);
-
-  React.useEffect(() => {
-    if (!containerRef.current) return undefined;
-    let disposed = false;
-    let graph: {
-      dispose: () => void;
-      addNode: (options: JsonRecord) => unknown;
-      addEdge: (options: JsonRecord) => unknown;
-      centerContent: () => void;
-    } | null = null;
-
-    void import("@antv/x6").then(({ Graph }) => {
-      if (disposed || !containerRef.current) return;
-      graph = new Graph({
-        container: containerRef.current,
-        width: containerRef.current.clientWidth || 520,
-        height: 320,
-        interacting: false,
-        panning: false,
-        mousewheel: false,
-        background: { color: "#ffffff" }
-      });
-      const steps = ["接收消息", "字段映射", "上下文检查", "商品/知识/规则", "回复生成", "风险闸门", "输出动作", "反馈/记录"];
-      const runtimeSteps = readTraceSteps(trace);
-      const blocked = status === "waiting_context" || status === "handoff";
-      const nodes = steps.map((label, index) => {
-        const runtime = runtimeSteps[index];
-        const fill = runtime?.status === "failed" ? "#fee2e2" : blocked && index >= 2 ? "#fff7ed" : "#eef2ff";
-        return graph?.addNode({
-          id: `node-${index}`,
-          x: 26 + (index % 2) * 230,
-          y: 24 + Math.floor(index / 2) * 70,
-          width: 170,
-          height: 42,
-          label,
-          attrs: {
-            body: { rx: 6, ry: 6, stroke: "#94a3b8", fill },
-            label: { fill: "#1f2937", fontSize: 12, fontWeight: 600 }
-          }
-        });
-      });
-      nodes.slice(0, -1).forEach((node, index) => {
-        if (!node || !nodes[index + 1]) return;
-        graph?.addEdge({
-          source: node,
-          target: nodes[index + 1],
-          attrs: { line: { stroke: "#64748b", strokeWidth: 1.4, targetMarker: "block" } },
-          router: { name: "manhattan" }
-        });
-      });
-      graph.centerContent();
-    });
-    return () => {
-      disposed = true;
-      graph?.dispose();
-    };
-  }, [trace, status]);
-
-  return <div className="decisionGraph" ref={containerRef} aria-label="AI 客服决策流程图" />;
 }
 
 function ProductContent({ storeId, setToast, setSelected, onChanged }: {
@@ -1176,10 +1114,4 @@ function firstCandidateText(decision: JsonRecord): string {
     return String((first as JsonRecord).reply_text || "");
   }
   return "";
-}
-
-function readTraceSteps(trace: unknown): JsonRecord[] {
-  if (!trace || typeof trace !== "object") return [];
-  const steps = (trace as JsonRecord).steps;
-  return Array.isArray(steps) ? (steps.filter((item) => item && typeof item === "object") as JsonRecord[]) : [];
 }
