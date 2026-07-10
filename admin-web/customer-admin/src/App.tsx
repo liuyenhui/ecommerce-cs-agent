@@ -38,6 +38,7 @@ import { DecisionTraceReplay } from "../../shared/trace-replay";
 import { presentDecisionTrace } from "../../shared/trace-presentation";
 import type { JsonRecord, NavItem, Page, ToastState } from "../../shared/types";
 import { SimulationComposer } from "./SimulationComposer";
+import { requireReloadedSimulation } from "./simulation-workflow";
 
 type CustomerTab = "overview" | "messages" | "products" | "knowledge" | "audit";
 
@@ -570,7 +571,7 @@ function MessageHistory({ storeId, setToast, setSelected }: {
   const conversations = React.useMemo(() => buildCustomerConversations(rows, searchText), [rows, searchText]);
   const selectedConversation = conversations.find((conversation) => conversation.id === selectedConversationId) || conversations[0] || null;
 
-  async function load(source = "") {
+  async function load(source = "", options: { reportError?: boolean; throwOnError?: boolean } = {}) {
     setLoading(true);
     try {
       const query = new URLSearchParams({ store_id: storeId });
@@ -580,8 +581,11 @@ function MessageHistory({ storeId, setToast, setSelected }: {
       setRows(loadedRows);
       return loadedRows;
     } catch (error) {
-      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
-      return null;
+      if (options.reportError !== false) {
+        setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+      }
+      if (options.throwOnError) throw error;
+      return [];
     } finally {
       setLoading(false);
     }
@@ -624,12 +628,11 @@ function MessageHistory({ storeId, setToast, setSelected }: {
         missing_context: decision.missing_context,
         trace: readRecord(decision, "trace")
       };
-      const loadedRows = await load();
-      const createdTrace = loadedRows?.find((trace) => trace.decision_id === newTrace.decision_id);
-      const selectedResult = createdTrace
-        ? { ...createdTrace, ...newTrace, conversation_id: createdTrace.conversation_id }
-        : newTrace;
-      if (!loadedRows) setRows((current) => [newTrace, ...current]);
+      const createdTrace = await requireReloadedSimulation(
+        load("", { reportError: false, throwOnError: true }),
+        String(newTrace.decision_id || "")
+      );
+      const selectedResult = { ...createdTrace, ...newTrace, conversation_id: createdTrace.conversation_id };
       setSearchText("");
       setSelectedConversationId(String(selectedResult.conversation_id || selectedResult.decision_id || ""));
       setSelectedTrace(selectedResult);
