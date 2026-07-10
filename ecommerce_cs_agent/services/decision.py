@@ -122,11 +122,24 @@ class DecisionService:
             self._save_state(organization_id, store_id, request_id, decision_id, state)
         return _public(state.context_refills[key])
 
-    def submit_action_result(self, decision_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    def submit_action_result(
+        self,
+        decision_id: str,
+        payload: dict[str, Any],
+        *,
+        principal_organization_id: str | None = None,
+        principal_store_id: str | None = None,
+    ) -> dict[str, Any] | None:
         state = self.repository.get_by_decision_id(decision_id)
         if not state:
             return None
         organization_id, store_id, request_id = _request_key(state.request)
+        principal_scope = {
+            "organization_id": principal_organization_id,
+            "store_id": principal_store_id,
+        }
+        if any(principal_scope.values()) and not self._same_tenant_store(state, principal_scope):
+            raise PermissionError("action result principal does not belong to the decision tenant/store")
         declares_scope = any(
             key in payload for key in ("tenant_id", "organization_id", "external_store_id", "store_id")
         )
@@ -134,7 +147,7 @@ class DecisionService:
             raise PermissionError("action result does not belong to the decision tenant/store")
         action_id = str(payload.get("action_id", ""))
         known_action_ids = {item["action_id"] for item in state.response.get("action_requests", [])}
-        if known_action_ids and action_id not in known_action_ids:
+        if action_id not in known_action_ids:
             raise ValueError("action_id does not belong to this decision")
         idempotency_key = str(payload.get("idempotency_key", action_id))
         key = (action_id, idempotency_key)
@@ -161,12 +174,24 @@ class DecisionService:
             self._save_state(organization_id, store_id, request_id, decision_id, state)
         return _public(state.action_results[key])
 
-    def submit_feedback(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+    def submit_feedback(
+        self,
+        payload: dict[str, Any],
+        *,
+        principal_organization_id: str | None = None,
+        principal_store_id: str | None = None,
+    ) -> dict[str, Any] | None:
         decision_id = str(payload.get("decision_id", ""))
         state = self.repository.get_by_decision_id(decision_id)
         if not state:
             return None
         organization_id, store_id, request_id = _request_key(state.request)
+        principal_scope = {
+            "organization_id": principal_organization_id,
+            "store_id": principal_store_id,
+        }
+        if any(principal_scope.values()) and not self._same_tenant_store(state, principal_scope):
+            raise PermissionError("human reply principal does not belong to the decision tenant/store")
         declares_scope = any(
             key in payload for key in ("tenant_id", "organization_id", "external_store_id", "store_id")
         )

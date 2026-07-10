@@ -46,29 +46,42 @@ def billing_lease(
     return f"{encoded}.{signature}"
 
 
-def provision_payload() -> dict[str, Any]:
+def provision_payload(
+    *,
+    request_id: str = "provision-001",
+    tenant_ref: str = "open_erp:org-001",
+    external_store_id: str = "mall-001",
+    platform_account_ref: str = "pdd-account-main",
+) -> dict[str, Any]:
     return {
-        "request_id": "provision-001",
-        "tenant_ref": "open_erp:org-001",
+        "request_id": request_id,
+        "tenant_ref": tenant_ref,
         "tenant_name": "测试商家",
         "platform": "pdd",
-        "external_store_id": "mall-001",
+        "external_store_id": external_store_id,
         "external_store_name": "测试店铺",
-        "platform_account_ref": "pdd-account-main",
+        "platform_account_ref": platform_account_ref,
         "machine_ref": "machine-hash-001",
     }
 
 
-def reply_payload(connector_id: str, request_id: str = "req-ai-001") -> dict[str, Any]:
+def reply_payload(
+    connector_id: str,
+    request_id: str = "req-ai-001",
+    *,
+    external_store_id: str = "mall-001",
+    platform_account_ref: str = "pdd-account-main",
+    content: str = "这个商品有哪些尺寸？",
+) -> dict[str, Any]:
     return {
         "request_id": request_id,
         "platform": "pdd",
-        "external_store_id": "mall-001",
-        "platform_account_ref": "pdd-account-main",
+        "external_store_id": external_store_id,
+        "platform_account_ref": platform_account_ref,
         "message": {
             "external_message_id": f"msg-{request_id}",
             "sender_type": "buyer",
-            "content": "这个商品有哪些尺寸？",
+            "content": content,
             "sent_at": "2026-06-24T10:00:00+08:00",
         },
         "conversation": {
@@ -78,7 +91,11 @@ def reply_payload(connector_id: str, request_id: str = "req-ai-001") -> dict[str
         },
         "mode": "assist_first",
         "context": {"orders": [], "logistics": [], "rules": []},
-        "billing_lease": billing_lease(connector_id=connector_id, request_id=request_id),
+        "billing_lease": billing_lease(
+            connector_id=connector_id,
+            request_id=request_id,
+            external_store_id=external_store_id,
+        ),
     }
 
 
@@ -212,6 +229,62 @@ def test_context_refill_returns_candidate_when_required_context_is_complete() ->
     assert body["decision_status"] == "candidate"
     assert body["action"] == "candidate"
     assert body["candidates"][0]["reply_text"]
+
+
+def test_connector_scope_rejects_cross_store_action_result_and_feedback_without_payload_scope() -> None:
+    client = TestClient(create_app())
+    first = provision(client)
+    second_response = client.post(
+        "/v1/integrations/open-erp/provision",
+        headers=INTEGRATION_HEADERS,
+        json=provision_payload(
+            request_id="provision-002",
+            tenant_ref="open_erp:org-002",
+            external_store_id="mall-002",
+            platform_account_ref="pdd-account-second",
+        ),
+    )
+    assert second_response.status_code == 201
+    second = second_response.json()
+    first_headers = {"Authorization": f"Bearer {first['connector_token']}"}
+    second_headers = {"Authorization": f"Bearer {second['connector_token']}"}
+    decision = client.post(
+        "/v1/reply-decisions",
+        headers=first_headers,
+        json=reply_payload(
+            first["connector_id"],
+            "req-connector-scope",
+            content="帮我把订单备注改成红色包装",
+        ),
+    ).json()
+    action_id = decision["action_requests"][0]["action_id"]
+
+    action_result = client.post(
+        f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
+        headers=second_headers,
+        json={
+            "action_id": action_id,
+            "action_type": "update-note",
+            "idempotency_key": "cross-store-action-result",
+            "status": "success",
+            "executed_at": "2026-06-24T10:01:00+08:00",
+        },
+    )
+    feedback = client.post(
+        "/v1/feedback/human-replies",
+        headers=second_headers,
+        json={
+            "decision_id": decision["decision_id"],
+            "message_id": "msg-req-connector-scope",
+            "human_reply": "人工回复",
+            "used_candidate": False,
+            "resolution_status": "resolved",
+            "labels": [],
+        },
+    )
+
+    assert action_result.status_code == 403
+    assert feedback.status_code == 403
 
 
 def test_open_erp_launch_ticket_exchanges_to_customer_admin_session() -> None:

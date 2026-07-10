@@ -167,7 +167,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload = await request.json()
         _require_fields(payload, ["action_id", "action_type", "idempotency_key", "status", "executed_at"])
         try:
-            response = decisions.submit_action_result(decision_id, payload)
+            response = decisions.submit_action_result(
+                decision_id,
+                payload,
+                principal_organization_id=_principal.organization_id,
+                principal_store_id=_principal.store_id,
+            )
         except PermissionError as exc:
             raise api_error(403, "forbidden", str(exc)) from exc
         except FileExistsError as exc:
@@ -186,7 +191,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload = await request.json()
         _require_fields(payload, ["decision_id", "human_reply", "used_candidate", "resolution_status"])
         try:
-            response = decisions.submit_feedback(payload)
+            response = decisions.submit_feedback(
+                payload,
+                principal_organization_id=_principal.organization_id,
+                principal_store_id=_principal.store_id,
+            )
         except PermissionError as exc:
             raise api_error(403, "forbidden", str(exc)) from exc
         if response is None:

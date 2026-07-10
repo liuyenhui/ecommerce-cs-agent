@@ -269,8 +269,25 @@ def test_context_refill_and_action_result_are_idempotent():
     assert first_refill.json() == second_refill.json()
     assert first_refill.json()["accepted"] is True
 
+    unknown_action = api.post(
+        f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
+        headers=auth_headers(),
+        json={
+            "action_id": "action-unknown",
+            "action_type": "update-note",
+            "idempotency_key": "unknown-action-key",
+            "status": "success",
+            "executed_at": "2026-06-12T10:16:00+08:00",
+        },
+    )
+
+    action_decision = api.post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=minimal_reply_request("req-action-result-idempotent", "帮我把订单备注改成红色包装"),
+    ).json()
     action_payload = {
-        "action_id": "action-001",
+        "action_id": action_decision["action_requests"][0]["action_id"],
         "action_type": "update-note",
         "idempotency_key": "action-key-001",
         "status": "success",
@@ -279,16 +296,17 @@ def test_context_refill_and_action_result_are_idempotent():
         "executed_at": "2026-06-12T10:16:00+08:00",
     }
     action_first = api.post(
-        f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
+        f"/v1/reply-decisions/{action_decision['decision_id']}/actions/results",
         headers=auth_headers(),
         json=action_payload,
     )
     action_second = api.post(
-        f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
+        f"/v1/reply-decisions/{action_decision['decision_id']}/actions/results",
         headers=auth_headers(),
         json=action_payload,
     )
 
+    assert unknown_action.status_code == 422
     assert action_first.status_code == 200
     assert action_second.json() == action_first.json()
     assert action_first.json()["accepted"] is True
@@ -332,7 +350,7 @@ def test_context_refill_rejects_cross_tenant_and_idempotency_conflict():
     assert conflict.status_code == 409
 
 
-def test_action_result_rejects_unknown_action_cross_store_and_idempotency_conflict():
+def test_action_result_rejects_unknown_action_and_idempotency_conflict():
     api = client()
     decision = api.post(
         "/v1/reply-decisions",
@@ -345,7 +363,6 @@ def test_action_result_rejects_unknown_action_cross_store_and_idempotency_confli
         "action_type": "update-note",
         "idempotency_key": "action-result-rejection-key",
         "status": "success",
-        "store_id": "store-001",
         "external_result": {"external_ref": "ok"},
         "executed_at": "2026-06-12T10:16:00+08:00",
     }
@@ -354,11 +371,6 @@ def test_action_result_rejects_unknown_action_cross_store_and_idempotency_confli
         f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
         headers=auth_headers(),
         json={**payload, "action_id": "action-unknown"},
-    )
-    cross_store = api.post(
-        f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
-        headers=auth_headers(),
-        json={**payload, "store_id": "store-other"},
     )
     first = api.post(
         f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
@@ -372,7 +384,6 @@ def test_action_result_rejects_unknown_action_cross_store_and_idempotency_confli
     )
 
     assert unknown_action.status_code == 422
-    assert cross_store.status_code == 403
     assert first.status_code == 200
     assert conflict.status_code == 409
 
@@ -404,6 +415,7 @@ def test_feedback_and_message_trace_round_trip():
 
     assert feedback.status_code == 200
     assert feedback.json()["accepted"] is True
+    assert feedback.json()["knowledge_candidate_id"] is None
     assert trace.status_code == 200
     assert trace.json()["decision_id"] == decision["decision_id"]
     assert trace.json()["request_id"] == "req-feedback"
@@ -411,7 +423,7 @@ def test_feedback_and_message_trace_round_trip():
     assert trace.json()["trace"]["graph"]["edges"]
 
 
-def test_human_reply_feedback_requires_auth_and_rejects_cross_store():
+def test_human_reply_feedback_requires_auth():
     api = client()
     decision = api.post(
         "/v1/reply-decisions",
@@ -421,8 +433,6 @@ def test_human_reply_feedback_requires_auth_and_rejects_cross_store():
     payload = {
         "decision_id": decision["decision_id"],
         "message_id": "msg-req-feedback-rejections",
-        "organization_id": "org-001",
-        "store_id": "store-other",
         "human_reply": "这款商品材质以商品详情页为准。",
         "used_candidate": False,
         "resolution_status": "resolved",
@@ -430,14 +440,7 @@ def test_human_reply_feedback_requires_auth_and_rejects_cross_store():
     }
 
     unauthenticated = api.post("/v1/feedback/human-replies", json=payload)
-    cross_store = api.post(
-        "/v1/feedback/human-replies",
-        headers=auth_headers(),
-        json=payload,
-    )
-
     assert unauthenticated.status_code == 401
-    assert cross_store.status_code == 403
 
 
 def test_customer_admin_message_traces_are_scoped_to_session_store():
