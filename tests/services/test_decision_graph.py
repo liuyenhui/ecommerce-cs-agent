@@ -70,6 +70,9 @@ def test_decision_graph_does_not_auto_reply_from_unrelated_approved_knowledge() 
         {
             "knowledge_entry_id": "knowledge-unrelated",
             "relevant": False,
+            "text_relevant": False,
+            "binding_eligible": True,
+            "binding_reason": "product_match",
             "matched_terms": [],
             "matched_core_terms": [],
             "matched_phrases": [],
@@ -174,6 +177,110 @@ def test_decision_graph_auto_replies_for_matching_english_certification_intent()
     assert response["action"] == "auto_reply"
     assert response["trace"]["knowledge_relevance"][0]["relevant"] is True
     assert response["trace"]["knowledge_relevance"][0]["score"] >= 0.7
+
+
+def test_decision_graph_rejects_knowledge_bound_to_another_product() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-product-b",
+                "product_id": "product-b",
+                "external_product_id": "product-b",
+                "scope": "product",
+                "content": "本商品已通过儿童安全认证。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    request = _request("req-product-binding-mismatch", "这个商品通过儿童安全认证了吗？")
+    request["external_product_id"] = "product-a"
+    request["listing_ref"] = "listing-a"
+
+    response = service.create_reply_decision(request)
+
+    assert response["action"] != "auto_reply"
+    assert response["auto_reply"] is None
+    assert response["trace"]["matched_knowledge_ids"] == []
+    signal = response["trace"]["knowledge_relevance"][0]
+    assert signal["text_relevant"] is True
+    assert signal["binding_eligible"] is False
+    assert signal["binding_reason"] == "product_mismatch"
+
+
+def test_decision_graph_auto_replies_for_knowledge_bound_to_requested_product() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-product-a",
+                "product_id": "product-a",
+                "external_product_id": "product-a",
+                "scope": "product",
+                "content": "本商品已通过儿童安全认证。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    request = _request("req-product-binding-match", "这个商品通过儿童安全认证了吗？")
+    request["external_product_id"] = "product-a"
+    request["listing_ref"] = "listing-a"
+
+    response = service.create_reply_decision(request)
+
+    assert response["action"] == "auto_reply"
+    assert response["trace"]["matched_knowledge_ids"] == ["knowledge-product-a"]
+    assert response["trace"]["knowledge_relevance"][0]["binding_reason"] == "product_match"
+
+
+def test_decision_graph_does_not_auto_reply_product_knowledge_without_product_binding() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-unbound-product",
+                "product_id": "product-a",
+                "external_product_id": "product-a",
+                "scope": "product",
+                "content": "本商品已通过儿童安全认证。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    request = _request("req-product-binding-missing", "这个商品通过儿童安全认证了吗？")
+    request.pop("external_product_id")
+    request.pop("listing_ref")
+
+    response = service.create_reply_decision(request)
+
+    assert response["action"] != "auto_reply"
+    assert response["auto_reply"] is None
+    assert response["trace"]["knowledge_relevance"][0]["binding_reason"] == "missing_request_product_binding"
+
+
+def test_decision_graph_allows_explicit_store_scope_knowledge_without_product_binding() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-store-policy",
+                "product_id": None,
+                "external_product_id": None,
+                "scope": "store",
+                "content": "本店所有儿童商品均要求通过儿童安全认证。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+
+    response = service.create_reply_decision(_request("req-store-scope-knowledge", "儿童商品要求安全认证吗？"))
+
+    assert response["action"] == "auto_reply"
+    assert response["trace"]["knowledge_relevance"][0]["binding_reason"] == "explicit_store_scope"
 
 
 def test_decision_graph_keeps_relevant_knowledge_as_candidate_in_assist_first_mode() -> None:
@@ -483,6 +590,7 @@ def test_postgres_decision_repository_recalls_only_approved_accepted_knowledge()
                 (
                     "knowledge-001",
                     "product-001",
+                    "product-001",
                     "product",
                     "材质为棉。",
                     "deterministic-hash-v1",
@@ -494,7 +602,14 @@ def test_postgres_decision_repository_recalls_only_approved_accepted_knowledge()
     repository = PostgresDecisionRepository("postgresql://example")
     repository._connect = lambda _url: connection
 
-    entries = repository.recall_knowledge("org-001", "store-001", "商品 材质", limit=3)
+    entries = repository.recall_knowledge(
+        "org-001",
+        "store-001",
+        "商品 材质",
+        limit=3,
+        external_product_id="product-001",
+        listing_ref="listing-001",
+    )
 
     executed_sql = "\n".join(sql for sql, _params in connection.executed)
     assert entries[0]["knowledge_entry_id"] == "knowledge-001"
@@ -508,7 +623,18 @@ def test_postgres_decision_repository_recalls_only_approved_accepted_knowledge()
     assert "candidate.store_id::text = entry.store_id::text" in executed_sql
     assert "embedding.organization_id = entry.organization_id" in executed_sql
     assert "embedding.store_id::text = entry.store_id::text" in executed_sql
-    assert connection.executed[0][1] == ("org-001", "store-001", ["商品", "材质"], ["商品", "材质"], 3)
+    assert "product.external_product_id = %s" in executed_sql
+    assert "entry.scope IN ('store', 'tenant')" in executed_sql
+    assert connection.executed[0][1] == (
+        "org-001",
+        "store-001",
+        "product-001",
+        "product-001",
+        "product-001",
+        ["商品", "材质"],
+        ["商品", "材质"],
+        3,
+    )
 
 
 def test_decision_graph_recall_query_uses_keywords_not_full_message() -> None:
@@ -518,6 +644,7 @@ def test_decision_graph_recall_query_uses_keywords_not_full_message() -> None:
     service.create_reply_decision(_request("req-recall-query", "这个商品是什么材质？"))
 
     assert repository.queries == ["商品 材质"]
+    assert repository.bindings == [("product-001", "listing-001")]
 
 
 class _AtomicMutationOnlyRepository(InMemoryDecisionRepository):
@@ -538,9 +665,20 @@ class _KnowledgeRepository(InMemoryDecisionRepository):
         super().__init__()
         self.knowledge = knowledge
         self.queries: list[str] = []
+        self.bindings: list[tuple[str | None, str | None]] = []
 
-    def recall_knowledge(self, organization_id: str, store_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+    def recall_knowledge(
+        self,
+        organization_id: str,
+        store_id: str,
+        query: str,
+        limit: int = 5,
+        *,
+        external_product_id: str | None = None,
+        listing_ref: str | None = None,
+    ) -> list[dict[str, Any]]:
         self.queries.append(query)
+        self.bindings.append((external_product_id, listing_ref))
         return self.knowledge[:limit]
 
 
@@ -584,6 +722,8 @@ def _request(request_id: str, content: str) -> dict[str, Any]:
         "organization_id": "org-001",
         "store_id": "store-001",
         "platform": "pdd",
+        "external_product_id": "product-001",
+        "listing_ref": "listing-001",
         "message": {
             "external_message_id": f"msg-{request_id}",
             "sender_type": "buyer",

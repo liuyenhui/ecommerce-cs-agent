@@ -274,8 +274,10 @@ class ReplyDecisionGraph:
             state["store_id"],
             query,
             limit=5,
+            external_product_id=_optional_text(state["payload"].get("external_product_id")),
+            listing_ref=_optional_text(state["payload"].get("listing_ref")),
         )
-        relevance = [_knowledge_relevance(state["content"], item) for item in recalled]
+        relevance = [_knowledge_relevance(state["content"], item, state["payload"]) for item in recalled]
         matched = [item for item, signal in zip(recalled, relevance, strict=True) if signal["relevant"]]
         outputs = ["context_candidates", *[f"knowledge:{item.get('knowledge_entry_id')}" for item in matched]]
         return _with_step(
@@ -606,7 +608,7 @@ def _knowledge_query(content: str) -> str:
     return " ".join(unique_terms)
 
 
-def _knowledge_relevance(query: str, item: dict[str, Any]) -> dict[str, Any]:
+def _knowledge_relevance(query: str, item: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     knowledge = str(item.get("content", ""))
     query_terms = _relevance_terms(query)
     knowledge_terms = _relevance_terms(knowledge)
@@ -623,10 +625,15 @@ def _knowledge_relevance(query: str, item: dict[str, Any]) -> dict[str, Any]:
     sufficient_signal = bool(matched_phrases) or len(matched_core_terms) >= 2 or bool(distinctive_core_terms)
     if not query_core_terms:
         sufficient_signal = len(shared_terms) >= 2
-    relevant = sufficient_signal and score >= RELEVANCE_THRESHOLD
+    text_relevant = sufficient_signal and score >= RELEVANCE_THRESHOLD
+    binding_eligible, binding_reason = _knowledge_binding(payload, item)
+    relevant = text_relevant and binding_eligible
     return {
         "knowledge_entry_id": str(item.get("knowledge_entry_id", "")),
         "relevant": relevant,
+        "text_relevant": text_relevant,
+        "binding_eligible": binding_eligible,
+        "binding_reason": binding_reason,
         "matched_terms": shared_terms,
         "matched_core_terms": matched_core_terms,
         "matched_phrases": matched_phrases,
@@ -635,6 +642,31 @@ def _knowledge_relevance(query: str, item: dict[str, Any]) -> dict[str, Any]:
         "threshold": RELEVANCE_THRESHOLD,
         "method": "deterministic_intent_overlap_v2",
     }
+
+
+def _knowledge_binding(payload: dict[str, Any], item: dict[str, Any]) -> tuple[bool, str]:
+    scope = str(item.get("scope") or "").lower()
+    item_product_refs = {
+        value
+        for value in (
+            _optional_text(item.get("external_product_id")),
+            _optional_text(item.get("product_id")),
+        )
+        if value
+    }
+    if scope in {"store", "tenant"} and not item_product_refs:
+        return True, "explicit_store_scope"
+    requested_product_id = _optional_text(payload.get("external_product_id"))
+    if not requested_product_id:
+        return False, "missing_request_product_binding"
+    if requested_product_id in item_product_refs:
+        return True, "product_match"
+    return False, "product_mismatch"
+
+
+def _optional_text(value: Any) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
 
 
 def _core_relevance_terms(text: str) -> set[str]:

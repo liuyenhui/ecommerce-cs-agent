@@ -6,6 +6,7 @@
 
 ### 2026-07-10
 
+- 商品级知识自动回复必须绑定请求的稳定 `external_product_id`，PostgreSQL 召回与 evidence 门禁双重拒绝跨商品知识；请求缺少商品绑定时只允许显式 `scope=store/tenant` 且不关联商品的通用知识自动回复。
 - 决策请求幂等键统一为 `organization_id + store_id + request_id`：新增前进 migration 移除旧的组织级唯一约束/索引并建立店铺级唯一索引，canonical repository 查询和 upsert 同步按店铺隔离；同一租户不同店铺可安全复用外部 `request_id`。
 - 自动回复安全门禁新增可解释的中英文确定性相关性信号：只有相关审核知识、完整上下文、低风险且 `mode=auto_when_safe` 才可 `auto_reply`；`assist_first`、模拟咨询与无相关证据默认保留候选或进入上下文/转人工分支。
 - 决策延续边界收紧：context refill、action result、human feedback 均使用已鉴权 Connector Principal scope 校验原决策租户/店铺；LangGraph `InMemorySaver` 改为每次 invoke 临时诊断对象，不在长期服务实例累积 thread。

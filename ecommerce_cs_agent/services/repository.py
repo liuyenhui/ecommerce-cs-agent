@@ -28,7 +28,16 @@ class DecisionRepository(Protocol):
     ) -> list[DecisionState]:
         raise NotImplementedError
 
-    def recall_knowledge(self, organization_id: str, store_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+    def recall_knowledge(
+        self,
+        organization_id: str,
+        store_id: str,
+        query: str,
+        limit: int = 5,
+        *,
+        external_product_id: str | None = None,
+        listing_ref: str | None = None,
+    ) -> list[dict[str, Any]]:
         raise NotImplementedError
 
     def save_state(
@@ -75,7 +84,16 @@ class InMemoryDecisionRepository:
             states = [item for item in states if str(item.request.get("store_id")) == store_id]
         return states[-limit:][::-1]
 
-    def recall_knowledge(self, organization_id: str, store_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+    def recall_knowledge(
+        self,
+        organization_id: str,
+        store_id: str,
+        query: str,
+        limit: int = 5,
+        *,
+        external_product_id: str | None = None,
+        listing_ref: str | None = None,
+    ) -> list[dict[str, Any]]:
         return []
 
     def save_state(
@@ -187,11 +205,22 @@ class PostgresDecisionRepository:
         )
         return [_state_from_payload(row[0]) for row in rows]
 
-    def recall_knowledge(self, organization_id: str, store_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+    def recall_knowledge(
+        self,
+        organization_id: str,
+        store_id: str,
+        query: str,
+        limit: int = 5,
+        *,
+        external_product_id: str | None = None,
+        listing_ref: str | None = None,
+    ) -> list[dict[str, Any]]:
         terms = _search_terms(query)
+        requested_product_id = str(external_product_id or "")
         rows = self._fetch_all(
             """
-            SELECT entry.id::text, product.public_product_id, entry.scope, entry.content,
+            SELECT entry.id::text, product.public_product_id, product.external_product_id,
+                   entry.scope, entry.content,
                    embedding.embedding_model, embedding.chunk_index
             FROM knowledge_entry entry
             JOIN organization org ON org.id = entry.organization_id
@@ -214,6 +243,14 @@ class PostgresDecisionRepository:
               AND entry.status = 'approved'
               AND candidate.review_status = 'accepted'
               AND (
+                (entry.scope IN ('store', 'tenant') AND entry.product_id IS NULL)
+                OR (
+                  %s <> ''
+                  AND entry.scope = 'product'
+                  AND (product.external_product_id = %s OR product.public_product_id = %s)
+                )
+              )
+              AND (
                 %s::text[] = ARRAY[]::text[]
                 OR EXISTS (
                   SELECT 1
@@ -224,16 +261,26 @@ class PostgresDecisionRepository:
             ORDER BY entry.updated_at DESC
             LIMIT %s
             """,
-            (organization_id, store_id, terms, terms, limit),
+            (
+                organization_id,
+                store_id,
+                requested_product_id,
+                requested_product_id,
+                requested_product_id,
+                terms,
+                terms,
+                limit,
+            ),
         )
         return [
             {
                 "knowledge_entry_id": str(row[0]),
                 "product_id": row[1],
-                "scope": row[2],
-                "content": row[3],
-                "embedding_model": row[4],
-                "chunk_index": row[5],
+                "external_product_id": row[2],
+                "scope": row[3],
+                "content": row[4],
+                "embedding_model": row[5],
+                "chunk_index": row[6],
             }
             for row in rows
         ]
