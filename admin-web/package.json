@@ -8,7 +8,7 @@
     "build": "npm run build:customer && npm run build:system",
     "build:customer": "vite build --mode customer",
     "build:system": "vite build --mode system",
-    "test": "tsc --noEmit && node --test scripts/admin-boundary.test.mjs && node scripts/assert-ui-regressions.mjs && node --test src/mobile-shell.test.mjs",
+    "test": "tsc --noEmit && vitest run --root . shared/trace-presentation.test.ts && node --test scripts/admin-boundary.test.mjs && node scripts/assert-ui-regressions.mjs && node --test src/mobile-shell.test.mjs",
     "test:landing": "node --test scripts/landing-page-copy.test.mjs"
   },
   "dependencies": {
@@ -22,7 +22,8 @@
   },
   "devDependencies": {
     "@types/react": "^19.2.7",
-    "@types/react-dom": "^19.2.3"
+    "@types/react-dom": "^19.2.3",
+    "vitest": "^4.1.10"
   },
   "overrides": {
     "esbuild": "0.28.1"

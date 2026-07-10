@@ -243,11 +243,15 @@ export function LoginPanelBase({
             <span>{loginError}</span>
           </div>
         ) : null}
-        <button className="primaryButton" type="submit" disabled={loading}>
-          {loading ? <Loader2 size={16} className="spin" /> : <ShieldCheck size={16} />}
-          登录
-        </button>
-        {secondaryAction ? (
+        {loading ? (
+          <p className="inlineStatus"><Loader2 size={16} className="spin" />正在处理</p>
+        ) : (
+          <button className="primaryButton" type="submit">
+            <ShieldCheck size={16} />
+            登录
+          </button>
+        )}
+        {secondaryAction && !loading ? (
           <button className="secondaryLoginButton" type="button" onClick={secondaryAction.onClick} disabled={loading}>
             {secondaryAction.icon || <KeyRound size={16} />}
             {secondaryAction.label}
@@ -276,9 +280,9 @@ export function SectionHeader({ label, title, action }: { label: string; title: 
   );
 }
 
-export function Metric({ label, value, tone }: { label: string; value: string; tone: "ok" | "warn" | "bad" | "info" }) {
+export function Metric({ label, value, tone, title }: { label: string; value: string; tone: "ok" | "warn" | "bad" | "info"; title?: string }) {
   return (
-    <div className={`metric ${tone}`}>
+    <div className={`metric ${tone}`} title={title}>
       <span>{label}</span>
       <strong>{value || "-"}</strong>
     </div>

@@ -35,7 +35,9 @@ import {
 } from "../../shared/components";
 import { arrayFrom, firstId, readRecord } from "../../shared/data";
 import { DecisionTraceReplay } from "../../shared/trace-replay";
+import { presentDecisionTrace } from "../../shared/trace-presentation";
 import type { JsonRecord, NavItem, Page, ToastState } from "../../shared/types";
+import { SimulationComposer } from "./SimulationComposer";
 
 type CustomerTab = "overview" | "messages" | "products" | "knowledge" | "audit";
 
@@ -62,6 +64,7 @@ type CustomerTrace = JsonRecord & {
   action?: string;
   status?: string;
   risk_level?: string;
+  missing_context?: unknown;
   source?: string;
   trace?: JsonRecord;
 };
@@ -558,6 +561,8 @@ function MessageHistory({ storeId, setToast, setSelected }: {
   const [rows, setRows] = React.useState<CustomerTrace[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [question, setQuestion] = React.useState("");
+  const [simulationLoading, setSimulationLoading] = React.useState(false);
+  const [simulationError, setSimulationError] = React.useState<string | null>(null);
   const [selectedTrace, setSelectedTrace] = React.useState<CustomerTrace | null>(null);
   const [selectedConversationId, setSelectedConversationId] = React.useState("");
   const [searchText, setSearchText] = React.useState("");
@@ -571,9 +576,12 @@ function MessageHistory({ storeId, setToast, setSelected }: {
       const query = new URLSearchParams({ store_id: storeId });
       if (source) query.set("source", source);
       const response = await requestJson<Page>(`/v1/admin/message-traces?${query.toString()}`);
-      setRows(arrayFrom(response.items) as CustomerTrace[]);
+      const loadedRows = arrayFrom(response.items) as CustomerTrace[];
+      setRows(loadedRows);
+      return loadedRows;
     } catch (error) {
       setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+      return null;
     } finally {
       setLoading(false);
     }
@@ -593,24 +601,18 @@ function MessageHistory({ storeId, setToast, setSelected }: {
     }
   }, [conversations, selectedConversationId]);
 
-  async function simulate(event: React.FormEvent) {
-    event.preventDefault();
+  async function simulate() {
     const content = question.trim();
-    if (!content) {
-      setToast({ tone: "error", text: "请输入模拟客户问题" });
-      return;
-    }
-    setLoading(true);
+    if (!content || simulationLoading) return;
+    setSimulationLoading(true);
+    setSimulationError(null);
     try {
       const response = await requestJson<JsonRecord>("/v1/admin/message-simulations", {
         method: "POST",
         body: JSON.stringify({ store_id: storeId, platform: "pdd", message: { content } })
       });
       const decision = readRecord(response, "decision");
-      setQuestion("");
-      setToast({ tone: "success", text: "模拟决策已完成" });
-      await load();
-      setSelectedTrace({
+      const newTrace: CustomerTrace = {
         decision_id: String(decision.decision_id || ""),
         source: "simulation",
         customer_message: content,
@@ -619,13 +621,30 @@ function MessageHistory({ storeId, setToast, setSelected }: {
         action: String(decision.action || ""),
         status: String(decision.decision_status || ""),
         risk_level: String(decision.risk_level || ""),
+        missing_context: decision.missing_context,
         trace: readRecord(decision, "trace")
-      });
+      };
+      const loadedRows = await load();
+      const createdTrace = loadedRows?.find((trace) => trace.decision_id === newTrace.decision_id);
+      const selectedResult = createdTrace
+        ? { ...createdTrace, ...newTrace, conversation_id: createdTrace.conversation_id }
+        : newTrace;
+      if (!loadedRows) setRows((current) => [newTrace, ...current]);
+      setSearchText("");
+      setSelectedConversationId(String(selectedResult.conversation_id || selectedResult.decision_id || ""));
+      setSelectedTrace(selectedResult);
+      setQuestion("");
+      setToast({ tone: "success", text: "模拟决策已完成" });
     } catch (error) {
-      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+      setSimulationError(error instanceof Error ? error.message : String(error));
     } finally {
-      setLoading(false);
+      setSimulationLoading(false);
     }
+  }
+
+  function changeQuestion(value: string) {
+    setQuestion(value);
+    setSimulationError(null);
   }
 
   return (
@@ -712,24 +731,30 @@ function MessageHistory({ storeId, setToast, setSelected }: {
                   </React.Fragment>
                 ))}
               </div>
-              <form className="messageSimulator composerSimulator" onSubmit={simulate}>
-                <label>
-                  模拟客户咨询
-                  <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：这个商品有哪些尺寸？" />
-                </label>
-                <div className="buttonRow end">
-                  <button className="primaryButton" disabled={loading}>
-                    {loading ? <Loader2 size={16} className="spin" /> : <Bot size={16} />}
-                    模拟决策
-                  </button>
-                </div>
-              </form>
+              <SimulationComposer
+                value={question}
+                loading={simulationLoading}
+                error={simulationError}
+                onChange={changeQuestion}
+                onSubmit={() => void simulate()}
+              />
             </>
           ) : (
-            <div className="emptyState">
-              <strong>{loading ? "正在读取消息历史" : "暂无会话历史"}</strong>
-              <p>{loading ? "消息历史正在读取，请稍候。" : "收到客户咨询或完成模拟咨询后，右侧会显示完整对话。"}</p>
-            </div>
+            loading ? (
+              <div className="emptyState">
+                <strong>正在读取消息历史</strong>
+                <p>消息历史正在读取，请稍候。</p>
+              </div>
+            ) : (
+              <SimulationComposer
+                value={question}
+                loading={simulationLoading}
+                error={simulationError}
+                emptyState
+                onChange={changeQuestion}
+                onSubmit={() => void simulate()}
+              />
+            )
           )}
         </section>
       </section>
@@ -839,6 +864,12 @@ function decisionMeta(trace: CustomerTrace) {
 }
 
 function MessageTraceDrawer({ trace, onClose, onRaw }: { trace: CustomerTrace; onClose: () => void; onRaw: () => void }) {
+  const presentation = presentDecisionTrace({
+    action: trace.action,
+    status: trace.status,
+    risk: trace.risk_level,
+    missingContext: trace.missing_context
+  });
   return (
     <aside className="drawer messageTraceDrawer">
       <div className="drawerHeader">
@@ -846,9 +877,9 @@ function MessageTraceDrawer({ trace, onClose, onRaw }: { trace: CustomerTrace; o
         <button onClick={onClose}>关闭</button>
       </div>
       <div className="traceSummary">
-        <Metric label="动作" value={String(trace.action || "-")} tone="info" />
-        <Metric label="状态" value={String(trace.status || "-")} tone="ok" />
-        <Metric label="风险" value={String(trace.risk_level || "-")} tone="warn" />
+        <Metric label="动作" value={presentation.actionLabel} tone="info" title={String(trace.action || "-")} />
+        <Metric label="状态" value={presentation.statusLabel} tone="ok" title={String(trace.status || "-")} />
+        <Metric label="风险" value={presentation.riskLabel} tone="warn" title={String(trace.risk_level || "-")} />
       </div>
       <section className="traceTextBlock">
         <h3>客户消息</h3>
@@ -862,7 +893,13 @@ function MessageTraceDrawer({ trace, onClose, onRaw }: { trace: CustomerTrace; o
           </>
         ) : null}
       </section>
-      <DecisionTraceReplay trace={trace.trace} status={String(trace.status || trace.action || "")} />
+      <DecisionTraceReplay
+        trace={trace.trace}
+        action={trace.action}
+        status={trace.status}
+        risk={trace.risk_level}
+        missingContext={trace.missing_context}
+      />
       <button onClick={onRaw}>查看原始记录</button>
     </aside>
   );

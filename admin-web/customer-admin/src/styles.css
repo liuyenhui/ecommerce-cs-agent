@@ -221,7 +221,7 @@
 }
 
 .messageTraceDrawer {
-  width: min(680px, calc(100vw - 28px));
+  width: min(980px, calc(100vw - 28px));
 }
 
 .traceSummary {
@@ -254,15 +254,38 @@
 
 .decisionGraph {
   width: 100%;
-  min-height: 320px;
+  min-height: 720px;
   margin: 12px 0;
   overflow: hidden;
   border: 1px solid #d8dee8;
   border-radius: 6px;
-  background: #ffffff;
+  background: #020617;
+}
+
+.simulationError {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.simulationEmptyIntro {
+  display: grid;
+  gap: 4px;
+}
+
+.simulationEmptyIntro p {
+  margin: 0;
+  color: #5f6b7a;
 }
 
 @media (max-width: 720px) {
+  .decisionGraph {
+    display: none;
+  }
+
+  .traceTimeline {
+    min-width: 0;
+  }
   .messageHistoryWorkspace {
     min-height: auto;
     grid-template-columns: 1fr;

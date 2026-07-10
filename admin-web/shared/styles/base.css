@@ -454,6 +454,10 @@ pre {
   .demoTrack {
     animation: none;
   }
+
+  .decisionGraph .trace-flow-edge.active {
+    animation: none;
+  }
 }
 
 .appShell {
@@ -981,7 +985,7 @@ tbody tr:hover {
 }
 
 .messageTraceDrawer {
-  width: min(760px, calc(100vw - 28px));
+  width: min(980px, calc(100vw - 28px));
   overflow: auto;
 }
 
@@ -1018,6 +1022,58 @@ tbody tr:hover {
   gap: 12px;
 }
 
+.traceProgressBanner {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  background: #eff6ff;
+  padding: 10px 12px;
+  color: #1e3a8a;
+}
+
+.traceProgressBanner.blocked {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #7f1d1d;
+}
+
+.traceProgressBanner strong {
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.traceProgressBanner span {
+  line-height: 1.5;
+}
+
+.traceProgressBanner em {
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 760;
+}
+
+.traceTechnicalDetails {
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 8px;
+}
+
+.traceTechnicalDetails summary {
+  cursor: pointer;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.traceGraphFallback {
+  margin: 0;
+  border: 1px solid #fbbf24;
+  border-radius: 6px;
+  background: #fffbeb;
+  padding: 9px 10px;
+  color: #92400e;
+}
+
 .traceReplayMeta {
   display: flex;
   flex-wrap: wrap;
@@ -1035,11 +1091,19 @@ tbody tr:hover {
 
 .decisionGraph {
   width: 100%;
-  min-height: 360px;
+  min-height: 720px;
   overflow: hidden;
   border: 1px solid #d8dee8;
   border-radius: 6px;
-  background: #ffffff;
+  background: #020617;
+}
+
+.decisionGraph .trace-flow-edge.active {
+  animation: traceFlowDash 1.4s linear infinite;
+}
+
+.decisionGraph .trace-flow-edge.inactive {
+  opacity: 0.56;
 }
 
 .traceTimeline {
@@ -1122,6 +1186,25 @@ tbody tr:hover {
 
 .traceError {
   color: #b91c1c;
+}
+
+.traceBlocker {
+  margin: 0;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  background: #fef2f2;
+  padding: 9px 10px;
+  color: #991b1b;
+  line-height: 1.5;
+}
+
+@keyframes traceFlowDash {
+  from {
+    stroke-dashoffset: 17;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
 }
 
 .modalBackdrop {
