@@ -61,21 +61,7 @@ class DecisionService:
     ) -> dict[str, Any] | None:
         state = self.repository.get_by_decision_id(decision_id)
         if not state:
-            return {
-                "decision_id": decision_id,
-                "context_request_id": payload.get("context_request_id"),
-                "decision_status": "partial_context",
-                "action": "context_request",
-                "accepted": True,
-                "remaining_context_requests": [],
-                "next_action": "wait_context",
-                "trace": self._trace(
-                    "context_refill",
-                    "上下文回填",
-                    outputs_ref=[f"context:{context_type}:{payload.get('context_request_id')}"],
-                    thread_id=decision_id,
-                ),
-            }
+            return None
         organization_id, store_id, request_id = _request_key(state.request)
         principal_scope = {
             "organization_id": principal_organization_id,
@@ -196,8 +182,8 @@ class DecisionService:
                 "decision_id": decision_id,
                 "action_id": action_id,
                 "accepted": True,
-                "decision_status": "answer_ready" if status == "success" else "handoff",
-                "next_action": "decide" if status == "success" else "handoff",
+                "decision_status": "answer_ready" if status == "succeeded" else "handoff",
+                "next_action": "decide" if status == "succeeded" else "handoff",
                 "_request_payload": comparable,
                 "trace": self._trace(
                     "action_result",
@@ -471,18 +457,6 @@ def _request_key(payload: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
-def _request_with_refill_context(request: dict[str, Any], context_type: str, payload: dict[str, Any]) -> dict[str, Any]:
-    updated = dict(request)
-    context = dict(updated.get("context") or {})
-    existing = context.get(context_type)
-    if isinstance(existing, list):
-        context[context_type] = [*existing, *list(payload.get("items") or [])]
-    else:
-        context[context_type] = list(payload.get("items") or [])
-    updated["context"] = context
-    return updated
-
-
 def _request_with_refill_contexts(request: dict[str, Any], refills: dict[tuple[str, str], dict[str, Any]]) -> dict[str, Any]:
     updated = dict(request)
     context = dict(updated.get("context") or {})
@@ -491,7 +465,7 @@ def _request_with_refill_contexts(request: dict[str, Any], refills: dict[tuple[s
         if not context_type:
             continue
         existing = context.get(context_type)
-        items = list(refill.get("_request_payload", {}).get("items") or [])
+        items = list(refill.get("_request_payload", {}).get(context_type) or [])
         if isinstance(existing, list):
             context[context_type] = [*existing, *items]
         else:

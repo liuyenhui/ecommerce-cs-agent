@@ -252,7 +252,8 @@ def test_context_refill_and_action_result_are_idempotent():
         "organization_id": "org-001",
         "store_id": "store-001",
         "source": "external-system",
-        "items": [{"external_order_id": "order-001", "status": "paid"}],
+        "captured_at": "2026-06-12T10:16:00+08:00",
+        "orders": [{"external_order_id": "order-001", "status": "paid"}],
     }
     first_refill = api.post(
         f"/v1/reply-decisions/{decision['decision_id']}/contexts/orders",
@@ -277,7 +278,7 @@ def test_context_refill_and_action_result_are_idempotent():
             "action_id": "action-unknown",
             "action_type": "update-note",
             "idempotency_key": "unknown-action-key",
-            "status": "success",
+            "status": "succeeded",
             "executed_at": "2026-06-12T10:16:00+08:00",
         },
     )
@@ -291,7 +292,7 @@ def test_context_refill_and_action_result_are_idempotent():
         "action_id": action_decision["action_requests"][0]["action_id"],
         "action_type": "update-note",
         "idempotency_key": "action-key-001",
-        "status": "success",
+        "status": "succeeded",
         "external_result": {"external_ref": "ok"},
         "error": None,
         "executed_at": "2026-06-12T10:16:00+08:00",
@@ -313,6 +314,159 @@ def test_context_refill_and_action_result_are_idempotent():
     assert action_first.json()["accepted"] is True
 
 
+def test_typed_context_refills_accept_openapi_payloads_and_resume_with_typed_arrays():
+    api = client()
+    captured_at = "2026-06-12T10:16:00+08:00"
+
+    product_decision = api.post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=minimal_reply_request("req-openapi-products", "这个商品是什么材质？"),
+    ).json()
+    product_request = next(item for item in product_decision["context_requests"] if item["type"] == "products")
+    product_refill = api.post(
+        f"/v1/reply-decisions/{product_decision['decision_id']}/contexts/products",
+        headers=auth_headers(),
+        json={
+            "context_request_id": product_request["context_request_id"],
+            "idempotency_key": "ctx-openapi-products",
+            "captured_at": captured_at,
+            "products": [{"external_product_id": "product-001", "title": "测试商品"}],
+        },
+    )
+
+    shipping_decision = api.post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=minimal_reply_request("req-openapi-shipping"),
+    ).json()
+    order_request = next(item for item in shipping_decision["context_requests"] if item["type"] == "orders")
+    logistics_request = next(item for item in shipping_decision["context_requests"] if item["type"] == "logistics")
+    order_refill = api.post(
+        f"/v1/reply-decisions/{shipping_decision['decision_id']}/contexts/orders",
+        headers=auth_headers(),
+        json={
+            "context_request_id": order_request["context_request_id"],
+            "idempotency_key": "ctx-openapi-orders",
+            "captured_at": captured_at,
+            "orders": [{"external_order_id": "order-001", "status": "paid"}],
+        },
+    )
+    logistics_refill = api.post(
+        f"/v1/reply-decisions/{shipping_decision['decision_id']}/contexts/logistics",
+        headers=auth_headers(),
+        json={
+            "context_request_id": logistics_request["context_request_id"],
+            "idempotency_key": "ctx-openapi-logistics",
+            "captured_at": captured_at,
+            "logistics": [{"external_order_id": "order-001", "status": "in_transit"}],
+        },
+    )
+
+    rule_decision = api.post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=minimal_reply_request("req-openapi-rules", "退换货规则是什么？"),
+    ).json()
+    rule_request = next(item for item in rule_decision["context_requests"] if item["type"] == "rules")
+    rule_refill = api.post(
+        f"/v1/reply-decisions/{rule_decision['decision_id']}/contexts/rules",
+        headers=auth_headers(),
+        json={
+            "context_request_id": rule_request["context_request_id"],
+            "idempotency_key": "ctx-openapi-rules",
+            "captured_at": captured_at,
+            "rules": [{"rule_id": "rule-001", "rule_type": "returns", "version": "1"}],
+        },
+    )
+
+    assert product_refill.status_code == 200
+    assert product_refill.json()["missing_context"] == []
+    assert order_refill.status_code == 200
+    assert order_refill.json()["next_action"] == "wait_context"
+    assert logistics_refill.status_code == 200
+    assert logistics_refill.json()["missing_context"] == []
+    assert rule_refill.status_code == 200
+    assert rule_refill.json()["missing_context"] == []
+
+
+def test_context_refill_requires_openapi_idempotency_key_and_captured_at():
+    api = client()
+    decision = api.post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=minimal_reply_request("req-refill-required-fields", "这个商品是什么材质？"),
+    ).json()
+    context_request_id = decision["context_requests"][0]["context_request_id"]
+
+    response = api.post(
+        f"/v1/reply-decisions/{decision['decision_id']}/contexts/products",
+        headers=auth_headers(),
+        json={"context_request_id": context_request_id, "products": []},
+    )
+
+    assert response.status_code == 422
+
+
+def test_continuations_return_not_found_for_unknown_decision():
+    api = client()
+    context_response = api.post(
+        "/v1/reply-decisions/decision-missing/contexts/products",
+        headers=auth_headers(),
+        json={
+            "context_request_id": "ctx-products-missing",
+            "idempotency_key": "ctx-missing",
+            "captured_at": "2026-06-12T10:16:00+08:00",
+            "products": [],
+        },
+    )
+    action_response = api.post(
+        "/v1/reply-decisions/decision-missing/actions/results",
+        headers=auth_headers(),
+        json={
+            "action_id": "action-missing",
+            "action_type": "update-note",
+            "idempotency_key": "action-missing",
+            "status": "succeeded",
+            "executed_at": "2026-06-12T10:16:00+08:00",
+        },
+    )
+
+    assert context_response.status_code == 404
+    assert action_response.status_code == 404
+
+
+def test_action_result_uses_openapi_succeeded_status_and_rejects_success_alias():
+    api = client()
+    decision = api.post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=minimal_reply_request("req-action-openapi-status", "帮我把订单备注改成红色包装"),
+    ).json()
+    action = decision["action_requests"][0]
+    base_payload = {
+        "action_id": action["action_id"],
+        "action_type": action["action_type"],
+        "executed_at": "2026-06-12T10:16:00+08:00",
+    }
+
+    invalid = api.post(
+        f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
+        headers=auth_headers(),
+        json={**base_payload, "idempotency_key": "action-invalid-success", "status": "success"},
+    )
+    succeeded = api.post(
+        f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
+        headers=auth_headers(),
+        json={**base_payload, "idempotency_key": "action-succeeded", "status": "succeeded"},
+    )
+
+    assert invalid.status_code == 422
+    assert succeeded.status_code == 200
+    assert succeeded.json()["decision_status"] == "answer_ready"
+    assert succeeded.json()["next_action"] == "decide"
+
+
 def test_context_refill_rejects_cross_tenant_and_idempotency_conflict():
     api = client()
     decision = api.post(
@@ -326,7 +480,8 @@ def test_context_refill_rejects_cross_tenant_and_idempotency_conflict():
         "organization_id": "org-001",
         "store_id": "store-001",
         "source": "external-system",
-        "items": [{"external_order_id": "order-001", "status": "paid"}],
+        "captured_at": "2026-06-12T10:16:00+08:00",
+        "orders": [{"external_order_id": "order-001", "status": "paid"}],
     }
     cross_tenant = {**payload, "organization_id": "org-other"}
 
@@ -343,7 +498,7 @@ def test_context_refill_rejects_cross_tenant_and_idempotency_conflict():
     conflict = api.post(
         f"/v1/reply-decisions/{decision['decision_id']}/contexts/orders",
         headers=auth_headers(),
-        json={**payload, "items": [{"external_order_id": "order-002", "status": "paid"}]},
+        json={**payload, "orders": [{"external_order_id": "order-002", "status": "paid"}]},
     )
 
     assert forbidden.status_code == 403
@@ -365,9 +520,10 @@ def test_context_refill_rejects_payload_scope_aliases_for_platform_token():
         json={
             "context_request_id": decision["context_requests"][0]["context_request_id"],
             "idempotency_key": "ctx-scope-alias",
+            "captured_at": "2026-06-12T10:16:00+08:00",
             "tenant_id": "org-other",
             "external_store_id": "store-other",
-            "items": [{"external_order_id": "order-001", "status": "paid"}],
+            "orders": [{"external_order_id": "order-001", "status": "paid"}],
         },
     )
 
@@ -406,10 +562,11 @@ def test_context_refill_rejects_each_declared_scope_alias_mismatch(scope: dict[s
         f"/v1/reply-decisions/{decision['decision_id']}/contexts/orders",
         headers=auth_headers(),
         json={
-            "context_request_id": decision["context_requests"][0]["context_request_id"],
-            "idempotency_key": f"ctx-{request_id}",
-            **scope,
-            "items": [{"external_order_id": "order-001", "status": "paid"}],
+                "context_request_id": decision["context_requests"][0]["context_request_id"],
+                "idempotency_key": f"ctx-{request_id}",
+                "captured_at": "2026-06-12T10:16:00+08:00",
+                **scope,
+                "orders": [{"external_order_id": "order-001", "status": "paid"}],
         },
     )
 
@@ -444,7 +601,8 @@ def test_typed_context_refill_rejects_endpoint_type_mismatch(
         json={
             "context_request_id": planned_request["context_request_id"],
             "idempotency_key": f"ctx-type-{endpoint_type}",
-            "items": [],
+            "captured_at": "2026-06-12T10:16:00+08:00",
+            endpoint_type: [],
         },
     )
 
@@ -463,7 +621,7 @@ def test_action_result_rejects_unknown_action_and_idempotency_conflict():
         "action_id": action_id,
         "action_type": "update-note",
         "idempotency_key": "action-result-rejection-key",
-        "status": "success",
+        "status": "succeeded",
         "external_result": {"external_ref": "ok"},
         "executed_at": "2026-06-12T10:16:00+08:00",
     }

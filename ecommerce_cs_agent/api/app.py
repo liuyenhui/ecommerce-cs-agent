@@ -138,7 +138,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             _principal: Principal = Depends(agent_principal),
         ) -> dict[str, Any]:
             payload = await request.json()
-            _require_fields(payload, ["context_request_id"])
+            _require_fields(payload, ["context_request_id", "idempotency_key", "captured_at", context_type])
+            if not isinstance(payload.get(context_type), list):
+                raise api_error(422, "validation_error", f"{context_type} must be an array")
             try:
                 response = decisions.refill_context(
                     decision_id,
@@ -172,6 +174,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         payload = await request.json()
         _require_fields(payload, ["action_id", "action_type", "idempotency_key", "status", "executed_at"])
+        if payload.get("status") not in {"succeeded", "failed", "timeout", "rejected"}:
+            raise api_error(422, "validation_error", "invalid action result status")
         try:
             response = decisions.submit_action_result(
                 decision_id,

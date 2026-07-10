@@ -42,6 +42,11 @@ REQUIRED_PATHS = {
 
 CORE_JSON_REQUESTS = {
     ("post", "/v1/reply-decisions"): "#/components/schemas/ReplyDecisionCreateRequest",
+    ("post", "/v1/reply-decisions/{decision_id}/contexts/products"): "#/components/schemas/ProductContextRefillRequest",
+    ("post", "/v1/reply-decisions/{decision_id}/contexts/orders"): "#/components/schemas/OrderContextRefillRequest",
+    ("post", "/v1/reply-decisions/{decision_id}/contexts/logistics"): "#/components/schemas/LogisticsContextRefillRequest",
+    ("post", "/v1/reply-decisions/{decision_id}/contexts/rules"): "#/components/schemas/RuleContextRefillRequest",
+    ("post", "/v1/reply-decisions/{decision_id}/actions/results"): "#/components/schemas/ActionResultRequest",
     ("post", "/v1/admin/auth/login"): "#/components/schemas/AdminLoginRequest",
     ("post", "/v1/admin/auth/launch/exchange"): "#/components/schemas/AdminLaunchExchangeRequest",
     ("post", "/v1/admin/message-simulations"): "#/components/schemas/AdminMessageSimulationRequest",
@@ -57,6 +62,11 @@ CORE_JSON_REQUESTS = {
 
 CORE_JSON_RESPONSES = {
     ("post", "/v1/reply-decisions", "200"): "#/components/schemas/ReplyDecisionResponse",
+    ("post", "/v1/reply-decisions/{decision_id}/contexts/products", "200"): "#/components/responses/ContextRefillAccepted",
+    ("post", "/v1/reply-decisions/{decision_id}/contexts/orders", "200"): "#/components/responses/ContextRefillAccepted",
+    ("post", "/v1/reply-decisions/{decision_id}/contexts/logistics", "200"): "#/components/responses/ContextRefillAccepted",
+    ("post", "/v1/reply-decisions/{decision_id}/contexts/rules", "200"): "#/components/responses/ContextRefillAccepted",
+    ("post", "/v1/reply-decisions/{decision_id}/actions/results", "200"): "#/components/schemas/ActionResultResponse",
     ("post", "/v1/admin/auth/login", "200"): "#/components/schemas/AdminAuthResponse",
     ("post", "/v1/admin/auth/launch/exchange", "200"): "#/components/schemas/AdminAuthResponse",
     ("get", "/v1/admin/message-traces", "200"): "#/components/schemas/CustomerMessageTraceListResponse",

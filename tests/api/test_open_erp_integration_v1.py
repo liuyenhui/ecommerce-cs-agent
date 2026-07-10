@@ -216,8 +216,9 @@ def test_context_refill_returns_candidate_when_required_context_is_complete() ->
     refill_payload = {
         "context_request_id": decision["context_requests"][0]["context_request_id"],
         "idempotency_key": "ctx-products-001",
+        "captured_at": "2026-06-24T10:01:00+08:00",
         "external_store_id": "mall-001",
-        "items": [{"external_product_id": "pdd-product-001", "title": "测试商品", "attributes": {"size": "M/L"}}],
+        "products": [{"external_product_id": "pdd-product-001", "title": "测试商品", "attributes": {"size": "M/L"}}],
     }
     refill = client.post(
         f"/v1/reply-decisions/{decision['decision_id']}/contexts/products",
@@ -278,7 +279,8 @@ def test_connector_scope_rejects_cross_store_continuations_without_payload_scope
         json={
             "context_request_id": context_decision["context_requests"][0]["context_request_id"],
             "idempotency_key": "cross-store-context-refill",
-            "items": [{"external_product_id": "pdd-product-001", "title": "测试商品"}],
+            "captured_at": "2026-06-24T10:01:00+08:00",
+            "products": [{"external_product_id": "pdd-product-001", "title": "测试商品"}],
         },
     )
     action_result = client.post(
@@ -288,7 +290,7 @@ def test_connector_scope_rejects_cross_store_continuations_without_payload_scope
             "action_id": action_id,
             "action_type": "update-note",
             "idempotency_key": "cross-store-action-result",
-            "status": "success",
+            "status": "succeeded",
             "executed_at": "2026-06-24T10:01:00+08:00",
         },
     )
