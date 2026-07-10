@@ -37,6 +37,7 @@ import { DecisionTraceReplay } from "../../shared/trace-replay";
 import { presentDecisionTrace } from "../../shared/trace-presentation";
 import type { JsonRecord, NavItem, Page, ToastState } from "../../shared/types";
 import { SimulationComposer } from "./SimulationComposer";
+import { scrollBehaviorForReducedMotion } from "./landing-motion";
 import {
   buildCanonicalSimulationTrace,
   isCurrentOperation,
@@ -220,7 +221,7 @@ function CustomerLanding({ customerAuthed, navigate }: { customerAuthed: boolean
   const publicWorkflow = [
     ["客户提问", "收到买家的商品、订单或售后问题。"],
     ["查商品资料", "检索已审核的商品、订单、物流和规则；缺资料就先补资料，不让 AI 猜。"],
-    ["检查规则与风险", "价格、退款和高风险表达必须通过规则闸门。"],
+    ["检查规则与风险", "检查价格、退款条件和风险表达，判断能不能自动回复。"],
     ["安全回复或转人工", "满足条件才自动回复，不确定时给建议或转人工。"]
   ] as const;
   const reassurance = [
@@ -229,14 +230,20 @@ function CustomerLanding({ customerAuthed, navigate }: { customerAuthed: boolean
     ["风险可转人工", "资料不全或风险较高时，AI 不强行作答。", <AlertTriangle size={19} />]
   ] as const;
   const openCustomerAdmin = () => navigate(customerAuthed ? "/admin" : "/login");
-  const showDemoFlow = () => document.getElementById("demo-flow")?.scrollIntoView({ behavior: "smooth" });
+  const showDemoFlow = () => {
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    document.getElementById("demo-flow")?.scrollIntoView({
+      behavior: scrollBehaviorForReducedMotion(reducedMotion),
+      block: "start"
+    });
+  };
 
   return (
     <main className="landingPage">
       <header className="landingHeader">
         <button className="landingBrand" onClick={() => navigate("/")} aria-label="回到首页">
           <MessageSquareText size={18} />
-          <span>AI 客服资料中台</span>
+          <span>AI 客服管理后台</span>
         </button>
         <nav aria-label="公开页导航">
           <button className="textButton" onClick={showDemoFlow}>
@@ -265,10 +272,13 @@ function CustomerLanding({ customerAuthed, navigate }: { customerAuthed: boolean
           </div>
         </div>
         <figure className="workflowProof">
-          <img
-            src="/ai-workflow-proof.png"
-            alt="客户问题经过资料检索、规则检查并停在资料补充步骤的真实客户后台"
-          />
+          <picture>
+            <source media="(max-width: 720px)" srcSet="/ai-workflow-proof-mobile.png" />
+            <img
+              src="/ai-workflow-proof.png"
+              alt="客户问题经过资料检索、风险检查并停在资料补充步骤的真实客户后台"
+            />
+          </picture>
           <figcaption>真实客户后台工作流：缺资料就先补资料，不让 AI 猜。</figcaption>
         </figure>
       </section>

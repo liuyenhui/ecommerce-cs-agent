@@ -231,6 +231,10 @@ pre {
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.08);
 }
 
+.workflowProof picture {
+  display: block;
+}
+
 .workflowProof img {
   display: block;
   width: 100%;
@@ -266,6 +270,10 @@ pre {
 .reassuranceSection,
 .finalCta {
   padding: 68px 0;
+}
+
+.flowSection {
+  scroll-margin-top: 88px;
 }
 
 .flowRail {
@@ -1252,8 +1260,16 @@ tbody tr:hover {
     padding-top: 28px;
   }
 
+  .flowSection {
+    scroll-margin-top: 132px;
+  }
+
   .heroCopy {
     gap: 18px;
+  }
+
+  .workflowProof img {
+    aspect-ratio: auto;
   }
 
   .flowRail {

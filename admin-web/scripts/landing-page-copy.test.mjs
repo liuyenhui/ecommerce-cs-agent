@@ -4,6 +4,7 @@ import test from "node:test";
 
 const source = readFileSync(new URL("../customer-admin/src/App.tsx", import.meta.url), "utf8");
 const sharedStyles = readFileSync(new URL("../shared/styles/base.css", import.meta.url), "utf8");
+const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
 function extractFunction(name) {
   const start = source.indexOf(`function ${name}`);
@@ -36,10 +37,14 @@ test("customer landing page uses the approved public narrative", () => {
     assert.equal(customerSite.includes(fakePreviewClass), false, `fake preview should be removed: ${fakePreviewClass}`);
   }
   assert.ok(customerSite.includes('src="/ai-workflow-proof.png"'), "landing should render the authentic workflow proof");
+  assert.ok(customerSite.includes('srcSet="/ai-workflow-proof-mobile.png"'), "landing should render a readable mobile workflow proof");
+  assert.ok(customerSite.includes("<picture>"), "landing should choose a viewport-appropriate proof asset");
+  assert.equal(customerSite.includes("规则闸门"), false, "landing should avoid technical gate terminology");
+  assert.equal(customerSite.includes("资料中台"), false, "landing should use a plain customer-facing product name");
 });
 
-test("customer landing workflow proof is a real, reasonably sized PNG", () => {
-  const proofUrl = new URL("../customer-admin/public/ai-workflow-proof.png", import.meta.url);
+function assertPng(relativePath, { minWidth, minHeight }) {
+  const proofUrl = new URL(relativePath, import.meta.url);
   assert.ok(existsSync(proofUrl), "authentic workflow proof should exist");
   const proof = readFileSync(proofUrl);
   assert.deepEqual([...proof.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
@@ -47,14 +52,25 @@ test("customer landing workflow proof is a real, reasonably sized PNG", () => {
 
   const width = proof.readUInt32BE(16);
   const height = proof.readUInt32BE(20);
-  assert.ok(width >= 960, `workflow proof width should remain legible, got ${width}`);
-  assert.ok(height >= 540, `workflow proof height should remain legible, got ${height}`);
+  assert.ok(width >= minWidth, `workflow proof width should remain legible, got ${width}`);
+  assert.ok(height >= minHeight, `workflow proof height should remain legible, got ${height}`);
+}
+
+test("customer landing workflow proofs are real, viewport-appropriate PNGs", () => {
+  assertPng("../customer-admin/public/ai-workflow-proof.png", { minWidth: 960, minHeight: 540 });
+  assertPng("../customer-admin/public/ai-workflow-proof-mobile.png", { minWidth: 320, minHeight: 700 });
 });
 
 test("customer landing keeps a compact mobile flow and usable tap targets", () => {
   assert.match(sharedStyles, /@media \(max-width: 900px\)[\s\S]*\.landingPage button\s*\{\s*min-height:\s*44px;/);
   assert.match(sharedStyles, /@media \(max-width: 900px\)[\s\S]*\.flowRail li\s*\{[\s\S]*grid-template-columns:\s*28px minmax\(0, 1fr\);/);
   assert.match(sharedStyles, /@media \(max-width: 900px\)[\s\S]*\.reassuranceList article\s*\{[\s\S]*grid-template-columns:\s*28px minmax\(0, 1fr\);/);
+  assert.match(sharedStyles, /@media \(max-width: 900px\)[\s\S]*\.workflowProof img\s*\{[\s\S]*aspect-ratio:\s*auto;/);
+  assert.match(sharedStyles, /\.flowSection\s*\{[\s\S]*scroll-margin-top:\s*\d+px;/);
+});
+
+test("default Admin test gate includes the landing regression suite", () => {
+  assert.match(packageJson.scripts.test, /npm run test:landing/);
 });
 
 test("customer site does not expose a system admin entrance", () => {
