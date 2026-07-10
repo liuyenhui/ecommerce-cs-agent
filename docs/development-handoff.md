@@ -6,6 +6,7 @@
 
 ### 2026-07-10
 
+- 新增 [第一版需求测试矩阵](requirements-test-matrix.md)，作为 Development Readiness“第一版必须实现”需求到正向、拒绝、自动化与线上证据的测试案例覆盖入口。
 - 新增 [需求测试、AI 工作流与宣传页收口设计](superpowers/specs/2026-07-10-requirements-workflow-and-landing-closure-design.md)：第一版后续工作按需求到测试矩阵、Customer Admin 首次模拟咨询与业务化决策回放、公开页“流程故事”真实产品证明、桌面/移动验收和 GitOps 线上闭环推进；现有 LangGraph 条件分支、checkpointer、auto reply 与 X6 回放未提交改动纳入同一实现范围。
 
 ### 2026-07-09

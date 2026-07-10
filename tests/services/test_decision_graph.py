@@ -7,7 +7,7 @@ from ecommerce_cs_agent.services.decision import DecisionService
 from ecommerce_cs_agent.services.repository import InMemoryDecisionRepository, PostgresDecisionRepository
 
 
-def test_decision_graph_uses_approved_knowledge_for_product_candidate() -> None:
+def test_decision_graph_uses_approved_knowledge_for_safe_auto_reply() -> None:
     repository = _KnowledgeRepository(
         [
             {
@@ -24,13 +24,21 @@ def test_decision_graph_uses_approved_knowledge_for_product_candidate() -> None:
 
     response = service.create_reply_decision(_request("req-knowledge", "这个商品是什么材质？"))
 
-    assert response["action"] == "candidate"
-    assert response["decision_status"] == "candidate"
+    assert response["action"] == "auto_reply"
+    assert response["decision_status"] == "answer_ready"
+    assert response["auto_reply"]["reply_text"] == response["candidates"][0]["reply_text"]
+    assert response["auto_reply"]["approved_by_policy_gate"] is True
+    assert response["confidence"] >= 0.85
+    assert response["trace"]["langgraph_checkpoint_id"]
     assert response["missing_context"] == []
     assert response["candidates"][0]["evidence"][0]["knowledge_entry_id"] == "knowledge-001"
     assert "材质为棉" in response["candidates"][0]["reply_text"]
     assert response["trace"]["matched_knowledge_ids"] == ["knowledge-001"]
     assert "knowledge:knowledge-001" in response["trace"]["steps"][1]["outputs_ref"]
+    graph = response["trace"]["graph"]
+    assert next(node for node in graph["nodes"] if node["id"] == "generate_candidate")["status"] == "completed"
+    assert any(edge["condition"] == "candidate" and edge["taken"] for edge in graph["edges"])
+    assert any(edge["condition"] == "persist" and edge["taken"] for edge in graph["edges"])
 
 
 def test_decision_graph_does_not_auto_reply_high_risk_even_with_knowledge() -> None:
@@ -110,6 +118,8 @@ def test_decision_graph_action_request_and_trace_match_contract() -> None:
         "taken": True,
     }
     assert any(edge["condition"] == "action_request" and edge["taken"] for edge in graph["edges"])
+    assert next(node for node in graph["nodes"] if node["id"] == "action_gate")["status"] == "completed"
+    assert next(node for node in graph["nodes"] if node["id"] == "generate_candidate")["status"] == "skipped"
 
 
 def test_decision_graph_trace_graph_marks_context_request_branch() -> None:
@@ -120,11 +130,22 @@ def test_decision_graph_trace_graph_marks_context_request_branch() -> None:
     assert response["action"] == "context_request"
     graph = response["trace"]["graph"]
     assert response["trace"]["thread_id"] == response["decision_id"]
-    assert [step["step_id"] for step in response["trace"]["steps"]] == [node["id"] for node in graph["nodes"]]
+    assert [step["step_id"] for step in response["trace"]["steps"]] == [
+        "normalize_request",
+        "retrieve_context",
+        "classify_intent",
+        "context_gate",
+        "policy_gate",
+        "persist_trace",
+    ]
     assert any(edge["condition"] == "context_request" and edge["taken"] for edge in graph["edges"])
     assert any(edge["condition"] == "candidate" and not edge["taken"] for edge in graph["edges"])
     context_gate = next(node for node in graph["nodes"] if node["id"] == "context_gate")
     assert any(item.startswith("context_request:") for item in context_gate["outputs_ref"])
+    action_gate = next(node for node in graph["nodes"] if node["id"] == "action_gate")
+    generate_candidate = next(node for node in graph["nodes"] if node["id"] == "generate_candidate")
+    assert action_gate["status"] == "skipped"
+    assert generate_candidate["status"] == "skipped"
 
 
 def test_context_refill_resumes_same_thread_and_completes_graph() -> None:
@@ -161,6 +182,8 @@ def test_context_refill_resumes_same_thread_and_completes_graph() -> None:
     assert second is not None
     assert second["decision_id"] == decision_id
     assert second["trace"]["thread_id"] == decision_id
+    assert second["trace"]["resumed_from_checkpoint"] is True
+    assert second["trace"]["langgraph_checkpoint_id"]
     assert second["action"] == "candidate"
     assert second["missing_context"] == []
     assert any(edge["condition"] == "candidate" and edge["taken"] for edge in second["trace"]["graph"]["edges"])

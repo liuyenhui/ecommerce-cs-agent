@@ -169,17 +169,42 @@ def test_reply_decision_trace_contains_replayable_graph_steps():
         "retrieve_context",
         "classify_intent",
         "context_gate",
-        "action_gate",
-        "generate_candidate",
         "policy_gate",
         "persist_trace",
     ]
     assert all(step["status"] == "completed" for step in steps)
     assert all(step["outputs_ref"] for step in steps)
     graph = response.json()["trace"]["graph"]
-    assert [node["id"] for node in graph["nodes"]] == names
+    assert [node["id"] for node in graph["nodes"]] == [
+        "normalize_request",
+        "retrieve_context",
+        "classify_intent",
+        "context_gate",
+        "action_gate",
+        "generate_candidate",
+        "policy_gate",
+        "persist_trace",
+    ]
+    assert next(node for node in graph["nodes"] if node["id"] == "action_gate")["status"] == "skipped"
+    assert next(node for node in graph["nodes"] if node["id"] == "generate_candidate")["status"] == "skipped"
     assert graph["edges"]
     assert any(edge["condition"] == "context_request" and edge["taken"] for edge in graph["edges"])
+
+
+def test_reply_decision_action_request_skips_candidate_generation():
+    response = client().post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=minimal_reply_request("req-action-graph", "请帮我改备注：周末送达"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    graph = payload["trace"]["graph"]
+    assert payload["action"] == "action_request"
+    assert next(node for node in graph["nodes"] if node["id"] == "action_gate")["status"] == "completed"
+    assert next(node for node in graph["nodes"] if node["id"] == "generate_candidate")["status"] == "skipped"
+    assert any(edge["condition"] == "action_request" and edge["taken"] for edge in graph["edges"])
 
 
 def test_high_risk_message_is_not_auto_replied():

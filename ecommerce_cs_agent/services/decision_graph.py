@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import re
 from typing import Any, Callable, TypedDict
 
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.constants import END, START
 from langgraph.graph.state import StateGraph
 
@@ -71,10 +72,12 @@ class ReplyDecisionGraphState(TypedDict, total=False):
     confidence: float
     risk_level: str
     candidates: list[dict[str, Any]]
+    auto_reply: dict[str, Any] | None
     context_requests: list[dict[str, Any]]
     action_requests: list[dict[str, Any]]
     handoff_reason: str | None
     route: str
+    resumed_from_checkpoint: bool
     steps: list[dict[str, Any]]
     taken_conditions: list[str]
     response: dict[str, Any]
@@ -97,9 +100,17 @@ class ReplyDecisionGraph:
         self.request_key = request_key
         self.context_request_factory = context_request_factory
         self.action_request_factory = action_request_factory
+        self._checkpointer = InMemorySaver()
         self._compiled_stategraph = self._compile_stategraph()
 
-    def invoke(self, decision_id: str, payload: dict[str, Any], content: str) -> dict[str, Any]:
+    def invoke(
+        self,
+        decision_id: str,
+        payload: dict[str, Any],
+        content: str,
+        *,
+        resumed_from_checkpoint: bool = False,
+    ) -> dict[str, Any]:
         organization_id, store_id, request_id = self.request_key(payload)
         state: ReplyDecisionGraphState = {
             "decision_id": decision_id,
@@ -109,13 +120,15 @@ class ReplyDecisionGraph:
             "organization_id": organization_id,
             "store_id": store_id,
             "request_id": request_id,
+            "resumed_from_checkpoint": resumed_from_checkpoint,
             "steps": [],
             "taken_conditions": [],
         }
-        state = self._compiled_stategraph.invoke(
-            state,
-            config={"configurable": {"thread_id": decision_id}},
-        )
+        config = {"configurable": {"thread_id": decision_id}}
+        state = self._compiled_stategraph.invoke(state, config=config)
+        checkpoint_id = self._checkpoint_id(config)
+        if checkpoint_id:
+            state["response"]["trace"]["langgraph_checkpoint_id"] = checkpoint_id
         return state["response"]
 
     def _compile_stategraph(self) -> Any:
@@ -132,12 +145,36 @@ class ReplyDecisionGraph:
         graph.add_edge("normalize_request", "retrieve_context")
         graph.add_edge("retrieve_context", "classify_intent")
         graph.add_edge("classify_intent", "context_gate")
-        graph.add_edge("context_gate", "action_gate")
-        graph.add_edge("action_gate", "generate_candidate")
+        graph.add_conditional_edges(
+            "context_gate",
+            _route_after_context_gate,
+            {
+                "context_complete": "action_gate",
+                "context_request": "policy_gate",
+                "handoff": "policy_gate",
+            },
+        )
+        graph.add_conditional_edges(
+            "action_gate",
+            _route_after_action_gate,
+            {
+                "candidate": "generate_candidate",
+                "action_request": "policy_gate",
+            },
+        )
         graph.add_edge("generate_candidate", "policy_gate")
         graph.add_edge("policy_gate", "persist_trace")
         graph.add_edge("persist_trace", END)
-        return graph.compile()
+        return graph.compile(checkpointer=self._checkpointer)
+
+    def _checkpoint_id(self, config: dict[str, Any]) -> str | None:
+        try:
+            snapshot = self._compiled_stategraph.get_state(config=config)
+        except Exception:
+            return None
+        configurable = getattr(snapshot, "config", {}).get("configurable", {})
+        checkpoint_id = configurable.get("checkpoint_id")
+        return str(checkpoint_id) if checkpoint_id else None
 
     def _normalize_request(self, state: ReplyDecisionGraphState) -> ReplyDecisionGraphState:
         payload = state["payload"]
@@ -209,8 +246,6 @@ class ReplyDecisionGraph:
         )
 
     def _action_gate(self, state: ReplyDecisionGraphState) -> ReplyDecisionGraphState:
-        if state.get("route") not in {"context_complete", "candidate"}:
-            return _with_step(state, "action_gate", inputs_ref=["context_gate"], outputs_ref=[state.get("route", "skipped")])
         content = state["content"]
         lowered = state["lowered"]
         route = "action_request" if any(word in lowered or word in content for word in ACTION_KEYWORDS) else "candidate"
@@ -228,7 +263,7 @@ class ReplyDecisionGraph:
                 knowledge=state.get("matched_knowledge", []),
             ),
             "evidence": evidence,
-            "confidence": 0.68,
+            "confidence": 0.9 if evidence else 0.68,
         }
         return _with_step({**state, "candidates": [candidate]}, "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=[f"candidate:{candidate['suggestion_id']}"])
 
@@ -238,6 +273,7 @@ class ReplyDecisionGraph:
         missing_context = state.get("missing_context", [])
         action_requests: list[dict[str, Any]] = []
         candidates = state.get("candidates", [])
+        auto_reply: dict[str, Any] | None = None
         if route == "handoff":
             action = "handoff"
             status = "handoff"
@@ -258,9 +294,17 @@ class ReplyDecisionGraph:
             handoff_reason = None
             action_requests = [self.action_request_factory(state["decision_id"], state["payload"], state["content"])]
         else:
-            action = "candidate"
-            status = "candidate"
-            confidence = 0.68
+            confidence = _candidate_confidence(candidates)
+            if confidence >= 0.85:
+                action = "auto_reply"
+                status = "answer_ready"
+                auto_reply = {
+                    "reply_text": candidates[0]["reply_text"] if candidates else "",
+                    "approved_by_policy_gate": True,
+                }
+            else:
+                action = "candidate"
+                status = "candidate"
             risk_level = "low"
             handoff_reason = None
         context_requests = [
@@ -276,7 +320,8 @@ class ReplyDecisionGraph:
             "handoff_reason": handoff_reason,
             "context_requests": context_requests,
             "action_requests": action_requests,
-            "candidates": candidates if action == "candidate" else [],
+            "candidates": candidates if action in {"candidate", "auto_reply"} else [],
+            "auto_reply": auto_reply,
         }
         return _with_step(updates, "policy_gate", inputs_ref=["intent", route or "route"], outputs_ref=[f"decision:{state['decision_id']}"])
 
@@ -304,7 +349,7 @@ class ReplyDecisionGraph:
             "decision_status": state["decision_status"],
             "action": state["action"],
             "candidates": state.get("candidates", []),
-            "auto_reply": None,
+            "auto_reply": state.get("auto_reply"),
             "context_requests": state.get("context_requests", []),
             "action_requests": state.get("action_requests", []),
             "action_request": state.get("action_requests", [None])[0] if state.get("action_requests") else None,
@@ -350,6 +395,7 @@ def _trace_payload(*, settings: Settings, reply_provider: ReplyProvider, state: 
         "rule_hits": state.get("risk_flags", []),
         "graph_version": settings.graph_version,
         "thread_id": state["decision_id"],
+        "resumed_from_checkpoint": bool(state.get("resumed_from_checkpoint")),
         "model_version": reply_provider.model_version,
         "steps": state.get("steps", []),
         "graph": _trace_graph(state),
@@ -366,7 +412,7 @@ def _trace_graph(state: ReplyDecisionGraphState) -> dict[str, Any]:
                 "id": node_id,
                 "label": NODE_LABELS[node_id],
                 "kind": "langgraph_node",
-                "status": step.get("status", "completed"),
+                "status": step.get("status", "skipped"),
                 "started_at": step.get("started_at"),
                 "ended_at": step.get("ended_at"),
                 "inputs_ref": step.get("inputs_ref", []),
@@ -386,6 +432,23 @@ def _trace_graph(state: ReplyDecisionGraphState) -> dict[str, Any]:
         for source, target, label, condition in GRAPH_EDGE_DEFINITIONS
     ]
     return {"nodes": nodes, "edges": edges}
+
+
+def _route_after_context_gate(state: ReplyDecisionGraphState) -> str:
+    route = state.get("route")
+    if route in {"context_request", "handoff"}:
+        return route
+    return "context_complete"
+
+
+def _route_after_action_gate(state: ReplyDecisionGraphState) -> str:
+    return "action_request" if state.get("route") == "action_request" else "candidate"
+
+
+def _candidate_confidence(candidates: list[dict[str, Any]]) -> float:
+    if not candidates:
+        return 0.0
+    return max(float(candidate.get("confidence", 0.0)) for candidate in candidates)
 
 
 def _missing_context(payload: dict[str, Any], lowered: str, content: str, *, has_product_knowledge: bool = False) -> list[str]:

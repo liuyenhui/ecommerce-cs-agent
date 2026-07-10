@@ -110,7 +110,12 @@ class DecisionService:
             state.context_refills[key] = {**accepted, "_request_payload": comparable, "_context_type": context_type}
             if not remaining:
                 updated_request = _request_with_refill_contexts(state.request, state.context_refills)
-                final_response = self._build_response(decision_id, updated_request, str(updated_request.get("message", {}).get("content", "")))
+                final_response = self._build_response(
+                    decision_id,
+                    updated_request,
+                    str(updated_request.get("message", {}).get("content", "")),
+                    resumed_from_checkpoint=True,
+                )
                 state.request = updated_request
                 state.response = final_response
                 state.context_refills[key] = {**final_response, "_request_payload": comparable}
@@ -227,8 +232,20 @@ class DecisionService:
             "trace": response.get("trace"),
         }
 
-    def _build_response(self, decision_id: str, payload: dict[str, Any], content: str) -> dict[str, Any]:
-        return self.graph.invoke(decision_id, payload, content)
+    def _build_response(
+        self,
+        decision_id: str,
+        payload: dict[str, Any],
+        content: str,
+        *,
+        resumed_from_checkpoint: bool = False,
+    ) -> dict[str, Any]:
+        return self.graph.invoke(
+            decision_id,
+            payload,
+            content,
+            resumed_from_checkpoint=resumed_from_checkpoint,
+        )
 
     def _context_request(self, decision_id: str, context_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         context_request_id = f"ctx-{context_type}-{decision_id[-8:]}"
