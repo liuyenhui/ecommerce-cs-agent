@@ -139,6 +139,7 @@ test("customer message history reuses the simulation composer for existing and e
   assert.match(messageHistory, /return \(\) => \{[\s\S]*mountedRef\.current = false/);
   assert.match(messageHistory, /isCurrentOperation/);
   assert.match(messageHistory, /setSelectedTrace\(buildCanonicalSimulationTrace\(createdTrace, content\)\)/);
+  assert.match(messageHistory, /SectionHeader[\s\S]*disabled=\{simulationLoading\}[\s\S]*刷新/);
 });
 
 test("decision metrics preserve raw values as accessible titles", () => {

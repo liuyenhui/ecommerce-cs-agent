@@ -491,7 +491,7 @@ function layoutGraphNodes(graphData: TraceGraph, currentNodeId: string, status: 
       height: layout.height || 68,
       tone,
       statusText: isCurrent ? "当前走到这里" : (statusLabel[rawStatus] || rawStatus),
-      note: nodeBlocker || summarizeRefs(node.outputs_ref) || summarizeRefs(node.inputs_ref) || String(node.kind || "")
+      note: businessNodeNote(node.id, rawStatus)
     };
   });
 }
@@ -523,7 +523,10 @@ function describeNodeBlocker(node: TraceNode, status?: string) {
   if (node.error) return "节点执行失败";
   const refs = refsArray(node.outputs_ref);
   const contextRequests = refs.filter((item) => item.startsWith("context_request:")).map((item) => item.split(":").slice(1).join(":")).filter(Boolean);
-  if (contextRequests.length) return `等待补充上下文：${contextRequests.join("、")}`;
+  if (contextRequests.length) {
+    const labels = Array.from(new Set(contextRequests.map(contextReferenceLabel)));
+    return `等待补充：${labels.join("、")}`;
+  }
 
   const normalizedStatus = String(status || "").toLowerCase();
   if (node.id === "action_gate" && normalizedStatus.includes("action_request")) return "等待外部系统确认并回传动作结果";
@@ -546,18 +549,43 @@ function refsArray(value: unknown) {
   return Array.isArray(value) ? value.map((item) => String(item)) : [];
 }
 
-function summarizeRefs(value: unknown) {
-  const refs = refsArray(value);
-  if (!refs.length) return "";
-  const compact = refs.slice(0, 2).map((item) => item.replace(/_/g, " "));
-  return compact.join(" / ");
-}
-
 function inferMissingContext(graphData: TraceGraph) {
   return graphData.nodes.flatMap((node) => refsArray(node.outputs_ref))
     .filter((item) => item.startsWith("context_request:"))
     .map((item) => item.split(":").slice(1).join(":"))
     .filter(Boolean);
+}
+
+function businessNodeNote(nodeId: string, rawStatus: string) {
+  if (rawStatus === "failed") return "节点执行失败";
+  const notes: Record<string, string> = {
+    normalize_request: "整理客户问题",
+    retrieve_context: "查询业务资料",
+    classify_intent: "识别客户诉求",
+    context_gate: "检查资料是否齐全",
+    action_gate: "确认外部操作结果",
+    generate_candidate: "生成建议回复",
+    policy_gate: "检查规则与风险",
+    persist_trace: "保存本次处理记录",
+    missing_context: "等待补充业务资料",
+    action_request: "等待外部系统处理",
+    handoff: "等待人工客服接手",
+    auto_reply: "准备安全回复"
+  };
+  return notes[nodeId] || "处理业务流程";
+}
+
+function contextReferenceLabel(value: string) {
+  const labels: Record<string, string> = {
+    product: "商品资料",
+    products: "商品资料",
+    order: "订单资料",
+    orders: "订单资料",
+    logistics: "物流资料",
+    rule: "规则资料",
+    rules: "规则资料"
+  };
+  return labels[value] || "相关资料";
 }
 
 function businessNodeLabel(nodeId: string) {

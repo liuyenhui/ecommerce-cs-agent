@@ -701,7 +701,7 @@ function MessageHistory({ storeId, setToast, setSelected }: {
 
   return (
     <>
-      <SectionHeader label="MESSAGES" title="消息历史" action={<button onClick={() => void load()}><Search size={16} />刷新</button>} />
+      <SectionHeader label="MESSAGES" title="消息历史" action={<button disabled={simulationLoading} onClick={() => void load()}><Search size={16} />刷新</button>} />
       <section className="messageHistoryWorkspace" aria-label="客服消息历史工作台">
         <aside className="conversationList" aria-label="会话列表">
           <label className="conversationSearch">
