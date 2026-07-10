@@ -46,6 +46,16 @@ RELEVANCE_ANCHORS = (
     "address",
     "warranty",
 )
+BROAD_RELEVANCE_TERMS = {"安全", "认证", "safe", "certif"}
+RELEVANCE_PHRASES = (
+    "儿童安全认证",
+    "安全认证",
+    "运输安全",
+    "退货政策",
+    "收货地址",
+    "冷水洗涤",
+)
+RELEVANCE_THRESHOLD = 0.7
 RELEVANCE_STOP_TERMS = {
     "这个",
     "这款",
@@ -79,6 +89,11 @@ RELEVANCE_STOP_TERMS = {
     "does",
     "of",
     "it",
+    "for",
+    "to",
+    "with",
+    "by",
+    "from",
 }
 RULE_KEYWORDS = ("规则", "退换货", "退货政策", "平台政策", "rule", "policy")
 
@@ -541,7 +556,7 @@ def _evidence_confidence(signals: list[dict[str, Any]]) -> float:
     relevant_scores = [float(signal.get("score", 0.0)) for signal in signals if signal.get("relevant")]
     if not relevant_scores:
         return 0.68
-    return round(0.85 + min(max(relevant_scores), 1.0) * 0.1, 4)
+    return round(0.68 + min(max(relevant_scores), 1.0) * 0.25, 4)
 
 
 def _missing_context(payload: dict[str, Any], lowered: str, content: str, *, has_product_knowledge: bool = False) -> list[str]:
@@ -592,18 +607,43 @@ def _knowledge_query(content: str) -> str:
 
 
 def _knowledge_relevance(query: str, item: dict[str, Any]) -> dict[str, Any]:
+    knowledge = str(item.get("content", ""))
     query_terms = _relevance_terms(query)
-    knowledge_terms = _relevance_terms(str(item.get("content", "")))
+    knowledge_terms = _relevance_terms(knowledge)
     shared_terms = sorted(query_terms & knowledge_terms)
-    anchored = any(term in RELEVANCE_ANCHORS for term in shared_terms)
-    relevant = anchored or len(shared_terms) >= 2
-    denominator = max(len(query_terms | knowledge_terms), 1)
+    query_core_terms = _core_relevance_terms(query)
+    knowledge_core_terms = _core_relevance_terms(knowledge)
+    matched_core_terms = sorted(query_core_terms & knowledge_core_terms)
+    matched_phrases = [phrase for phrase in RELEVANCE_PHRASES if phrase in query.lower() and phrase in knowledge.lower()]
+    distinctive_core_terms = [term for term in matched_core_terms if term not in BROAD_RELEVANCE_TERMS]
+    if query_core_terms:
+        score = len(matched_core_terms) / len(query_core_terms)
+    else:
+        score = len(shared_terms) / max(len(query_terms), 1)
+    sufficient_signal = bool(matched_phrases) or len(matched_core_terms) >= 2 or bool(distinctive_core_terms)
+    if not query_core_terms:
+        sufficient_signal = len(shared_terms) >= 2
+    relevant = sufficient_signal and score >= RELEVANCE_THRESHOLD
     return {
         "knowledge_entry_id": str(item.get("knowledge_entry_id", "")),
         "relevant": relevant,
         "matched_terms": shared_terms,
-        "score": round(len(shared_terms) / denominator, 4),
-        "method": "deterministic_lexical_overlap_v1",
+        "matched_core_terms": matched_core_terms,
+        "matched_phrases": matched_phrases,
+        "query_core_terms": sorted(query_core_terms),
+        "score": round(score, 4),
+        "threshold": RELEVANCE_THRESHOLD,
+        "method": "deterministic_intent_overlap_v2",
+    }
+
+
+def _core_relevance_terms(text: str) -> set[str]:
+    normalized = text.lower()
+    lexical_terms = _relevance_terms(normalized)
+    return {
+        anchor
+        for anchor in RELEVANCE_ANCHORS
+        if anchor in lexical_terms or (not anchor.isascii() and anchor in normalized)
     }
 
 

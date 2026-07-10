@@ -71,10 +71,109 @@ def test_decision_graph_does_not_auto_reply_from_unrelated_approved_knowledge() 
             "knowledge_entry_id": "knowledge-unrelated",
             "relevant": False,
             "matched_terms": [],
+            "matched_core_terms": [],
+            "matched_phrases": [],
+            "query_core_terms": ["安全", "认证"],
             "score": 0.0,
-            "method": "deterministic_lexical_overlap_v1",
+            "threshold": 0.7,
+            "method": "deterministic_intent_overlap_v2",
         }
     ]
+
+
+def test_decision_graph_rejects_single_broad_chinese_safety_term() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-shipping-safety",
+                "product_id": "product-001",
+                "scope": "product",
+                "content": "物流包装符合运输安全要求。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+
+    response = service.create_reply_decision(_request("req-broad-safety-zh", "这个商品通过儿童安全认证了吗？"))
+
+    assert response["action"] != "auto_reply"
+    assert response["auto_reply"] is None
+    assert response["trace"]["matched_knowledge_ids"] == []
+    assert response["trace"]["knowledge_relevance"][0]["matched_terms"] == ["安全"]
+    assert response["trace"]["knowledge_relevance"][0]["relevant"] is False
+
+
+def test_decision_graph_auto_replies_for_matching_chinese_certification_phrase() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-child-certification",
+                "product_id": "product-001",
+                "scope": "product",
+                "content": "本商品已通过儿童安全认证，认证编号可在说明书核验。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+
+    response = service.create_reply_decision(_request("req-child-certification-zh", "这个商品通过儿童安全认证了吗？"))
+
+    assert response["action"] == "auto_reply"
+    assert response["trace"]["knowledge_relevance"][0]["relevant"] is True
+    assert "安全认证" in response["trace"]["knowledge_relevance"][0]["matched_phrases"]
+
+
+def test_decision_graph_rejects_single_broad_english_safety_term() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-shipping-safe-en",
+                "product_id": "product-001",
+                "scope": "product",
+                "content": "Shipping packaging is safe for transport.",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+
+    response = service.create_reply_decision(
+        _request("req-broad-safety-en", "Is this product certified safe for children?")
+    )
+
+    assert response["action"] != "auto_reply"
+    assert response["auto_reply"] is None
+    assert response["trace"]["matched_knowledge_ids"] == []
+    assert response["trace"]["knowledge_relevance"][0]["relevant"] is False
+
+
+def test_decision_graph_auto_replies_for_matching_english_certification_intent() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-child-safe-en",
+                "product_id": "product-001",
+                "scope": "product",
+                "content": "This product is certified safe for children.",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+
+    response = service.create_reply_decision(
+        _request("req-child-safety-en", "Is this product certified safe for children?")
+    )
+
+    assert response["action"] == "auto_reply"
+    assert response["trace"]["knowledge_relevance"][0]["relevant"] is True
+    assert response["trace"]["knowledge_relevance"][0]["score"] >= 0.7
 
 
 def test_decision_graph_keeps_relevant_knowledge_as_candidate_in_assist_first_mode() -> None:
