@@ -220,49 +220,26 @@
   background: #ffffff;
 }
 
-.messageTraceDrawer {
-  width: min(680px, calc(100vw - 28px));
-}
-
-.traceSummary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 14px;
-}
-
-.traceTextBlock {
-  display: grid;
-  gap: 8px;
-  margin-bottom: 14px;
-  padding: 12px;
-  border: 1px solid #d8dee8;
-  border-radius: 6px;
-  background: #f8fafc;
-}
-
-.traceTextBlock h3 {
+.simulationError {
   margin: 0;
+  color: #b91c1c;
+  font-size: 13px;
 }
 
-.traceTextBlock p {
-  color: #334155;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
+.simulationEmptyIntro {
+  display: grid;
+  gap: 4px;
 }
 
-.decisionGraph {
-  width: 100%;
-  min-height: 320px;
-  margin: 12px 0;
-  overflow: hidden;
-  border: 1px solid #d8dee8;
-  border-radius: 6px;
-  background: #ffffff;
+.simulationEmptyIntro p {
+  margin: 0;
+  color: #5f6b7a;
 }
 
 @media (max-width: 720px) {
+  .traceTimeline {
+    min-width: 0;
+  }
   .messageHistoryWorkspace {
     min-height: auto;
     grid-template-columns: 1fr;
@@ -294,11 +271,4 @@
     width: 92%;
   }
 
-  .traceSummary {
-    grid-template-columns: 1fr;
-  }
-
-  .messageTraceDrawer {
-    width: calc(100vw - 18px);
-  }
 }

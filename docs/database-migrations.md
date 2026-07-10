@@ -18,7 +18,7 @@
 | PostgreSQL | `16.14` |
 | Database | `cs_agent` |
 | Extensions | `pgcrypto`、`vector` 已启用 |
-| Migration | dev 执行状态以 `schema_migration` 为准；应用仓库当前声明 `001_initial.sql` 到 `006_system_admin_ops.sql` |
+| Migration | dev 执行状态以 `schema_migration` 为准；应用仓库当前声明 `001_initial.sql` 到 `011_decision_idempotency_store_scope.sql` |
 
 dev 环境已经具备第一版迁移的基础能力。后续不得直接手工改线上表结构；所有 schema 演进都必须通过可追踪的 migration 文件进入。
 

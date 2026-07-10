@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.decision import DecisionService
 from ecommerce_cs_agent.services.repository import InMemoryDecisionRepository, PostgresDecisionRepository
 
 
-def test_decision_graph_uses_approved_knowledge_for_product_candidate() -> None:
+def test_decision_graph_uses_approved_knowledge_for_safe_auto_reply() -> None:
     repository = _KnowledgeRepository(
         [
             {
@@ -24,13 +26,332 @@ def test_decision_graph_uses_approved_knowledge_for_product_candidate() -> None:
 
     response = service.create_reply_decision(_request("req-knowledge", "这个商品是什么材质？"))
 
-    assert response["action"] == "candidate"
-    assert response["decision_status"] == "candidate"
+    assert response["action"] == "auto_reply"
+    assert response["decision_status"] == "answer_ready"
+    assert response["auto_reply"]["reply_text"] == response["candidates"][0]["reply_text"]
+    assert response["auto_reply"]["approved_by_policy_gate"] is True
+    assert response["confidence"] >= 0.85
+    assert response["trace"]["langgraph_checkpoint_id"]
     assert response["missing_context"] == []
     assert response["candidates"][0]["evidence"][0]["knowledge_entry_id"] == "knowledge-001"
     assert "材质为棉" in response["candidates"][0]["reply_text"]
     assert response["trace"]["matched_knowledge_ids"] == ["knowledge-001"]
     assert "knowledge:knowledge-001" in response["trace"]["steps"][1]["outputs_ref"]
+    graph = response["trace"]["graph"]
+    assert next(node for node in graph["nodes"] if node["id"] == "generate_candidate")["status"] == "completed"
+    assert any(edge["condition"] == "candidate" and edge["taken"] for edge in graph["edges"])
+    assert any(edge["condition"] == "persist" and edge["taken"] for edge in graph["edges"])
+
+
+def test_decision_graph_does_not_auto_reply_from_unrelated_approved_knowledge() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-unrelated",
+                "product_id": "product-001",
+                "scope": "product",
+                "content": "包装盒是蓝色的。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+
+    response = service.create_reply_decision(_request("req-unrelated-knowledge", "儿童安全认证？"))
+
+    assert response["action"] == "candidate"
+    assert response["decision_status"] == "candidate"
+    assert response["auto_reply"] is None
+    assert response["confidence"] < 0.85
+    assert response["candidates"][0]["evidence"] == []
+    assert response["trace"]["matched_knowledge_ids"] == []
+    assert response["trace"]["knowledge_relevance"] == [
+        {
+            "knowledge_entry_id": "knowledge-unrelated",
+            "relevant": False,
+            "text_relevant": False,
+            "binding_eligible": True,
+            "binding_reason": "product_match",
+            "matched_terms": [],
+            "matched_core_terms": [],
+            "matched_phrases": [],
+            "query_core_terms": ["安全", "认证"],
+            "score": 0.0,
+            "threshold": 0.7,
+            "method": "deterministic_intent_overlap_v2",
+        }
+    ]
+
+
+def test_decision_graph_rejects_single_broad_chinese_safety_term() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-shipping-safety",
+                "product_id": "product-001",
+                "scope": "product",
+                "content": "物流包装符合运输安全要求。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+
+    response = service.create_reply_decision(_request("req-broad-safety-zh", "这个商品通过儿童安全认证了吗？"))
+
+    assert response["action"] != "auto_reply"
+    assert response["auto_reply"] is None
+    assert response["trace"]["matched_knowledge_ids"] == []
+    assert response["trace"]["knowledge_relevance"][0]["matched_terms"] == ["安全"]
+    assert response["trace"]["knowledge_relevance"][0]["relevant"] is False
+
+
+def test_decision_graph_auto_replies_for_matching_chinese_certification_phrase() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-child-certification",
+                "product_id": "product-001",
+                "scope": "product",
+                "content": "本商品已通过儿童安全认证，认证编号可在说明书核验。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+
+    response = service.create_reply_decision(_request("req-child-certification-zh", "这个商品通过儿童安全认证了吗？"))
+
+    assert response["action"] == "auto_reply"
+    assert response["trace"]["knowledge_relevance"][0]["relevant"] is True
+    assert "安全认证" in response["trace"]["knowledge_relevance"][0]["matched_phrases"]
+
+
+def test_decision_graph_rejects_single_broad_english_safety_term() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-shipping-safe-en",
+                "product_id": "product-001",
+                "scope": "product",
+                "content": "Shipping packaging is safe for transport.",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+
+    response = service.create_reply_decision(
+        _request("req-broad-safety-en", "Is this product certified safe for children?")
+    )
+
+    assert response["action"] != "auto_reply"
+    assert response["auto_reply"] is None
+    assert response["trace"]["matched_knowledge_ids"] == []
+    assert response["trace"]["knowledge_relevance"][0]["relevant"] is False
+
+
+def test_decision_graph_auto_replies_for_matching_english_certification_intent() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-child-safe-en",
+                "product_id": "product-001",
+                "scope": "product",
+                "content": "This product is certified safe for children.",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+
+    response = service.create_reply_decision(
+        _request("req-child-safety-en", "Is this product certified safe for children?")
+    )
+
+    assert response["action"] == "auto_reply"
+    assert response["trace"]["knowledge_relevance"][0]["relevant"] is True
+    assert response["trace"]["knowledge_relevance"][0]["score"] >= 0.7
+
+
+def test_decision_graph_rejects_knowledge_bound_to_another_product() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-product-b",
+                "product_id": "product-b",
+                "external_product_id": "product-b",
+                "scope": "product",
+                "content": "本商品已通过儿童安全认证。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    request = _request("req-product-binding-mismatch", "这个商品通过儿童安全认证了吗？")
+    request["external_product_id"] = "product-a"
+    request["listing_ref"] = "listing-a"
+
+    response = service.create_reply_decision(request)
+
+    assert response["action"] != "auto_reply"
+    assert response["auto_reply"] is None
+    assert response["trace"]["matched_knowledge_ids"] == []
+    signal = response["trace"]["knowledge_relevance"][0]
+    assert signal["text_relevant"] is True
+    assert signal["binding_eligible"] is False
+    assert signal["binding_reason"] == "product_mismatch"
+
+
+def test_decision_graph_auto_replies_for_knowledge_bound_to_requested_product() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-product-a",
+                "product_id": "product-a",
+                "external_product_id": "product-a",
+                "scope": "product",
+                "content": "本商品已通过儿童安全认证。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    request = _request("req-product-binding-match", "这个商品通过儿童安全认证了吗？")
+    request["external_product_id"] = "product-a"
+    request["listing_ref"] = "listing-a"
+
+    response = service.create_reply_decision(request)
+
+    assert response["action"] == "auto_reply"
+    assert response["trace"]["matched_knowledge_ids"] == ["knowledge-product-a"]
+    assert response["trace"]["knowledge_relevance"][0]["binding_reason"] == "product_match"
+
+
+def test_decision_graph_does_not_auto_reply_product_knowledge_without_product_binding() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-unbound-product",
+                "product_id": "product-a",
+                "external_product_id": "product-a",
+                "scope": "product",
+                "content": "本商品已通过儿童安全认证。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    request = _request("req-product-binding-missing", "这个商品通过儿童安全认证了吗？")
+    request.pop("external_product_id")
+    request.pop("listing_ref")
+
+    response = service.create_reply_decision(request)
+
+    assert response["action"] != "auto_reply"
+    assert response["auto_reply"] is None
+    assert response["trace"]["knowledge_relevance"][0]["binding_reason"] == "missing_request_product_binding"
+
+
+def test_decision_graph_allows_explicit_store_scope_knowledge_without_product_binding() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-store-policy",
+                "product_id": None,
+                "external_product_id": None,
+                "scope": "store",
+                "content": "本店所有儿童商品均要求通过儿童安全认证。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+
+    response = service.create_reply_decision(_request("req-store-scope-knowledge", "儿童商品要求安全认证吗？"))
+
+    assert response["action"] == "auto_reply"
+    assert response["trace"]["knowledge_relevance"][0]["binding_reason"] == "explicit_store_scope"
+
+
+def test_decision_graph_labels_explicit_tenant_scope_knowledge_accurately() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-tenant-policy",
+                "product_id": None,
+                "external_product_id": None,
+                "scope": "tenant",
+                "content": "本组织所有儿童商品均要求通过儿童安全认证。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+
+    response = service.create_reply_decision(_request("req-tenant-scope-knowledge", "儿童商品要求安全认证吗？"))
+
+    assert response["action"] == "auto_reply"
+    assert response["trace"]["knowledge_relevance"][0]["binding_reason"] == "explicit_tenant_scope"
+
+
+def test_decision_graph_keeps_relevant_knowledge_as_candidate_in_assist_first_mode() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-material",
+                "product_id": "product-001",
+                "scope": "product",
+                "content": "Material: cotton.",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    request = _request("req-assist-first", "What material is this item?")
+    request["mode"] = "assist_first"
+
+    response = service.create_reply_decision(request)
+
+    assert response["action"] == "candidate"
+    assert response["auto_reply"] is None
+    assert response["confidence"] >= 0.85
+    assert response["trace"]["knowledge_relevance"][0]["matched_terms"] == ["material"]
+
+
+def test_decision_graph_never_marks_simulation_as_auto_reply() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-certification",
+                "product_id": "product-001",
+                "scope": "product",
+                "content": "已通过儿童安全认证。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    request = _request("req-simulation-safe", "儿童安全认证？")
+    request["source"] = "simulation"
+
+    response = service.create_reply_decision(request)
+
+    assert response["action"] == "candidate"
+    assert response["auto_reply"] is None
+    assert response["trace"]["matched_knowledge_ids"] == ["knowledge-certification"]
 
 
 def test_decision_graph_does_not_auto_reply_high_risk_even_with_knowledge() -> None:
@@ -52,7 +373,8 @@ def test_decision_graph_does_not_auto_reply_high_risk_even_with_knowledge() -> N
 
     assert response["action"] == "handoff"
     assert response["auto_reply"] is None
-    assert response["trace"]["matched_knowledge_ids"] == ["knowledge-001"]
+    assert response["trace"]["matched_knowledge_ids"] == []
+    assert response["trace"]["knowledge_relevance"][0]["relevant"] is False
     assert "refund_or_complaint" in response["risk_flags"]
 
 
@@ -110,6 +432,8 @@ def test_decision_graph_action_request_and_trace_match_contract() -> None:
         "taken": True,
     }
     assert any(edge["condition"] == "action_request" and edge["taken"] for edge in graph["edges"])
+    assert next(node for node in graph["nodes"] if node["id"] == "action_gate")["status"] == "completed"
+    assert next(node for node in graph["nodes"] if node["id"] == "generate_candidate")["status"] == "skipped"
 
 
 def test_decision_graph_trace_graph_marks_context_request_branch() -> None:
@@ -120,11 +444,22 @@ def test_decision_graph_trace_graph_marks_context_request_branch() -> None:
     assert response["action"] == "context_request"
     graph = response["trace"]["graph"]
     assert response["trace"]["thread_id"] == response["decision_id"]
-    assert [step["step_id"] for step in response["trace"]["steps"]] == [node["id"] for node in graph["nodes"]]
+    assert [step["step_id"] for step in response["trace"]["steps"]] == [
+        "normalize_request",
+        "retrieve_context",
+        "classify_intent",
+        "context_gate",
+        "policy_gate",
+        "persist_trace",
+    ]
     assert any(edge["condition"] == "context_request" and edge["taken"] for edge in graph["edges"])
     assert any(edge["condition"] == "candidate" and not edge["taken"] for edge in graph["edges"])
     context_gate = next(node for node in graph["nodes"] if node["id"] == "context_gate")
     assert any(item.startswith("context_request:") for item in context_gate["outputs_ref"])
+    action_gate = next(node for node in graph["nodes"] if node["id"] == "action_gate")
+    generate_candidate = next(node for node in graph["nodes"] if node["id"] == "generate_candidate")
+    assert action_gate["status"] == "skipped"
+    assert generate_candidate["status"] == "skipped"
 
 
 def test_context_refill_resumes_same_thread_and_completes_graph() -> None:
@@ -141,7 +476,8 @@ def test_context_refill_resumes_same_thread_and_completes_graph() -> None:
             "idempotency_key": "ctx-orders",
             "organization_id": "org-001",
             "store_id": "store-001",
-            "items": [{"external_order_id": "order-001", "status": "paid"}],
+            "captured_at": "2026-07-10T10:00:00Z",
+            "orders": [{"external_order_id": "order-001", "status": "paid"}],
         },
     )
     second = service.refill_context(
@@ -152,18 +488,121 @@ def test_context_refill_resumes_same_thread_and_completes_graph() -> None:
             "idempotency_key": "ctx-logistics",
             "organization_id": "org-001",
             "store_id": "store-001",
-            "items": [{"external_logistics_id": "ship-001", "status": "in_transit"}],
+            "captured_at": "2026-07-10T10:01:00Z",
+            "logistics": [{"external_logistics_id": "ship-001", "status": "in_transit"}],
+        },
+    )
+    second_retry = service.refill_context(
+        decision_id,
+        "logistics",
+        {
+            "context_request_id": response["context_requests"][1]["context_request_id"],
+            "idempotency_key": "ctx-logistics",
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "captured_at": "2026-07-10T10:01:00Z",
+            "logistics": [{"external_logistics_id": "ship-001", "status": "in_transit"}],
         },
     )
 
     assert first is not None
     assert first["next_action"] == "wait_context"
     assert second is not None
+    assert second_retry == second
     assert second["decision_id"] == decision_id
     assert second["trace"]["thread_id"] == decision_id
+    assert second["trace"]["resumed_from_checkpoint"] is True
+    assert second["trace"]["langgraph_checkpoint_id"]
     assert second["action"] == "candidate"
     assert second["missing_context"] == []
     assert any(edge["condition"] == "candidate" and edge["taken"] for edge in second["trace"]["graph"]["edges"])
+
+
+def test_continuations_use_atomic_repository_mutation_and_keep_idempotent_replay() -> None:
+    repository = _AtomicMutationOnlyRepository()
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    response = service.create_reply_decision(_request("req-atomic-refill", "这个商品什么时候发货？"))
+    decision_id = response["decision_id"]
+    payload = {
+        "context_request_id": response["context_requests"][0]["context_request_id"],
+        "idempotency_key": "ctx-orders-atomic",
+        "organization_id": "org-001",
+        "store_id": "store-001",
+        "captured_at": "2026-07-10T10:00:00Z",
+        "orders": [{"external_order_id": "order-001", "status": "paid"}],
+    }
+
+    first = service.refill_context(decision_id, "orders", payload)
+    replay = service.refill_context(decision_id, "orders", payload)
+    repository._by_decision_id[decision_id].response["action_requests"] = [
+        {"action_id": "action-atomic", "action_type": "lookup-logistics"}
+    ]
+    action = service.submit_action_result(
+        decision_id,
+        {
+            "action_id": "action-atomic",
+            "action_type": "lookup-logistics",
+            "idempotency_key": "action-atomic-idem",
+            "status": "succeeded",
+        },
+    )
+    feedback = service.submit_feedback(
+        {
+            "decision_id": decision_id,
+            "human_reply": "已人工处理",
+            "resolution_status": "resolved",
+        }
+    )
+
+    assert replay == first
+    assert action is not None
+    assert action["decision_status"] == "answer_ready"
+    assert feedback is not None
+    assert repository.mutation_calls == [decision_id, decision_id, decision_id, decision_id]
+
+
+def test_legacy_completed_context_refill_replays_only_on_original_typed_endpoint() -> None:
+    repository = InMemoryDecisionRepository()
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    response = service.create_reply_decision(_request("req-legacy-context", "这个商品是什么材质？"))
+    decision_id = response["decision_id"]
+    context_request_id = response["context_requests"][0]["context_request_id"]
+    payload = {
+        "context_request_id": context_request_id,
+        "idempotency_key": "ctx-legacy-products",
+        "organization_id": "org-001",
+        "store_id": "store-001",
+        "captured_at": "2026-07-10T10:00:00Z",
+        "products": [{"external_product_id": "product-001", "title": "测试商品"}],
+    }
+    completed = service.refill_context(decision_id, "products", payload)
+    state = repository.get_by_decision_id(decision_id)
+    assert state is not None
+    state.context_refills[(context_request_id, "ctx-legacy-products")].pop("_context_type")
+
+    replay = service.refill_context(decision_id, "products", payload)
+
+    assert replay == completed
+    with pytest.raises(ValueError, match="URL context type"):
+        service.refill_context(decision_id, "orders", payload)
+    with pytest.raises(FileExistsError, match="idempotency conflict"):
+        service.refill_context(
+            decision_id,
+            "products",
+            {**payload, "products": [{"external_product_id": "product-other"}]},
+        )
+
+
+def test_decision_graph_uses_run_scoped_native_checkpointers() -> None:
+    service = DecisionService(Settings(environment="test"), repository=InMemoryDecisionRepository())
+
+    first = service.create_reply_decision(_request("req-run-checkpoint-1", "这个商品什么时候发货？"))
+    second = service.create_reply_decision(_request("req-run-checkpoint-2", "这个商品什么时候发货？"))
+
+    assert not hasattr(service.graph, "_checkpointer")
+    assert not hasattr(service.graph, "_compiled_stategraph")
+    assert first["trace"]["langgraph_checkpoint_id"]
+    assert second["trace"]["langgraph_checkpoint_id"]
 
 
 def test_postgres_decision_repository_recalls_only_approved_accepted_knowledge() -> None:
@@ -172,6 +611,7 @@ def test_postgres_decision_repository_recalls_only_approved_accepted_knowledge()
             [
                 (
                     "knowledge-001",
+                    "product-001",
                     "product-001",
                     "product",
                     "材质为棉。",
@@ -184,7 +624,14 @@ def test_postgres_decision_repository_recalls_only_approved_accepted_knowledge()
     repository = PostgresDecisionRepository("postgresql://example")
     repository._connect = lambda _url: connection
 
-    entries = repository.recall_knowledge("org-001", "store-001", "商品 材质", limit=3)
+    entries = repository.recall_knowledge(
+        "org-001",
+        "store-001",
+        "商品 材质",
+        limit=3,
+        external_product_id="product-001",
+        listing_ref="listing-001",
+    )
 
     executed_sql = "\n".join(sql for sql, _params in connection.executed)
     assert entries[0]["knowledge_entry_id"] == "knowledge-001"
@@ -198,7 +645,18 @@ def test_postgres_decision_repository_recalls_only_approved_accepted_knowledge()
     assert "candidate.store_id::text = entry.store_id::text" in executed_sql
     assert "embedding.organization_id = entry.organization_id" in executed_sql
     assert "embedding.store_id::text = entry.store_id::text" in executed_sql
-    assert connection.executed[0][1] == ("org-001", "store-001", ["商品", "材质"], ["商品", "材质"], 3)
+    assert "product.external_product_id = %s" in executed_sql
+    assert "entry.scope IN ('store', 'tenant')" in executed_sql
+    assert connection.executed[0][1] == (
+        "org-001",
+        "store-001",
+        "product-001",
+        "product-001",
+        "product-001",
+        ["商品", "材质"],
+        ["商品", "材质"],
+        3,
+    )
 
 
 def test_decision_graph_recall_query_uses_keywords_not_full_message() -> None:
@@ -208,6 +666,20 @@ def test_decision_graph_recall_query_uses_keywords_not_full_message() -> None:
     service.create_reply_decision(_request("req-recall-query", "这个商品是什么材质？"))
 
     assert repository.queries == ["商品 材质"]
+    assert repository.bindings == [("product-001", "listing-001")]
+
+
+class _AtomicMutationOnlyRepository(InMemoryDecisionRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mutation_calls: list[str] = []
+
+    def get_by_decision_id(self, decision_id: str) -> DecisionState | None:
+        raise AssertionError("continuations must use mutate_state")
+
+    def mutate_state(self, decision_id: str, mutation: Any) -> Any:
+        self.mutation_calls.append(decision_id)
+        return mutation(self._by_decision_id.get(decision_id))
 
 
 class _KnowledgeRepository(InMemoryDecisionRepository):
@@ -215,9 +687,20 @@ class _KnowledgeRepository(InMemoryDecisionRepository):
         super().__init__()
         self.knowledge = knowledge
         self.queries: list[str] = []
+        self.bindings: list[tuple[str | None, str | None]] = []
 
-    def recall_knowledge(self, organization_id: str, store_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+    def recall_knowledge(
+        self,
+        organization_id: str,
+        store_id: str,
+        query: str,
+        limit: int = 5,
+        *,
+        external_product_id: str | None = None,
+        listing_ref: str | None = None,
+    ) -> list[dict[str, Any]]:
         self.queries.append(query)
+        self.bindings.append((external_product_id, listing_ref))
         return self.knowledge[:limit]
 
 
@@ -261,6 +744,8 @@ def _request(request_id: str, content: str) -> dict[str, Any]:
         "organization_id": "org-001",
         "store_id": "store-001",
         "platform": "pdd",
+        "external_product_id": "product-001",
+        "listing_ref": "listing-001",
         "message": {
             "external_message_id": f"msg-{request_id}",
             "sender_type": "buyer",

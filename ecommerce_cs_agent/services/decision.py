@@ -15,6 +15,8 @@ from ecommerce_cs_agent.services.repository import (
     PostgresDecisionRepository,
 )
 
+SCOPE_FIELDS = ("tenant_id", "organization_id", "external_store_id", "store_id")
+
 
 class DecisionService:
     def __init__(
@@ -48,86 +50,165 @@ class DecisionService:
         self._save_state(organization_id, store_id, request_id, decision_id, state)
         return response
 
-    def refill_context(self, decision_id: str, context_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
-        state = self.repository.get_by_decision_id(decision_id)
+    def refill_context(
+        self,
+        decision_id: str,
+        context_type: str,
+        payload: dict[str, Any],
+        *,
+        principal_organization_id: str | None = None,
+        principal_store_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        return self.repository.mutate_state(
+            decision_id,
+            lambda state: self._refill_context_locked(
+                state,
+                decision_id,
+                context_type,
+                payload,
+                principal_organization_id=principal_organization_id,
+                principal_store_id=principal_store_id,
+            ),
+        )
+
+    def _refill_context_locked(
+        self,
+        state: DecisionState | None,
+        decision_id: str,
+        context_type: str,
+        payload: dict[str, Any],
+        *,
+        principal_organization_id: str | None,
+        principal_store_id: str | None,
+    ) -> dict[str, Any] | None:
         if not state:
-            return {
-                "decision_id": decision_id,
-                "context_request_id": payload.get("context_request_id"),
-                "decision_status": "partial_context",
-                "action": "context_request",
-                "accepted": True,
-                "remaining_context_requests": [],
-                "next_action": "wait_context",
-                "trace": self._trace(
-                    "context_refill",
-                    "上下文回填",
-                    outputs_ref=[f"context:{context_type}:{payload.get('context_request_id')}"],
-                    thread_id=decision_id,
-                ),
-            }
+            return None
         organization_id, store_id, request_id = _request_key(state.request)
-        if ("organization_id" in payload or "store_id" in payload) and not self._same_tenant_store(state, payload):
+        principal_scope = {
+            "organization_id": principal_organization_id,
+            "store_id": principal_store_id,
+        }
+        if any(principal_scope.values()) and not self._same_tenant_store(state, principal_scope):
+            raise PermissionError("context refill principal does not belong to the decision tenant/store")
+        if _declares_scope(payload) and not self._same_tenant_store(state, payload):
             raise PermissionError("context refill does not belong to the decision tenant/store")
-        known_request_ids = {item["context_request_id"] for item in state.response.get("context_requests", [])}
         context_request_id = str(payload.get("context_request_id", ""))
-        if context_request_id not in known_request_ids:
-            raise ValueError("context_request_id does not belong to this decision")
         idempotency_key = str(payload.get("idempotency_key", context_request_id))
         key = (context_request_id, idempotency_key)
         existing = state.context_refills.get(key)
         comparable = {k: v for k, v in payload.items() if k != "source"}
-        if existing and existing.get("_request_payload") != comparable:
-            raise FileExistsError("idempotency conflict")
-        if not existing:
-            accepted_request_ids = {
-                existing_payload.get("context_request_id")
-                for existing_payload in state.context_refills.values()
-            }
-            accepted_request_ids.add(context_request_id)
-            remaining = [
+        if existing:
+            stored_context_type = existing.get("_context_type") or _legacy_context_type(context_request_id)
+            if stored_context_type != context_type:
+                raise ValueError("context_request_id does not match the URL context type")
+            if existing.get("_request_payload") != comparable:
+                raise FileExistsError("idempotency conflict")
+            return _public(existing)
+        planned_request = next(
+            (
                 item
                 for item in state.response.get("context_requests", [])
-                if item.get("context_request_id") not in accepted_request_ids
-            ]
-            accepted = {
-                "decision_id": decision_id,
-                "context_request_id": context_request_id,
-                "decision_status": "partial_context" if remaining else "ready_to_decide",
-                "accepted": True,
-                "remaining_context_requests": [
-                    {"context_request_id": item["context_request_id"], "type": item["type"], "status": "pending"}
-                    for item in remaining
-                ],
-                "next_action": "wait_context" if remaining else "decide",
-                "trace": self._trace(
-                    "context_refill",
-                    "上下文回填",
-                    outputs_ref=[f"context:{context_type}:{context_request_id}"],
-                    thread_id=decision_id,
-                ),
+                if item.get("context_request_id") == context_request_id
+            ),
+            None,
+        )
+        if planned_request is None:
+            raise ValueError("context_request_id does not belong to this decision")
+        if planned_request.get("type") != context_type:
+            raise ValueError("context_request_id does not match the URL context type")
+        accepted_request_ids = {
+            existing_payload.get("context_request_id")
+            for existing_payload in state.context_refills.values()
+        }
+        accepted_request_ids.add(context_request_id)
+        remaining = [
+            item
+            for item in state.response.get("context_requests", [])
+            if item.get("context_request_id") not in accepted_request_ids
+        ]
+        accepted = {
+            "decision_id": decision_id,
+            "context_request_id": context_request_id,
+            "decision_status": "partial_context" if remaining else "ready_to_decide",
+            "accepted": True,
+            "remaining_context_requests": [
+                {"context_request_id": item["context_request_id"], "type": item["type"], "status": "pending"}
+                for item in remaining
+            ],
+            "next_action": "wait_context" if remaining else "decide",
+            "trace": self._trace(
+                "context_refill",
+                "上下文回填",
+                outputs_ref=[f"context:{context_type}:{context_request_id}"],
+                thread_id=decision_id,
+            ),
+        }
+        state.context_refills[key] = {**accepted, "_request_payload": comparable, "_context_type": context_type}
+        if not remaining:
+            updated_request = _request_with_refill_contexts(state.request, state.context_refills)
+            final_response = self._build_response(
+                decision_id,
+                updated_request,
+                str(updated_request.get("message", {}).get("content", "")),
+                resumed_from_checkpoint=True,
+            )
+            state.request = updated_request
+            state.response = final_response
+            state.context_refills[key] = {
+                **final_response,
+                "_request_payload": comparable,
+                "_context_type": context_type,
             }
-            state.context_refills[key] = {**accepted, "_request_payload": comparable, "_context_type": context_type}
-            if not remaining:
-                updated_request = _request_with_refill_contexts(state.request, state.context_refills)
-                final_response = self._build_response(decision_id, updated_request, str(updated_request.get("message", {}).get("content", "")))
-                state.request = updated_request
-                state.response = final_response
-                state.context_refills[key] = {**final_response, "_request_payload": comparable}
-            self._save_state(organization_id, store_id, request_id, decision_id, state)
         return _public(state.context_refills[key])
 
-    def submit_action_result(self, decision_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
-        state = self.repository.get_by_decision_id(decision_id)
+    def submit_action_result(
+        self,
+        decision_id: str,
+        payload: dict[str, Any],
+        *,
+        principal_organization_id: str | None = None,
+        principal_store_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        return self.repository.mutate_state(
+            decision_id,
+            lambda state: self._submit_action_result_locked(
+                state,
+                decision_id,
+                payload,
+                principal_organization_id=principal_organization_id,
+                principal_store_id=principal_store_id,
+            ),
+        )
+
+    def _submit_action_result_locked(
+        self,
+        state: DecisionState | None,
+        decision_id: str,
+        payload: dict[str, Any],
+        *,
+        principal_organization_id: str | None,
+        principal_store_id: str | None,
+    ) -> dict[str, Any] | None:
         if not state:
             return None
         organization_id, store_id, request_id = _request_key(state.request)
-        if payload.get("organization_id") and not self._same_tenant_store(state, payload):
+        principal_scope = {
+            "organization_id": principal_organization_id,
+            "store_id": principal_store_id,
+        }
+        if any(principal_scope.values()) and not self._same_tenant_store(state, principal_scope):
+            raise PermissionError("action result principal does not belong to the decision tenant/store")
+        if _declares_scope(payload) and not self._same_tenant_store(state, payload):
             raise PermissionError("action result does not belong to the decision tenant/store")
         action_id = str(payload.get("action_id", ""))
-        known_action_ids = {item["action_id"] for item in state.response.get("action_requests", [])}
-        if known_action_ids and action_id not in known_action_ids:
+        planned_action = next(
+            (item for item in state.response.get("action_requests", []) if item.get("action_id") == action_id),
+            None,
+        )
+        if planned_action is None:
             raise ValueError("action_id does not belong to this decision")
+        if payload.get("action_type") != planned_action.get("action_type"):
+            raise ValueError("action_type does not match the planned action")
         idempotency_key = str(payload.get("idempotency_key", action_id))
         key = (action_id, idempotency_key)
         existing = state.action_results.get(key)
@@ -140,8 +221,8 @@ class DecisionService:
                 "decision_id": decision_id,
                 "action_id": action_id,
                 "accepted": True,
-                "decision_status": "answer_ready" if status == "success" else "handoff",
-                "next_action": "decide" if status == "success" else "handoff",
+                "decision_status": "answer_ready" if status == "succeeded" else "handoff",
+                "next_action": "decide" if status == "succeeded" else "handoff",
                 "_request_payload": comparable,
                 "trace": self._trace(
                     "action_result",
@@ -150,18 +231,49 @@ class DecisionService:
                     thread_id=decision_id,
                 ),
             }
-            self._save_state(organization_id, store_id, request_id, decision_id, state)
         return _public(state.action_results[key])
 
-    def submit_feedback(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+    def submit_feedback(
+        self,
+        payload: dict[str, Any],
+        *,
+        principal_organization_id: str | None = None,
+        principal_store_id: str | None = None,
+    ) -> dict[str, Any] | None:
         decision_id = str(payload.get("decision_id", ""))
-        state = self.repository.get_by_decision_id(decision_id)
+        return self.repository.mutate_state(
+            decision_id,
+            lambda state: self._submit_feedback_locked(
+                state,
+                decision_id,
+                payload,
+                principal_organization_id=principal_organization_id,
+                principal_store_id=principal_store_id,
+            ),
+        )
+
+    def _submit_feedback_locked(
+        self,
+        state: DecisionState | None,
+        decision_id: str,
+        payload: dict[str, Any],
+        *,
+        principal_organization_id: str | None,
+        principal_store_id: str | None,
+    ) -> dict[str, Any] | None:
         if not state:
             return None
         organization_id, store_id, request_id = _request_key(state.request)
+        principal_scope = {
+            "organization_id": principal_organization_id,
+            "store_id": principal_store_id,
+        }
+        if any(principal_scope.values()) and not self._same_tenant_store(state, principal_scope):
+            raise PermissionError("human reply principal does not belong to the decision tenant/store")
+        if _declares_scope(payload) and not self._same_tenant_store(state, payload):
+            raise PermissionError("human reply feedback does not belong to the decision tenant/store")
         human_reply_id = f"human-reply-{uuid.uuid4().hex[:12]}"
         state.feedback.append({"human_reply_id": human_reply_id, **payload})
-        self._save_state(organization_id, store_id, request_id, decision_id, state)
         return {
             "human_reply_id": human_reply_id,
             "decision_id": decision_id,
@@ -227,8 +339,20 @@ class DecisionService:
             "trace": response.get("trace"),
         }
 
-    def _build_response(self, decision_id: str, payload: dict[str, Any], content: str) -> dict[str, Any]:
-        return self.graph.invoke(decision_id, payload, content)
+    def _build_response(
+        self,
+        decision_id: str,
+        payload: dict[str, Any],
+        content: str,
+        *,
+        resumed_from_checkpoint: bool = False,
+    ) -> dict[str, Any]:
+        return self.graph.invoke(
+            decision_id,
+            payload,
+            content,
+            resumed_from_checkpoint=resumed_from_checkpoint,
+        )
 
     def _context_request(self, decision_id: str, context_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         context_request_id = f"ctx-{context_type}-{decision_id[-8:]}"
@@ -276,13 +400,15 @@ class DecisionService:
         }
 
     def _same_tenant_store(self, state: DecisionState, payload: dict[str, Any]) -> bool:
-        request = state.request
-        payload_tenant = payload.get("tenant_id") or payload.get("organization_id")
-        payload_store = payload.get("external_store_id") or payload.get("store_id")
-        if payload_tenant and str(payload_tenant) not in {str(request.get("tenant_id")), str(request.get("organization_id"))}:
-            return False
-        if payload_store and str(payload_store) not in {str(request.get("external_store_id")), str(request.get("store_id"))}:
-            return False
+        decision_organization_id, decision_store_id, _request_id = _request_key(state.request)
+        for field in ("tenant_id", "organization_id"):
+            value = payload.get(field)
+            if value not in {None, ""} and str(value) != decision_organization_id:
+                return False
+        for field in ("external_store_id", "store_id"):
+            value = payload.get(field)
+            if value not in {None, ""} and str(value) != decision_store_id:
+                return False
         return True
 
     def _trace(
@@ -387,18 +513,6 @@ def _request_key(payload: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
-def _request_with_refill_context(request: dict[str, Any], context_type: str, payload: dict[str, Any]) -> dict[str, Any]:
-    updated = dict(request)
-    context = dict(updated.get("context") or {})
-    existing = context.get(context_type)
-    if isinstance(existing, list):
-        context[context_type] = [*existing, *list(payload.get("items") or [])]
-    else:
-        context[context_type] = list(payload.get("items") or [])
-    updated["context"] = context
-    return updated
-
-
 def _request_with_refill_contexts(request: dict[str, Any], refills: dict[tuple[str, str], dict[str, Any]]) -> dict[str, Any]:
     updated = dict(request)
     context = dict(updated.get("context") or {})
@@ -407,7 +521,7 @@ def _request_with_refill_contexts(request: dict[str, Any], refills: dict[tuple[s
         if not context_type:
             continue
         existing = context.get(context_type)
-        items = list(refill.get("_request_payload", {}).get("items") or [])
+        items = list(refill.get("_request_payload", {}).get(context_type) or [])
         if isinstance(existing, list):
             context[context_type] = [*existing, *items]
         else:
@@ -442,6 +556,17 @@ def _latest_human_reply(feedback: list[dict[str, Any]]) -> str | None:
         return None
     value = feedback[-1].get("human_reply")
     return str(value) if value else None
+
+
+def _declares_scope(payload: dict[str, Any]) -> bool:
+    return any(key in payload for key in SCOPE_FIELDS)
+
+
+def _legacy_context_type(context_request_id: str) -> str | None:
+    for context_type in ("products", "orders", "logistics", "rules"):
+        if context_request_id.startswith(f"ctx-{context_type}-"):
+            return context_type
+    return None
 
 
 def _repository_for(settings: Settings) -> DecisionRepository:

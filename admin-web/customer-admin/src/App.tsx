@@ -13,7 +13,6 @@ import {
   PackagePlus,
   Search,
   ShieldCheck,
-  SlidersHorizontal,
   Store,
   UploadCloud
 } from "lucide-react";
@@ -35,7 +34,16 @@ import {
 } from "../../shared/components";
 import { arrayFrom, firstId, readRecord } from "../../shared/data";
 import { DecisionTraceReplay } from "../../shared/trace-replay";
+import { presentDecisionTrace } from "../../shared/trace-presentation";
 import type { JsonRecord, NavItem, Page, ToastState } from "../../shared/types";
+import { SimulationComposer } from "./SimulationComposer";
+import { scrollBehaviorForReducedMotion } from "./landing-motion";
+import {
+  buildCanonicalSimulationTrace,
+  isCurrentOperation,
+  requireReloadedSimulation,
+  type OperationToken
+} from "./simulation-workflow";
 
 type CustomerTab = "overview" | "messages" | "products" | "knowledge" | "audit";
 
@@ -62,6 +70,7 @@ type CustomerTrace = JsonRecord & {
   action?: string;
   status?: string;
   risk_level?: string;
+  missing_context?: unknown;
   source?: string;
   trace?: JsonRecord;
 };
@@ -209,133 +218,109 @@ export function App() {
 }
 
 function CustomerLanding({ customerAuthed, navigate }: { customerAuthed: boolean; navigate: (path: string) => void }) {
-  const demoSlides = [
-    {
-      title: "商品信息统一管理",
-      text: "说明书、SKU、价格、常见问题和适用范围统一维护，避免客服和 AI 各看各的资料。",
-      icon: <UploadCloud size={20} />
-    },
-    {
-      title: "AI 自动学习商品知识",
-      text: "资料先转成可审核的知识和模拟问答，让 AI 学习前后都有依据可查。",
-      icon: <Bot size={20} />
-    },
-    {
-      title: "AI 客服回复可控",
-      text: "自动回复前经过规则、风险、上下文完整性和模拟问答检查，高风险场景先转人工。",
-      icon: <SlidersHorizontal size={20} />
-    }
-  ];
-  const flowSteps = ["上传商品说明书", "AI 学习", "模拟问答", "AI 自动回复"];
+  const publicWorkflow = [
+    ["客户提问", "收到买家的商品、订单或售后问题。"],
+    ["查商品资料", "检索已审核的商品、订单、物流和规则；缺资料就先补资料，不让 AI 猜。"],
+    ["检查规则与风险", "检查价格、退款条件和风险表达，判断能不能自动回复。"],
+    ["安全回复或转人工", "满足条件才自动回复，不确定时给建议或转人工。"]
+  ] as const;
+  const reassurance = [
+    ["资料有依据", "回复使用已审核的商品、订单、物流和规则资料。", <Search size={19} />],
+    ["回复有规则", "价格、退款和风险规则决定是否允许自动发送。", <ShieldCheck size={19} />],
+    ["风险可转人工", "资料不全或风险较高时，AI 不强行作答。", <AlertTriangle size={19} />]
+  ] as const;
+  const openCustomerAdmin = () => navigate(customerAuthed ? "/admin" : "/login");
+  const showDemoFlow = () => {
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    document.getElementById("demo-flow")?.scrollIntoView({
+      behavior: scrollBehaviorForReducedMotion(reducedMotion),
+      block: "start"
+    });
+  };
 
   return (
     <main className="landingPage">
       <header className="landingHeader">
         <button className="landingBrand" onClick={() => navigate("/")} aria-label="回到首页">
           <MessageSquareText size={18} />
-          <span>AI 客服资料中台</span>
+          <span>AI 客服管理后台</span>
         </button>
         <nav aria-label="公开页导航">
-          <button className="textButton" onClick={() => document.getElementById("demo-flow")?.scrollIntoView({ behavior: "smooth" })}>
+          <button className="textButton" onClick={showDemoFlow}>
             查看演示流程
           </button>
-          <button className="darkButton" onClick={() => navigate(customerAuthed ? "/admin" : "/login")}>
-            客户登录
+          <button className="darkButton" onClick={openCustomerAdmin}>
+            进入客户后台
           </button>
         </nav>
       </header>
 
       <section className="heroSection">
         <div className="heroCopy">
-          <p className="landingEyebrow">AI 客服上线前，先把商品资料管好</p>
-          <h1>商品信息管好了，AI 客服才答得准。</h1>
+          <p className="landingEyebrow">可控 AI 客服工作流</p>
+          <h1>看得见 AI 怎么回答，也看得见它为什么不回答。</h1>
           <p className="heroSubtitle">
-            上传商品说明书、价格和常见问题，让 AI 先学习，再通过模拟问答检查效果。真正自动回复前，还能用规则控制范围和风险。
+            商品资料给 AI 依据，模拟问答先检查效果，规则和风险控制决定自动回复还是转人工。
           </p>
           <div className="heroActions">
-            <button className="darkButton" onClick={() => navigate(customerAuthed ? "/admin" : "/login")}>
+            <button className="darkButton" onClick={openCustomerAdmin}>
               进入客户后台 <ArrowRight size={16} />
             </button>
-            <button className="textButton" onClick={() => document.getElementById("demo-flow")?.scrollIntoView({ behavior: "smooth" })}>
+            <button className="textButton" onClick={showDemoFlow}>
               查看演示流程
             </button>
           </div>
         </div>
-        <div className="heroPreview" aria-label="客户后台产品预览">
-          <div className="previewTopbar">
-            <span />
-            <span />
-            <span />
-          </div>
-          <div className="previewGrid">
-            <div className="previewNav" />
-            <div className="previewContent">
-              <div className="previewLine wide" />
-              <div className="previewLine" />
-              <div className="previewTable">
-                <span />
-                <span />
-                <span />
-                <span />
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="demoCarousel" aria-label="产品演示轮播">
-        <div className="sectionIntro">
-          <p className="landingEyebrow">产品演示</p>
-          <h2>从资料到回复，一条线看清楚。</h2>
-        </div>
-        <div className="demoViewport">
-          <div className="demoTrack">
-            {demoSlides.map((slide) => (
-              <article className="demoSlide" key={slide.title}>
-                <div className="slideIcon">{slide.icon}</div>
-                <h3>{slide.title}</h3>
-                <p>{slide.text}</p>
-              </article>
-            ))}
-          </div>
-        </div>
+        <figure className="workflowProof">
+          <picture>
+            <source media="(max-width: 720px)" srcSet="/ai-workflow-proof-mobile.png" />
+            <img
+              src="/ai-workflow-proof.png"
+              alt="客户问题经过资料检索、风险检查并停在资料补充步骤的真实客户后台"
+            />
+          </picture>
+          <figcaption>真实客户后台工作流：缺资料就先补资料，不让 AI 猜。</figcaption>
+        </figure>
       </section>
 
       <section className="flowSection" id="demo-flow">
         <div className="sectionIntro">
-          <p className="landingEyebrow">怎么工作</p>
-          <h2>上传商品说明书 → AI 学习 → 模拟问答 → AI 自动回复</h2>
+          <p className="landingEyebrow">一次咨询怎么处理</p>
+          <h2>从客户提问到安全回复，每一步都有依据。</h2>
         </div>
-        <ol className="flowRail" aria-label="上传商品说明书到 AI 自动回复流程">
-          {flowSteps.map((step, index) => (
-            <li key={step}>
+        <ol className="flowRail" aria-label="AI 客服处理一次客户咨询的流程">
+          {publicWorkflow.map(([title, description], index) => (
+            <li key={title}>
               <span className="flowIndex">{index + 1}</span>
-              <strong>{step}</strong>
-              {index < flowSteps.length - 1 ? <ArrowRight className="flowArrow" size={18} aria-hidden="true" /> : null}
+              <div>
+                <strong>{title}</strong>
+                <p>{description}</p>
+              </div>
+              {index < publicWorkflow.length - 1 ? <ArrowRight className="flowArrow" size={18} aria-hidden="true" /> : null}
             </li>
           ))}
         </ol>
       </section>
 
-      <section className="controlSection">
-        <div>
-          <p className="landingEyebrow">可控自动化</p>
-          <h2>AI 先学习，规则再放行。</h2>
-          <p>
-            商品知识通过审核后才进入可用资料；模拟问答先检查效果；自动回复还要经过规则、风险和上下文完整性判断。
-          </p>
+      <section className="reassuranceSection" aria-labelledby="reassurance-title">
+        <div className="sectionIntro">
+          <p className="landingEyebrow">放心交给 AI，也保留人工判断</p>
+          <h2 id="reassurance-title">不是每个问题都让 AI 硬答。</h2>
         </div>
-        <div className="controlList">
-          <span>资料缺口提醒</span>
-          <span>知识审核状态</span>
-          <span>价格过期提示</span>
-          <span>高风险转人工</span>
+        <div className="reassuranceList">
+          {reassurance.map(([title, description, icon]) => (
+            <article key={title}>
+              <span className="reassuranceIcon" aria-hidden="true">{icon}</span>
+              <h3>{title}</h3>
+              <p>{description}</p>
+            </article>
+          ))}
         </div>
       </section>
 
       <section className="finalCta">
-        <h2>先管好商品资料，再让 AI 自动回复。</h2>
-        <button className="darkButton" onClick={() => navigate(customerAuthed ? "/admin" : "/login")}>
+        <h2>先看清工作流，再决定哪些回复可以自动发送。</h2>
+        <button className="darkButton" onClick={openCustomerAdmin}>
           进入客户后台 <ArrowRight size={16} />
         </button>
       </section>
@@ -511,6 +496,7 @@ function CustomerOverview({ session, data, setActiveTab }: { session: JsonRecord
 
 function LaunchExchange({ onExchanged, setToast }: { onExchanged: (session: JsonRecord) => void; setToast: (toast: ToastState) => void }) {
   const [error, setError] = React.useState<string | null>(null);
+  const exchangedLaunchTokenRef = React.useRef("");
 
   React.useEffect(() => {
     const token = new URLSearchParams(window.location.search).get("token") || "";
@@ -518,6 +504,8 @@ function LaunchExchange({ onExchanged, setToast }: { onExchanged: (session: Json
       setError("启动票据缺失，请从 open_erp_agent 客户端重新打开。");
       return;
     }
+    if (exchangedLaunchTokenRef.current === token) return;
+    exchangedLaunchTokenRef.current = token;
     requestJson("/v1/admin/auth/launch/exchange", {
       method: "POST",
       body: JSON.stringify({ launch_token: token })
@@ -555,29 +543,84 @@ function MessageHistory({ storeId, setToast, setSelected }: {
   const [rows, setRows] = React.useState<CustomerTrace[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [question, setQuestion] = React.useState("");
+  const [simulationLoading, setSimulationLoading] = React.useState(false);
+  const [simulationError, setSimulationError] = React.useState<string | null>(null);
   const [selectedTrace, setSelectedTrace] = React.useState<CustomerTrace | null>(null);
   const [selectedConversationId, setSelectedConversationId] = React.useState("");
   const [searchText, setSearchText] = React.useState("");
+  const currentStoreRef = React.useRef(storeId);
+  const generationRef = React.useRef(0);
+  const loadRequestRef = React.useRef(0);
+  const simulationRequestRef = React.useRef(0);
+  const mountedRef = React.useRef(true);
 
   const conversations = React.useMemo(() => buildCustomerConversations(rows, searchText), [rows, searchText]);
   const selectedConversation = conversations.find((conversation) => conversation.id === selectedConversationId) || conversations[0] || null;
 
-  async function load(source = "") {
-    setLoading(true);
+  function operationIsCurrent(operation: OperationToken, currentRequestId: number) {
+    return isCurrentOperation(
+      operation,
+      currentStoreRef.current,
+      generationRef.current,
+      currentRequestId,
+      mountedRef.current
+    );
+  }
+
+  async function load(
+    source = "",
+    options: { reportError?: boolean; throwOnError?: boolean } = {},
+    operationStoreId = currentStoreRef.current,
+    operationGeneration = generationRef.current
+  ) {
+    const operation: OperationToken = {
+      storeId: operationStoreId,
+      generation: operationGeneration,
+      requestId: ++loadRequestRef.current
+    };
+    if (operationIsCurrent(operation, loadRequestRef.current)) setLoading(true);
     try {
-      const query = new URLSearchParams({ store_id: storeId });
+      const query = new URLSearchParams({ store_id: operation.storeId });
       if (source) query.set("source", source);
       const response = await requestJson<Page>(`/v1/admin/message-traces?${query.toString()}`);
-      setRows(arrayFrom(response.items) as CustomerTrace[]);
+      const loadedRows = arrayFrom(response.items) as CustomerTrace[];
+      if (!operationIsCurrent(operation, loadRequestRef.current)) return [];
+      setRows(loadedRows);
+      return loadedRows;
     } catch (error) {
-      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+      if (!operationIsCurrent(operation, loadRequestRef.current)) return [];
+      if (options.reportError !== false) {
+        setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+      }
+      if (options.throwOnError) throw error;
+      return [];
     } finally {
-      setLoading(false);
+      if (operationIsCurrent(operation, loadRequestRef.current)) setLoading(false);
     }
   }
 
-  React.useEffect(() => {
-    void load();
+  React.useLayoutEffect(() => {
+    mountedRef.current = true;
+    if (currentStoreRef.current !== storeId) {
+      currentStoreRef.current = storeId;
+      generationRef.current += 1;
+      loadRequestRef.current += 1;
+      simulationRequestRef.current += 1;
+    }
+    setRows([]);
+    setQuestion("");
+    setSearchText("");
+    setSelectedConversationId("");
+    setSelectedTrace(null);
+    setSimulationError(null);
+    setSimulationLoading(false);
+    void load("", {}, storeId, generationRef.current);
+    return () => {
+      mountedRef.current = false;
+      generationRef.current += 1;
+      loadRequestRef.current += 1;
+      simulationRequestRef.current += 1;
+    };
   }, [storeId]);
 
   React.useEffect(() => {
@@ -590,44 +633,51 @@ function MessageHistory({ storeId, setToast, setSelected }: {
     }
   }, [conversations, selectedConversationId]);
 
-  async function simulate(event: React.FormEvent) {
-    event.preventDefault();
+  async function simulate() {
     const content = question.trim();
-    if (!content) {
-      setToast({ tone: "error", text: "请输入模拟客户问题" });
-      return;
-    }
-    setLoading(true);
+    if (!content || simulationLoading) return;
+    const operation: OperationToken = {
+      storeId: currentStoreRef.current,
+      generation: generationRef.current,
+      requestId: ++simulationRequestRef.current
+    };
+    setSimulationLoading(true);
+    setSimulationError(null);
     try {
       const response = await requestJson<JsonRecord>("/v1/admin/message-simulations", {
         method: "POST",
-        body: JSON.stringify({ store_id: storeId, platform: "pdd", message: { content } })
+        body: JSON.stringify({ store_id: operation.storeId, platform: "pdd", message: { content } })
       });
+      if (!operationIsCurrent(operation, simulationRequestRef.current)) return;
       const decision = readRecord(response, "decision");
+      const decisionId = String(decision.decision_id || "");
+      const createdTrace = await requireReloadedSimulation(
+        () => load("", { reportError: false, throwOnError: true }, operation.storeId, operation.generation),
+        decisionId
+      );
+      if (!operationIsCurrent(operation, simulationRequestRef.current)) return;
+      setSearchText("");
+      setSelectedConversationId(String(createdTrace.conversation_id || createdTrace.decision_id || ""));
+      setSelectedTrace(buildCanonicalSimulationTrace(createdTrace, content));
       setQuestion("");
       setToast({ tone: "success", text: "模拟决策已完成" });
-      await load();
-      setSelectedTrace({
-        decision_id: String(decision.decision_id || ""),
-        source: "simulation",
-        customer_message: content,
-        ai_reply: firstCandidateText(decision),
-        conversation_id: String(readRecord(decision, "request").conversation_id || decision.conversation_id || decision.decision_id || ""),
-        action: String(decision.action || ""),
-        status: String(decision.decision_status || ""),
-        risk_level: String(decision.risk_level || ""),
-        trace: readRecord(decision, "trace")
-      });
     } catch (error) {
-      setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+      if (operationIsCurrent(operation, simulationRequestRef.current)) {
+        setSimulationError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      setLoading(false);
+      if (operationIsCurrent(operation, simulationRequestRef.current)) setSimulationLoading(false);
     }
+  }
+
+  function changeQuestion(value: string) {
+    setQuestion(value);
+    setSimulationError(null);
   }
 
   return (
     <>
-      <SectionHeader label="MESSAGES" title="消息历史" action={<button onClick={() => void load()}><Search size={16} />刷新</button>} />
+      <SectionHeader label="MESSAGES" title="消息历史" action={<button disabled={simulationLoading} onClick={() => void load()}><Search size={16} />刷新</button>} />
       <section className="messageHistoryWorkspace" aria-label="客服消息历史工作台">
         <aside className="conversationList" aria-label="会话列表">
           <label className="conversationSearch">
@@ -709,24 +759,30 @@ function MessageHistory({ storeId, setToast, setSelected }: {
                   </React.Fragment>
                 ))}
               </div>
-              <form className="messageSimulator composerSimulator" onSubmit={simulate}>
-                <label>
-                  模拟客户咨询
-                  <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：这个商品有哪些尺寸？" />
-                </label>
-                <div className="buttonRow end">
-                  <button className="primaryButton" disabled={loading}>
-                    {loading ? <Loader2 size={16} className="spin" /> : <Bot size={16} />}
-                    模拟决策
-                  </button>
-                </div>
-              </form>
+              <SimulationComposer
+                value={question}
+                loading={simulationLoading}
+                error={simulationError}
+                onChange={changeQuestion}
+                onSubmit={() => void simulate()}
+              />
             </>
           ) : (
-            <div className="emptyState">
-              <strong>{loading ? "正在读取消息历史" : "暂无会话历史"}</strong>
-              <p>{loading ? "消息历史正在读取，请稍候。" : "收到客户咨询或完成模拟咨询后，右侧会显示完整对话。"}</p>
-            </div>
+            loading ? (
+              <div className="emptyState">
+                <strong>正在读取消息历史</strong>
+                <p>消息历史正在读取，请稍候。</p>
+              </div>
+            ) : (
+              <SimulationComposer
+                value={question}
+                loading={simulationLoading}
+                error={simulationError}
+                emptyState
+                onChange={changeQuestion}
+                onSubmit={() => void simulate()}
+              />
+            )
           )}
         </section>
       </section>
@@ -836,6 +892,12 @@ function decisionMeta(trace: CustomerTrace) {
 }
 
 function MessageTraceDrawer({ trace, onClose, onRaw }: { trace: CustomerTrace; onClose: () => void; onRaw: () => void }) {
+  const presentation = presentDecisionTrace({
+    action: trace.action,
+    status: trace.status,
+    risk: trace.risk_level,
+    missingContext: trace.missing_context
+  });
   return (
     <aside className="drawer messageTraceDrawer">
       <div className="drawerHeader">
@@ -843,9 +905,9 @@ function MessageTraceDrawer({ trace, onClose, onRaw }: { trace: CustomerTrace; o
         <button onClick={onClose}>关闭</button>
       </div>
       <div className="traceSummary">
-        <Metric label="动作" value={String(trace.action || "-")} tone="info" />
-        <Metric label="状态" value={String(trace.status || "-")} tone="ok" />
-        <Metric label="风险" value={String(trace.risk_level || "-")} tone="warn" />
+        <Metric label="动作" value={presentation.actionLabel} tone="info" title={String(trace.action || "-")} />
+        <Metric label="状态" value={presentation.statusLabel} tone="ok" title={String(trace.status || "-")} />
+        <Metric label="风险" value={presentation.riskLabel} tone="warn" title={String(trace.risk_level || "-")} />
       </div>
       <section className="traceTextBlock">
         <h3>客户消息</h3>
@@ -859,7 +921,13 @@ function MessageTraceDrawer({ trace, onClose, onRaw }: { trace: CustomerTrace; o
           </>
         ) : null}
       </section>
-      <DecisionTraceReplay trace={trace.trace} status={String(trace.status || trace.action || "")} />
+      <DecisionTraceReplay
+        trace={trace.trace}
+        action={trace.action}
+        status={trace.status}
+        risk={trace.risk_level}
+        missingContext={trace.missing_context}
+      />
       <button onClick={onRaw}>查看原始记录</button>
     </aside>
   );

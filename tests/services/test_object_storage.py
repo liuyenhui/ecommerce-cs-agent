@@ -79,6 +79,20 @@ def test_s3_object_storage_rejects_private_endpoint() -> None:
         )
 
 
+def test_s3_object_storage_allows_localhost_endpoint_only_in_acs_debug_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ACS_DEBUG_MODE", "local-acs")
+
+    storage = S3ObjectStorage(
+        endpoint="http://127.0.0.1:19000",
+        bucket="bucket",
+        region="us-east-1",
+        access_key_id="access",
+        secret_access_key="secret",
+    )
+
+    assert storage.endpoint == "http://127.0.0.1:19000"
+
+
 def test_s3_object_storage_allows_kubernetes_service_endpoint() -> None:
     storage = S3ObjectStorage(
         endpoint="http://minio.ecommerce-cs-agent-dev.svc.cluster.local:9000",

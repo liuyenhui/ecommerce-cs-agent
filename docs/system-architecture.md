@@ -32,7 +32,7 @@ flowchart LR
     Normalize["上下文标准化\n平台字段映射 / JSONB raw"]
     ContextRefill["按类型补上下文\nproducts / orders / logistics / rules"]
     ProductContent["商品资料中心\n资料归档 / Markdown 审稿 / 价格快照"]
-    Decision["LangGraph 决策编排\nStateGraph / interrupt / resume"]
+    Decision["LangGraph 决策编排\nStateGraph / conditional edges / re-invoke"]
     RuleGate["规则闸门\n允许自动回复 / 候选 / 转人工"]
     Feedback["反馈学习入口\n人工回复 / 采用率 / 修改幅度"]
   end
@@ -42,7 +42,7 @@ flowchart LR
     Vector["pgvector\n相似问答 / 知识召回"]
     Archive["JSONL / 对象存储\n原始归档 / 训练导出"]
     Metrics["指标与审计\ndecision_record / evaluation"]
-    Checkpoint["编排检查点\nthread_id / checkpoint / graph_version"]
+    Checkpoint["持久化决策状态\nthread_id / latest DecisionState"]
   end
 
   subgraph External["外部依赖"]
@@ -167,7 +167,7 @@ flowchart TB
 | Idempotency | 防止外部系统重试产生重复决策 | `request_id` 唯一约束 |
 | Context Builder | 把最小问答请求、可选已有上下文和按类型回填上下文合成标准上下文，并选择最近有效上下文 | Pydantic schema + JSONB raw |
 | Context Refill API | 按 `context_requests[]` 接收商品、订单、物流、规则和动作执行结果回填，并聚合同一 `decision_id` | FastAPI 路由 + 幂等约束 |
-| LangGraph Decision Orchestrator | 用状态图编排意图识别、缺上下文等待、RAG、生成、动作结果、人工介入和规则闸门；每个节点映射到 trace step | LangGraph StateGraph + PostgreSQL/Redis checkpointer |
+| LangGraph Decision Orchestrator | 用状态图编排意图识别、缺上下文判断、RAG、生成、动作规划和规则闸门；每个节点映射到 trace step | 当前：StateGraph + 单次 invoke 临时 InMemorySaver；目标：外部持久化 native checkpointer |
 | Product Content Center | 管理客户上传的说明书、照片、SKU 资料、Markdown 审稿稿件、知识片段候选、模拟问答和价格快照 | 客户 Admin 后台 + PostgreSQL + 对象存储 |
 | Intent Classifier | 判断问题类型，如商品参数、物流、售后、投诉 | 规则优先，LLM 辅助 |
 | Risk Detector | 识别退款争议、赔付承诺、辱骂、处罚风险 | 关键词 + 规则 + LLM 辅助 |
@@ -194,7 +194,7 @@ flowchart TB
 | 向量检索 | pgvector | 第一版支持相似问答和知识片段召回 |
 | ORM/迁移 | SQLAlchemy + Alembic | 保持 schema 演进可控 |
 | LLM 访问 | Provider Adapter | 屏蔽 OpenAI-compatible、本地模型或多供应商差异 |
-| Agent 编排 | LangGraph StateGraph | 内部编排决策状态、条件边、interrupt/resume、节点 trace 和 checkpoint |
+| Agent 编排 | LangGraph StateGraph | 当前编排真实条件边和节点 trace；Repository DecisionState 支撑同 thread_id 重构重算，native interrupt/resume 为目标架构 |
 | 决策规则 | 代码规则 + DB 配置 | 第一版便于调试，后续可演进 OPA/Rego |
 | 异步任务 | 第一版不强依赖；后续 Redis + Celery/Dramatiq | 用于异步事件、批量学习、回调重试 |
 | 观测 | Structured logging + OpenTelemetry + Prometheus | 跟踪请求、决策耗时、错误和业务指标 |
@@ -220,7 +220,7 @@ flowchart TB
 | `product_snapshot` | `id` | `store_id`、`message_id`、`listing_id` | `external_product_id`、`external_sku_id`、`listing_ref`、`title`、`sku`、`price`、`attributes JSONB`、`product_refs JSONB`、`raw_payload JSONB`、`business_updated_at`、`captured_at` |
 | `order_snapshot` | `id` | `store_id`、`message_id` | `external_order_id`、`status`、`logistics_status`、`paid_at`、`raw_payload JSONB`、`business_updated_at`、`captured_at` |
 | `decision_record` | `id`；`request_id` | `conversation_id`、`message_id` | `action`、`confidence`、`risk_level`、`missing_context JSONB`、`trace JSONB`、`selected_snapshot_refs JSONB`、`model_version` |
-| `decision_graph_checkpoint` | `id`；`(decision_id, checkpoint_seq)` | `decision_id`、`conversation_id` | `thread_id`、`graph_version`、`node_name`、`decision_status`、`state JSONB`、`resume_token`、`expires_at` |
+| `decision_graph_checkpoint` | `id`；`(decision_id, checkpoint_key)` | `decision_id`、`organization_id`、`store_id` | `thread_id`、`graph_version`、`node_name`、`decision_status`、`checkpoint_key`、`state JSONB`、`state_json JSONB`、`created_at` |
 | `agent_suggestion` | `id` | `decision_id` | `reply_text`、`evidence JSONB`、`prompt_version`、`model_output JSONB` |
 | `action_capability` | `id` | `store_id`、`platform_account_id` | `action_type`、`intent_examples JSONB`、`payload_schema JSONB`、`risk_level`、`requires_human_confirm`、`callback_url`、`enabled` |
 | `action_request` | `id`；`idempotency_key` | `decision_id`、`message_id` | `action_type`、`target JSONB`、`payload JSONB`、`status`、`risk_level`、`requires_human_confirm`、`reason` |
@@ -247,7 +247,7 @@ flowchart TB
 - 实时性上下文每次请求新增快照，不覆盖旧快照；当前决策只引用 Context Builder 选出的最近有效商品、订单、规则、商品资料版本、价格快照和会话摘要。
 - 自然语言动作配置只用于意图识别；真正请求外部系统执行时必须落到稳定 `action_type`、结构化 `payload` 和幂等键。
 - 外部动作必须记录 `action_request` 和 `action_result`；没有执行成功回调前，Agent 不能向买家确认“已完成”。
-- LangGraph graph state 必须通过 `decision_graph_checkpoint` 或等价外部 checkpointer 持久化，禁止依赖单容器内存；`decision_id` 映射 graph `thread_id`，`graph_version` 支持后续状态 schema 演进。
+- 当前 `decision_graph_checkpoint` 由 Repository 保存 latest DecisionState，禁止依赖单容器内存完成跨进程延续；每次 LangGraph invoke 的 InMemorySaver 仅用于该次运行诊断。外部持久化 native checkpointer 是目标架构；`decision_id` 继续映射 graph `thread_id`。
 - `decision_record.trace` 必须记录规则命中、知识来源、商品资料版本、价格快照、模拟问答案例、模型版本、风险原因、缺失上下文和可渲染的 `trace.steps`。
 - `human_reply` 只保存人工最终回复；第一版不直接把客服回复写入 `knowledge_entry` 或 `knowledge_embedding`。
 - `knowledge_candidate` 是半自动知识沉淀的中间态，只保存质量信号较好的待审核知识。
@@ -350,7 +350,7 @@ trace_steps[]
 | `context_gate` | 判断是否需要 `context_requests[]`，并标记本次运行走过的条件边 | 缺上下文时返回 `context_requests[]` |
 | `action_gate` | 把“改备注”“改地址”等诉求转成 `action_request` | 等待外部 `actions/results` |
 | `generate_candidate` | 生成候选回复，不决定是否可自动发送 | 否 |
-| `policy_gate` | 规则闸门最终输出 `auto_reply`、`candidate` 或 `handoff` | 人工确认可作为 interrupt |
+| `policy_gate` | 规则闸门最终输出 `auto_reply`、`candidate` 或 `handoff` | 当前返回明确状态；目标架构可扩展 human-in-the-loop interrupt |
 | `persist_trace` | 将节点输入输出引用、耗时、错误和降级原因写入 `decision_record.trace.steps` | 否 |
 
 落地规则：
@@ -358,9 +358,9 @@ trace_steps[]
 - LangGraph state 只保存引用、状态和结构化中间结果；原始消息、商品、订单、物流、规则和知识正文仍落业务表或对象存储。
 - 每个 graph 节点必须输出可映射到 `decision_record.trace.steps[]` 的 step 记录。
 - `decision_record.trace.graph.nodes[]` / `edges[]` 是 Admin 单条消息运行回放的数据源；Customer Admin 只显示本店铺脱敏回放，System Admin 详情继续按 raw payload 权限和原因审计控制。
-- `decision_id` 是外部 API 主键，也是 graph `thread_id`；补上下文和动作结果只恢复同一个 thread，不新建决策。
-- `graph_version` 必须写入 checkpoint 和 trace，避免后续节点、状态 schema 变化导致旧决策无法回放。
-- API 服务保持 k8s 无状态；LangGraph checkpoint 使用 PostgreSQL、Redis 或等价外部存储，不能使用进程内内存作为生产状态。
+- `decision_id` 是外部 API 主键，也是 graph `thread_id`；补上下文从 Repository 状态重构输入后重新 invoke，不新建决策。
+- `graph_version` 必须写入持久化 DecisionState 和 trace，避免后续节点、状态 schema 变化导致旧决策无法回放。
+- API 服务保持 k8s 无状态；Repository DecisionState 使用 PostgreSQL 或等价外部存储。LangGraph InMemorySaver 每次 invoke 临时创建，方法返回后不在服务实例保留；外部持久化 native checkpointer 是目标架构。
 - 规则闸门仍是最终自动回复放行点。LangGraph 负责编排，不替代规则、权限、价格权威来源或人工审核。
 
 ## 5. 消息追踪信息流
@@ -747,16 +747,17 @@ erDiagram
 
   DECISION_GRAPH_CHECKPOINT {
     uuid id
-    uuid decision_id
-    uuid conversation_id
+    string decision_id
+    uuid organization_id
+    uuid store_id
     string thread_id
     string graph_version
     string node_name
     string decision_status
+    string checkpoint_key
     jsonb state
-    string resume_token
-    int checkpoint_seq
-    timestamp expires_at
+    jsonb state_json
+    timestamp created_at
   }
 
   AGENT_SUGGESTION {
@@ -939,7 +940,7 @@ erDiagram
 - `conversation` 和 `message` 保留外部平台 ID，用于幂等和问题排查。
 - `product_snapshot`、`order_snapshot` 保存当时请求中的商品和订单状态，避免后续数据变化导致决策不可回放；同一会话多次更新时新增快照，不覆盖旧快照。
 - `decision_record.trace` 保存规则命中、知识来源、模型版本、缺失上下文、风险标记和实时上下文选择结果。
-- `decision_graph_checkpoint` 保存 LangGraph thread 状态、节点位置、恢复令牌和 graph 版本；生产环境不能把 graph state 放在 API 容器内存。
+- `decision_graph_checkpoint` 当前保存 Repository latest DecisionState 和 graph 版本，支撑同 thread_id 重构重算与跨进程读取；它不是 LangGraph native snapshot，生产环境不能把延续状态只放在 API 容器内存。
 - `action_capability` 保存平台级 / 店铺级能力清单，自然语言示例只用于匹配，执行时必须使用稳定 `action_type`。
 - `action_request` 和 `action_result` 保存外部动作的请求、幂等键、执行状态和结果；订单修改、地址修改、备注等动作不由 Agent 直接操作平台。
 - `human_reply` 和 `feedback_label` 是后续学习与评估的核心，但不会自动进入向量库。
@@ -1013,7 +1014,7 @@ flowchart LR
   class F bad;
 ```
 
-第一版可以先用同步响应承载 `context_requests[]` 和 `action_request`，由外部客服系统决定是否并行补商品、订单、物流、规则上下文，是否交给人工确认，或是否执行外部动作。内部用 LangGraph 状态图表达该闭环，服务端以 `decision_id + context_request_id + idempotency_key` 做幂等聚合，以 `decision_id` 作为 graph `thread_id` 恢复同一决策，单次问答等待预算最高 5 秒；超时仍缺关键上下文时返回 `candidate` 或 `handoff`。真正的异步 Webhook、任务队列和死信重试可以后续再做，但补上下文、checkpoint 和动作协议本身需要先稳定下来。
+第一版可以先用同步响应承载 `context_requests[]` 和 `action_request`，由外部客服系统决定是否并行补商品、订单、物流、规则上下文，是否交给人工确认，或是否执行外部动作。内部用 LangGraph 状态图表达该闭环，服务端以 `decision_id + context_request_id + idempotency_key` 做幂等聚合，以 `decision_id` 作为 graph `thread_id`，从 Repository latest DecisionState 重构输入后重新 invoke。单次 native InMemorySaver 只生成当前运行诊断 checkpoint ID；外部持久化 native checkpointer 与原生 interrupt/resume 后续再做。单次问答等待预算最高 5 秒；超时仍缺关键上下文时返回 `candidate` 或 `handoff`。
 
 暂不纳入第一版：
 
