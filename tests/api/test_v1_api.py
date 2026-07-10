@@ -332,6 +332,51 @@ def test_context_refill_rejects_cross_tenant_and_idempotency_conflict():
     assert conflict.status_code == 409
 
 
+def test_action_result_rejects_unknown_action_cross_store_and_idempotency_conflict():
+    api = client()
+    decision = api.post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=minimal_reply_request("req-action-result-rejections", "帮我把订单备注改成红色包装"),
+    ).json()
+    action_id = decision["action_requests"][0]["action_id"]
+    payload = {
+        "action_id": action_id,
+        "action_type": "update-note",
+        "idempotency_key": "action-result-rejection-key",
+        "status": "success",
+        "store_id": "store-001",
+        "external_result": {"external_ref": "ok"},
+        "executed_at": "2026-06-12T10:16:00+08:00",
+    }
+
+    unknown_action = api.post(
+        f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
+        headers=auth_headers(),
+        json={**payload, "action_id": "action-unknown"},
+    )
+    cross_store = api.post(
+        f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
+        headers=auth_headers(),
+        json={**payload, "store_id": "store-other"},
+    )
+    first = api.post(
+        f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
+        headers=auth_headers(),
+        json=payload,
+    )
+    conflict = api.post(
+        f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
+        headers=auth_headers(),
+        json={**payload, "status": "failed"},
+    )
+
+    assert unknown_action.status_code == 422
+    assert cross_store.status_code == 403
+    assert first.status_code == 200
+    assert conflict.status_code == 409
+
+
 def test_feedback_and_message_trace_round_trip():
     api = client()
     decision = api.post(
@@ -364,6 +409,35 @@ def test_feedback_and_message_trace_round_trip():
     assert trace.json()["request_id"] == "req-feedback"
     assert trace.json()["trace"]["graph"]["nodes"]
     assert trace.json()["trace"]["graph"]["edges"]
+
+
+def test_human_reply_feedback_requires_auth_and_rejects_cross_store():
+    api = client()
+    decision = api.post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=minimal_reply_request("req-feedback-rejections", "这个商品有什么材质？"),
+    ).json()
+    payload = {
+        "decision_id": decision["decision_id"],
+        "message_id": "msg-req-feedback-rejections",
+        "organization_id": "org-001",
+        "store_id": "store-other",
+        "human_reply": "这款商品材质以商品详情页为准。",
+        "used_candidate": False,
+        "resolution_status": "resolved",
+        "labels": [],
+    }
+
+    unauthenticated = api.post("/v1/feedback/human-replies", json=payload)
+    cross_store = api.post(
+        "/v1/feedback/human-replies",
+        headers=auth_headers(),
+        json=payload,
+    )
+
+    assert unauthenticated.status_code == 401
+    assert cross_store.status_code == 403
 
 
 def test_customer_admin_message_traces_are_scoped_to_session_store():

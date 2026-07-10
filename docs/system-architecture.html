@@ -1475,7 +1475,7 @@
         {
           title: '数据、协议与部署',
           cards: [
-            ['PostgreSQL 16+', 'JSONB 保存商品资料版本、上下文快照、trace、LangGraph checkpoint、raw metadata 和规则条件，pgvector 保存向量。'],
+            ['PostgreSQL 16+', 'JSONB 保存商品资料版本、上下文快照、trace、持久化决策上下文和规则条件，pgvector 保存向量；LangGraph native checkpoint ID 当前只用于单进程诊断。'],
             ['HTTP/JSON 接入', 'OpenAPI 描述同步接口，Webhook 和轮询用于后续异步任务与结果回传。'],
             ['k8s 无状态', 'Agent 服务容器无状态运行，持久化交给 PostgreSQL 和对象存储。'],
             ['dev 真实拓扑', '公网域名先进入 ai-agent Traefik / FRPS，再通过 K3s frp-system/bpg-frpc 的 cs-agent-dev-http HTTP vhost 进入 ecommerce-cs-agent-dev namespace。'],
@@ -1496,8 +1496,8 @@
       matrix: [
         ['编程语言', 'Python 3.12', '后端 Agent 服务主语言，便于 FastAPI、Pydantic 和 AI/RAG 生态集成。'],
         ['服务框架', 'FastAPI + Pydantic v2', '定义 HTTP API、请求响应 schema、OpenAPI 文档和结构化校验。'],
-        ['Agent 编排', 'LangGraph StateGraph', '内部表达决策状态、条件边、interrupt/resume、节点级 trace 和 checkpoint，不暴露为外部 API。'],
-        ['数据库', 'PostgreSQL 16+ / JSONB / pgvector', '业务主库、商品资料、价格快照、上下文快照、LangGraph checkpoint、决策 trace、知识库和向量召回统一落库。'],
+        ['Agent 编排', 'LangGraph StateGraph + InMemorySaver', '内部表达决策状态、真实条件边和节点级 trace；native checkpoint ID 只用于当前进程诊断，不作为跨 Pod 恢复依据。'],
+        ['数据库', 'PostgreSQL 16+ / JSONB / pgvector', '业务主库、商品资料、价格快照、上下文快照、持久化决策上下文、决策 trace、知识库和向量召回统一落库，供重算与跨进程恢复。'],
         ['ORM / 迁移', 'SQLAlchemy + Alembic', '管理表结构、索引、JSONB 字段和后续版本迁移。'],
         ['接入协议', 'HTTP/JSON / Webhook / Polling', '第一版同步决策，后续支持异步事件、任务查询和回调。'],
         ['客户后台页面', 'admin host: GET /, /login, /admin', '宣传页公开访问，客户登录页建立 agent_admin_session，/admin 未登录重定向到客户后台 /login。'],
@@ -1528,7 +1528,7 @@
       ],
       principles: [
         '第一版优先同步 HTTP 接入，外部系统提交最小问答请求，缺商品、订单、物流或规则时按类型回填。',
-        '内部 Decision Orchestrator 采用 LangGraph 状态图设计，decision_id 映射 graph thread_id，checkpoint 必须落外部存储。',
+        '内部 Decision Orchestrator 采用 LangGraph 状态图，decision_id 映射 graph thread_id；当前 native checkpointer 为进程内 InMemorySaver，跨进程重算依据是 Repository 写入外部存储的决策与上下文状态。',
         '公开宣传页只作为产品介绍和登录入口；客户后台 /admin 由 agent_admin_session 校验，系统后台由 agent_system_admin_session 校验。',
         '宣传页由 Notion 主导：黑白中性基调、大留白、AI Agent 叙事、产品能力模块、可信背书、产品预览和黑色主 CTA；Admin 不做 Notion 化，仍按 IBM / Carbon 企业后台规则设计。',
         'dev 排障顺序按公网 Host rule、FRPS / bpg-frpc customDomains、Ingress / TLS、Service / Pod、Secret / PostgreSQL / MinIO 逐层收敛。',
@@ -2271,10 +2271,10 @@
       components: {
         title: '应用组件',
         summary: '把系统拆成 API 层、领域服务层、持久化层和运维治理层，便于后续落代码。',
-        description: 'API 层处理鉴权、幂等和 schema 校验；领域服务层用 LangGraph 编排上下文构建、商品资料引用、意图、风险、召回、生成、评分、动作等待和规则闸门；持久化层保存会话、商品资料、价格快照、决策、checkpoint、知识、反馈和向量。',
+        description: 'API 层处理鉴权、幂等和 schema 校验；领域服务层用 LangGraph 编排上下文构建、商品资料引用、意图、风险、召回、生成、评分、动作等待和规则闸门；持久化层保存会话、商品资料、价格快照、决策上下文、知识、反馈和向量。',
         points: [
           'Context Builder 把平台差异字段映射成标准上下文，同时保留 raw metadata。',
-          'LangGraph Decision Orchestrator 以 decision_id 作为 thread_id，管理等待上下文、动作结果和人工介入的恢复。',
+          'LangGraph Decision Orchestrator 以 decision_id 作为 thread_id；补上下文完成后从 Repository 读取持久化决策与回填内容、重构输入并再次 invoke，当前不是基于 get_state 的 native interrupt/resume。',
           '同类商品、订单、规则和会话摘要多次出现时，Context Builder 选择最近有效快照。',
           'Product Content Center 保留原始商品资产、Markdown 审稿稿件、知识片段候选、模拟问答和价格快照。',
           'Capability Registry 保存平台级 / 店铺级 action_type、参数 schema 和自然语言触发表达。',
@@ -2294,12 +2294,12 @@
       syncFlow: {
         title: '同步决策数据流',
         summary: '描述外部系统调用 POST /v1/reply-decisions 后，Agent 内部的完整执行链路。',
-        description: '同步路径适合第一版接入：外部系统收到买家消息后先提交最小问答请求。Agent 内部用 LangGraph 先做轻量意图和上下文需求判断，缺商品、订单、物流或规则时 interrupt 并返回 context_requests[]，客户端并行回填后恢复同一 decision_id/thread_id，服务端在 5 秒预算内聚合后返回决策和 trace。',
+        description: '同步路径适合第一版接入：外部系统收到买家消息后先提交最小问答请求。Agent 内部用 LangGraph 先做轻量意图和上下文需求判断，缺商品、订单、物流或规则时返回 context_requests[]；客户端并行回填后，服务端从 Repository 持久化状态重构输入，以同一 decision_id/thread_id 再次 invoke，并返回决策和 trace。',
         points: [
           '入口先做鉴权、幂等检查和请求校验。',
           '主请求只必填消息、最小会话、租户、店铺、平台和模式；商品、订单、物流、规则是可选上下文。',
           '缺上下文时一次返回所有当前可判断出的 context_requests[]，客户端按类型并行回填。',
-          '每次主请求、上下文回填和动作结果回传都恢复同一个 LangGraph thread，并写入 checkpoint。',
+          '主请求使用 decision_id 作为 LangGraph thread_id；上下文回填聚合完成后基于 Repository 中的决策与上下文重构输入并重算，resumed_from_checkpoint=true 记录这一重算事实，不表示从 native snapshot 原生恢复。',
           '保存商品、订单、物流和会话快照，当前决策引用最近有效快照、商品资料版本和价格快照，历史快照保留用于回放。',
           '动作类需求先匹配 capability，再生成 context_requests[] 或 action_request。',
           '检索审核通过的商品知识、模拟问答和历史人工回复后再生成候选。',
@@ -2339,9 +2339,9 @@
       decision: {
         title: '决策机制',
         summary: '展示 LangGraph 状态图中的上下文完整性、风险识别、知识召回、候选生成、动作规划、置信度评分和规则闸门。',
-        description: '决策不能依赖模型自评。LangGraph 负责编排节点、条件边、interrupt/resume 和 trace，模型可以生成候选和辅助分类，但自动回复必须被规则闸门放行，且高风险规则优先级高于置信度。',
+        description: '决策不能依赖模型自评。LangGraph 负责编排节点、真实条件边和 trace；当前 InMemorySaver 的 checkpoint ID 只用于进程内诊断，模型可以生成候选和辅助分类，但自动回复必须被规则闸门放行，且高风险规则优先级高于置信度。',
         points: [
-          'decision_id 映射 LangGraph thread_id，补上下文和动作结果都恢复同一决策。',
+          'decision_id 映射 LangGraph thread_id；补上下文从 Repository 持久化状态重构同一决策输入后重算，动作结果写回同一持久化决策记录。',
           'P0 风险包括投诉升级、赔付承诺、退款争议、平台处罚和辱骂威胁。',
           '需要订单或物流数据但缺失时，禁止让模型猜测。',
           '商品参数、发货时间等低风险问题可较早自动化，但商品知识必须来自审核通过片段。',
@@ -2357,11 +2357,11 @@
       },
       dataModel: {
         title: '数据模型',
-        summary: '展示 PostgreSQL 第一版核心表：租户、店铺、平台账号、商品资料、会话、消息、快照、决策、LangGraph checkpoint、动作、人工反馈、待审核知识、审核、知识、向量、模拟问答和规则。',
-        description: '数据资产不只是问答文本。系统必须保存商品资料版本、Markdown 审稿稿件、价格快照、上下文快照、决策 trace、LangGraph checkpoint、外部动作请求与结果、人工最终回复、编辑差异和处理结果；人工回复和商品资料 Markdown 都只能进入待审核知识候选，不能自动进入知识库或向量库。',
+        summary: '展示 PostgreSQL 第一版核心表：租户、店铺、平台账号、商品资料、会话、消息、快照、决策、持久化决策上下文、动作、人工反馈、待审核知识、审核、知识、向量、模拟问答和规则。',
+        description: '数据资产不只是问答文本。系统必须保存商品资料版本、Markdown 审稿稿件、价格快照、上下文快照、决策 trace、持久化决策上下文、外部动作请求与结果、人工最终回复、编辑差异和处理结果；人工回复和商品资料 Markdown 都只能进入待审核知识候选，不能自动进入知识库或向量库。',
         points: [
           'decision_record.trace 保存规则命中、知识来源、商品资料版本、价格快照、模型版本、缺失上下文和 selected_snapshot_refs。',
-          'decision_graph_checkpoint 保存 LangGraph thread state、node_name、resume_token、graph_version 和 decision_status，生产环境不能依赖 API 容器内存。',
+          'decision_graph_checkpoint 当前由 Repository 保存 latest DecisionState（请求、响应、context refills、action results、feedback），是重算和跨进程读取依据；它不是 InMemorySaver native snapshot，当前也不支持基于 get_state 的原生 interrupt/resume。',
           'product_master / product_sku / listing / product_asset 记录客户后台维护的商品主资料、SKU、销售实例和原始资产。',
           'product_asset_markdown 是可读审稿稿件，不直接作为自动回复知识源。',
           'product_knowledge_candidate 是从 Markdown 抽取的待审核知识片段，批准后才进入 knowledge_entry。',
@@ -2396,7 +2396,7 @@
           'Workloads 细节：Customer Admin Pod 服务 admin.ecommerce-cs-agent-dev.fcihome.com，使用 agent_admin_session，route guard 只调用 /v1/admin/auth/me。',
           'Workloads 细节：System Admin Pod 服务 system-admin.ecommerce-cs-agent-dev.fcihome.com，使用 agent_system_admin_session，route guard 只调用 /v1/system-admin/auth/me。',
           '发布链路细节：GitHub Actions Publish Images 先跑 tests / Helm 校验，再推送 Aliyun Registry / GHCR，由 Flux / HelmRelease 部署到 K3s。',
-          '运行依赖细节：PostgreSQL / pgvector 保存业务主库、决策 trace、LangGraph checkpoint 和向量；MinIO 保存商品资产、JSONL 归档、训练导出和评测报告。',
+          '运行依赖细节：PostgreSQL / pgvector 保存业务主库、决策 trace、Repository 持久化决策上下文和向量；MinIO 保存商品资产、JSONL 归档、训练导出和评测报告。',
           '运行依赖细节：ecommerce-cs-agent-runtime Secret 只提供运行时密钥、数据库、对象存储、Admin 初始账户 hash 等引用，不在文档或图中展开值。',
           '外部系统边界：open_erp_agent、Chatwoot/Feishu 只通过 HTTP API 接入，不共享 Cookie/session，不跨库，不作为 Agent 默认身份源。'
         ],
@@ -2533,10 +2533,10 @@
       },
       {
         table: 'decision_graph_checkpoint',
-        purpose: 'LangGraph 决策编排检查点；保存同一 decision_id/thread_id 的节点状态、恢复令牌和 graph 版本。',
-        key: 'id PK; UNIQUE(decision_id, checkpoint_seq)',
-        relations: 'decision_id FK -> decision_record.id, conversation_id FK',
-        fields: 'thread_id, graph_version, node_name, decision_status, state JSONB, resume_token, checkpoint_seq, expires_at, created_at'
+        purpose: 'Repository 持久化决策上下文；保存同一 decision_id/thread_id 的 latest DecisionState，供重算与跨进程读取，不是 InMemorySaver native snapshot。',
+        key: 'id PK; UNIQUE(decision_id, checkpoint_key)',
+        relations: 'decision_id FK -> decision_record.decision_id, organization_id / store_id FK',
+        fields: 'thread_id, graph_version, node_name, decision_status, checkpoint_key, state JSONB, state_json JSONB, created_at'
       },
       {
         table: 'agent_suggestion',
@@ -2664,7 +2664,7 @@
           { key: 'apiLayer', text: 'API Layer', sub: 'FastAPI / OpenAPI / Router', kind: 'external' },
           { key: 'authBoundary', text: 'Auth Boundary', sub: '鉴权 / 租户 / 幂等 / Schema', kind: 'service' },
           { key: 'contextLayer', text: 'Context Layer', sub: '标准上下文 / 最近有效快照', kind: 'service' },
-          { key: 'orchestration', text: 'Decision Orchestrator', sub: 'LangGraph / checkpoint / resume', kind: 'service' },
+          { key: 'orchestration', text: 'Decision Orchestrator', sub: 'LangGraph / conditional edges / re-invoke', kind: 'service' },
           { key: 'knowledgeServices', text: 'Knowledge Services', sub: '商品资料 / 召回 / 历史回复', kind: 'service' },
           { key: 'modelPrompt', text: 'Model & Prompt', sub: 'LLM / prompt version / structured output', kind: 'async' },
           { key: 'actionPolicy', text: 'Action & Policy', sub: 'capability / score / gate', kind: 'risk' },
@@ -2691,11 +2691,11 @@
           { key: 'api', text: '创建回复决策', sub: 'POST /v1/reply-decisions', kind: 'service' },
           { key: 'guard', text: '入口守卫', sub: '鉴权 / 幂等 / Schema', kind: 'service' },
           { key: 'context', text: '上下文构建', sub: '最小请求 / 最近有效快照', kind: 'service' },
-          { key: 'graph', text: 'LangGraph 主干', sub: 'thread_id / checkpoint / resume', kind: 'service' },
+          { key: 'graph', text: 'LangGraph 主干', sub: 'thread_id / conditional edges / re-invoke', kind: 'service' },
           { key: 'contextBranch', text: '上下文缺口分支', sub: 'products / orders / logistics / rules', kind: 'risk' },
           { key: 'answerBranch', text: '召回与生成分支', sub: '商品知识 / 历史回复 / LLM', kind: 'service' },
           { key: 'policy', text: '规则与动作决策', sub: 'risk / confidence / action_request', kind: 'risk' },
-          { key: 'record', text: '持久化追踪', sub: 'decision_record / suggestion / checkpoint', kind: 'data' },
+          { key: 'record', text: '持久化追踪', sub: 'decision_record / DecisionState / trace', kind: 'data' },
           { key: 'response', text: '返回决策', sub: 'answer_ready / candidate / context_request / handoff', kind: 'external' }
         ],
         links: [
@@ -2741,14 +2741,14 @@
         layout: 'LayeredDigraph',
         nodes: [
           { key: 'context', text: '标准化上下文', sub: '消息 + 商品 + 订单 + 规则', kind: 'service' },
-          { key: 'stateGraph', text: 'LangGraph StateGraph', sub: 'thread_id / conditional edges / checkpoint', kind: 'service' },
-          { key: 'contextGate', text: '上下文闸门', sub: '缺口判断 / interrupt / resume', kind: 'risk' },
+          { key: 'stateGraph', text: 'LangGraph StateGraph', sub: 'thread_id / conditional edges / in-memory checkpoint ID', kind: 'service' },
+          { key: 'contextGate', text: '上下文闸门', sub: '缺口判断 / context_requests / re-invoke', kind: 'risk' },
           { key: 'riskGate', text: '风险闸门', sub: 'P0 / 高风险 / 店铺规则', kind: 'risk' },
           { key: 'knowledgeGen', text: '知识与生成', sub: '召回 / LLM / evidence refs', kind: 'service' },
           { key: 'actionPlan', text: '动作规划', sub: 'capability / action_request', kind: 'service' },
           { key: 'scorePolicy', text: '评分与规则', sub: 'confidence / rule_hits / policy', kind: 'risk' },
           { key: 'decisionAction', text: '最终动作', sub: 'auto_reply / candidate / handoff', kind: 'external' },
-          { key: 'record', text: '决策记录', sub: 'trace / checkpoint / model_version', kind: 'data' }
+          { key: 'record', text: '决策记录', sub: 'trace / persisted DecisionState / model_version', kind: 'data' }
         ],
         links: [
           ['context', 'stateGraph', 'state input', { routeStyle: 'straight' }],

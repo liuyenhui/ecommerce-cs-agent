@@ -185,7 +185,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         payload = await request.json()
         _require_fields(payload, ["decision_id", "human_reply", "used_candidate", "resolution_status"])
-        response = decisions.submit_feedback(payload)
+        try:
+            response = decisions.submit_feedback(payload)
+        except PermissionError as exc:
+            raise api_error(403, "forbidden", str(exc)) from exc
         if response is None:
             raise api_error(404, "not_found", "decision not found")
         return response

@@ -6,12 +6,13 @@
 
 ### 2026-07-10
 
+- 决策 checkpoint 文档与当前实现对齐：LangGraph `InMemorySaver` 的 native checkpoint ID 只用于单进程运行诊断；跨进程重算以 Repository 持久化的决策与上下文状态为依据，`resumed_from_checkpoint=true` 表示重构输入后以同一 `decision_id/thread_id` 重算，不表示从 native snapshot 原生恢复。
 - 新增 [第一版需求测试矩阵](requirements-test-matrix.md)，作为 Development Readiness“第一版必须实现”需求到正向、拒绝、自动化与线上证据的测试案例覆盖入口。
 - 新增 [需求测试、AI 工作流与宣传页收口设计](superpowers/specs/2026-07-10-requirements-workflow-and-landing-closure-design.md)：第一版后续工作按需求到测试矩阵、Customer Admin 首次模拟咨询与业务化决策回放、公开页“流程故事”真实产品证明、桌面/移动验收和 GitOps 线上闭环推进；现有 LangGraph 条件分支、checkpointer、auto reply 与 X6 回放未提交改动纳入同一实现范围。
 
 ### 2026-07-09
 
-- ACS 决策编排实现补齐到 LangGraph 条件边执行：`context_gate` / `action_gate` 现在按真实分支跳转，未走节点在 `trace.graph.nodes[]` 标记 `skipped`；安全且命中审核知识的低风险回复可经 `policy_gate` 输出 `auto_reply`；LangGraph 原生 checkpointer 写入 `trace.langgraph_checkpoint_id`，补上下文完成后的重算 trace 标记 `resumed_from_checkpoint=true`。
+- ACS 决策编排实现补齐到 LangGraph 条件边执行：`context_gate` / `action_gate` 现在按真实分支跳转，未走节点在 `trace.graph.nodes[]` 标记 `skipped`；安全且命中审核知识的低风险回复可经 `policy_gate` 输出 `auto_reply`；进程内 native checkpointer 写入诊断用 `trace.langgraph_checkpoint_id`，补上下文完成后的持久化状态重算 trace 标记 `resumed_from_checkpoint=true`。
 
 ### 2026-06-30
 

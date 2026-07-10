@@ -127,7 +127,10 @@ class DecisionService:
         if not state:
             return None
         organization_id, store_id, request_id = _request_key(state.request)
-        if payload.get("organization_id") and not self._same_tenant_store(state, payload):
+        declares_scope = any(
+            key in payload for key in ("tenant_id", "organization_id", "external_store_id", "store_id")
+        )
+        if declares_scope and not self._same_tenant_store(state, payload):
             raise PermissionError("action result does not belong to the decision tenant/store")
         action_id = str(payload.get("action_id", ""))
         known_action_ids = {item["action_id"] for item in state.response.get("action_requests", [])}
@@ -164,6 +167,11 @@ class DecisionService:
         if not state:
             return None
         organization_id, store_id, request_id = _request_key(state.request)
+        declares_scope = any(
+            key in payload for key in ("tenant_id", "organization_id", "external_store_id", "store_id")
+        )
+        if declares_scope and not self._same_tenant_store(state, payload):
+            raise PermissionError("human reply feedback does not belong to the decision tenant/store")
         human_reply_id = f"human-reply-{uuid.uuid4().hex[:12]}"
         state.feedback.append({"human_reply_id": human_reply_id, **payload})
         self._save_state(organization_id, store_id, request_id, decision_id, state)
