@@ -191,8 +191,6 @@ class S3ObjectStorage:
         connection_type = http_client.HTTPSConnection if connection_scheme == "https" else http_client.HTTPConnection
         connection = connection_type(connection_host, connection_port, timeout=20)
         try:
-            # The connection target is a validated fixed host; canonical_uri contains only a percent-encoded object key.
-            # codeql[py/partial-ssrf]
             connection.request(
                 "PUT",
                 canonical_uri,
@@ -219,11 +217,11 @@ class S3ObjectStorage:
         return None
 
     def _target_for(self, object_key: str) -> tuple[str, str, str, int | None, str]:
-        _ensure_safe_object_key(object_key)
+        object_key_parts = _validated_object_key_parts(object_key)
         parsed = urlsplit(self.endpoint)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ObjectStorageValidationError("invalid object storage endpoint")
-        quoted_key = "/".join(quote(part, safe="") for part in object_key.split("/"))
+        quoted_key = "/".join(quote(part, safe="") for part in object_key_parts)
         if self.path_style:
             canonical_uri = f"/{quote(self.bucket, safe='')}/{quoted_key}"
             host = parsed.netloc
@@ -273,9 +271,18 @@ def _ensure_payload_refs(payload: dict[str, Any]) -> None:
 
 
 def _ensure_safe_object_key(object_key: str) -> None:
-    relative = Path(object_key)
-    if relative.is_absolute() or ".." in relative.parts or any("\x00" in part for part in relative.parts):
+    _validated_object_key_parts(object_key)
+
+
+def _validated_object_key_parts(object_key: str) -> tuple[str, ...]:
+    if object_key.startswith("/") or "\\" in object_key or "\x00" in object_key:
         raise ObjectStorageValidationError("invalid object key")
+    parts = object_key.split("/")
+    for part in parts:
+        allowlisted = part.replace("-", "").replace("_", "").replace(".", "")
+        if not part or part in {".", ".."} or not allowlisted.isalnum():
+            raise ObjectStorageValidationError("invalid object key")
+    return tuple(parts)
 
 
 def _validate_object_storage_endpoint(endpoint: str) -> str:

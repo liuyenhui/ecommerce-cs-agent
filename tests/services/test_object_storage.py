@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from ecommerce_cs_agent.services import object_storage as object_storage_module
@@ -150,11 +148,30 @@ def test_s3_upload_keeps_object_key_in_request_path_not_connection_target(monkey
     assert calls[1][1][1] == "/bucket/products/product-a/manual.pdf"
 
 
-def test_s3_partial_ssrf_suppression_documents_the_fixed_host_boundary() -> None:
-    source = Path(object_storage_module.__file__).read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    "object_key",
+    [
+        "products/product-a/manual?redirect=internal",
+        "products/product-a/manual#fragment",
+        "products/product-a/%2e%2e%2finternal",
+        "products/product-a/manual pdf",
+        "products//manual.pdf",
+    ],
+)
+def test_s3_upload_rejects_object_keys_outside_the_path_allowlist(object_key: str) -> None:
+    storage = S3ObjectStorage(
+        endpoint="https://storage.example",
+        bucket="bucket",
+        region="us-east-1",
+        access_key_id="access",
+        secret_access_key="secret",
+    )
 
-    assert "codeql[py/partial-ssrf]" in source
-    assert "validated fixed host" in source
+    with pytest.raises(ObjectStorageValidationError, match="invalid object key"):
+        storage.put_or_reference(
+            asset_id="asset-001",
+            payload={"file_ref": object_key, "content_base64": "bWFudWFs"},
+        )
 
 
 def test_llm_analyzer_rejects_private_endpoint() -> None:
