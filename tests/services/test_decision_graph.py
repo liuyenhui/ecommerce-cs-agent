@@ -283,6 +283,28 @@ def test_decision_graph_allows_explicit_store_scope_knowledge_without_product_bi
     assert response["trace"]["knowledge_relevance"][0]["binding_reason"] == "explicit_store_scope"
 
 
+def test_decision_graph_labels_explicit_tenant_scope_knowledge_accurately() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-tenant-policy",
+                "product_id": None,
+                "external_product_id": None,
+                "scope": "tenant",
+                "content": "本组织所有儿童商品均要求通过儿童安全认证。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+
+    response = service.create_reply_decision(_request("req-tenant-scope-knowledge", "儿童商品要求安全认证吗？"))
+
+    assert response["action"] == "auto_reply"
+    assert response["trace"]["knowledge_relevance"][0]["binding_reason"] == "explicit_tenant_scope"
+
+
 def test_decision_graph_keeps_relevant_knowledge_as_candidate_in_assist_first_mode() -> None:
     repository = _KnowledgeRepository(
         [

@@ -654,8 +654,10 @@ def _knowledge_binding(payload: dict[str, Any], item: dict[str, Any]) -> tuple[b
         )
         if value
     }
-    if scope in {"store", "tenant"} and not item_product_refs:
+    if scope == "store" and not item_product_refs:
         return True, "explicit_store_scope"
+    if scope == "tenant" and not item_product_refs:
+        return True, "explicit_tenant_scope"
     requested_product_id = _optional_text(payload.get("external_product_id"))
     if not requested_product_id:
         return False, "missing_request_product_binding"
