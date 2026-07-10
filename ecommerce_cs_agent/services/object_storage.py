@@ -5,11 +5,10 @@ import base64
 from datetime import datetime, timezone
 import hashlib
 import hmac
+from http import client as http_client
 import os
 from pathlib import Path
 from typing import Any, Protocol
-from urllib import request as urllib_request
-from urllib.error import URLError
 from urllib.parse import parse_qsl, quote, urlsplit
 
 from ecommerce_cs_agent.services.outbound_http import validate_public_https_url
@@ -157,7 +156,7 @@ class S3ObjectStorage:
         if content is None:
             return ReferenceObjectStorage().put_or_reference(asset_id=asset_id, payload=payload)
         object_key = str(payload.get("file_ref") or f"product-assets/{asset_id}")
-        url, canonical_uri, host = self._target_for(object_key)
+        canonical_uri, host, connection_host, connection_port, connection_scheme = self._target_for(object_key)
         payload_hash = hashlib.sha256(content).hexdigest()
         now = datetime.now(timezone.utc)
         amz_date = now.strftime("%Y%m%dT%H%M%SZ")
@@ -189,18 +188,23 @@ class S3ObjectStorage:
             f"Credential={self.access_key_id}/{credential_scope}, "
             f"SignedHeaders={signed_headers}, Signature={signature}"
         )
-        request = urllib_request.Request(
-            url,
-            data=content,
-            headers={**headers, "Authorization": authorization},
-            method="PUT",
-        )
+        connection_type = http_client.HTTPSConnection if connection_scheme == "https" else http_client.HTTPConnection
+        connection = connection_type(connection_host, connection_port, timeout=20)
         try:
-            with urllib_request.urlopen(request, timeout=20) as response:
-                if response.status < 200 or response.status >= 300:
-                    raise ObjectStorageUnavailable("object storage is unavailable")
-        except URLError as exc:
+            connection.request(
+                "PUT",
+                canonical_uri,
+                body=content,
+                headers={**headers, "Authorization": authorization},
+            )
+            response = connection.getresponse()
+            response.read()
+            if response.status < 200 or response.status >= 300:
+                raise ObjectStorageUnavailable("object storage is unavailable")
+        except (OSError, http_client.HTTPException) as exc:
             raise ObjectStorageUnavailable("object storage is unavailable") from exc
+        finally:
+            connection.close()
         return StoredObject(
             object_key=object_key,
             object_hash=str(payload.get("file_hash") or "sha256:" + payload_hash),
@@ -212,21 +216,21 @@ class S3ObjectStorage:
     def delete(self, object_key: str) -> None:
         return None
 
-    def _target_for(self, object_key: str) -> tuple[str, str, str]:
+    def _target_for(self, object_key: str) -> tuple[str, str, str, int | None, str]:
         _ensure_safe_object_key(object_key)
         parsed = urlsplit(self.endpoint)
-        if not parsed.scheme or not parsed.netloc:
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ObjectStorageValidationError("invalid object storage endpoint")
         quoted_key = "/".join(quote(part, safe="") for part in object_key.split("/"))
         if self.path_style:
             canonical_uri = f"/{quote(self.bucket, safe='')}/{quoted_key}"
             host = parsed.netloc
-            url = f"{parsed.scheme}://{host}{canonical_uri}"
+            connection_host = parsed.hostname
         else:
             host = f"{self.bucket}.{parsed.netloc}"
+            connection_host = f"{self.bucket}.{parsed.hostname}"
             canonical_uri = f"/{quoted_key}"
-            url = f"{parsed.scheme}://{host}{canonical_uri}"
-        return url, canonical_uri, host
+        return canonical_uri, host, connection_host, parsed.port, parsed.scheme
 
     def _signing_key(self, date_stamp: str) -> bytes:
         key = ("AWS4" + self.secret_access_key).encode("utf-8")
