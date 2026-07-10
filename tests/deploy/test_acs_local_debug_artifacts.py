@@ -34,6 +34,7 @@ def test_local_acs_env_script_uses_k3s_secret_without_printing_values():
     assert "0o600" in script
     assert "console.log(envText" not in script
     assert "console.log(decoded" not in script
+    assert "${namespace}/${secretName}" not in script
 
     gitignore = (ROOT / ".gitignore").read_text()
     assert ".local/" in gitignore

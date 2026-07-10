@@ -60,7 +60,7 @@ fs.writeFileSync(outputFile, `${envText}\n`, { mode: 0o600 });
 fs.chmodSync(outputFile, 0o600);
 
 console.log(`Wrote local ACS env file: ${outputFile}`);
-console.log(`Loaded ${Object.keys(values).length} keys from secret ${namespace}/${secretName}`);
+console.log(`Loaded ${Object.keys(values).length} keys from the configured Kubernetes Secret`);
 if (skippedKeys.length > 0) {
   console.log(`Skipped ${skippedKeys.length} non-shell-compatible secret keys`);
 }
