@@ -248,7 +248,8 @@ def test_context_refill_resumes_same_thread_and_completes_graph() -> None:
             "idempotency_key": "ctx-orders",
             "organization_id": "org-001",
             "store_id": "store-001",
-            "items": [{"external_order_id": "order-001", "status": "paid"}],
+            "captured_at": "2026-07-10T10:00:00Z",
+            "orders": [{"external_order_id": "order-001", "status": "paid"}],
         },
     )
     second = service.refill_context(
@@ -259,7 +260,8 @@ def test_context_refill_resumes_same_thread_and_completes_graph() -> None:
             "idempotency_key": "ctx-logistics",
             "organization_id": "org-001",
             "store_id": "store-001",
-            "items": [{"external_logistics_id": "ship-001", "status": "in_transit"}],
+            "captured_at": "2026-07-10T10:01:00Z",
+            "logistics": [{"external_logistics_id": "ship-001", "status": "in_transit"}],
         },
     )
     second_retry = service.refill_context(
@@ -270,7 +272,8 @@ def test_context_refill_resumes_same_thread_and_completes_graph() -> None:
             "idempotency_key": "ctx-logistics",
             "organization_id": "org-001",
             "store_id": "store-001",
-            "items": [{"external_logistics_id": "ship-001", "status": "in_transit"}],
+            "captured_at": "2026-07-10T10:01:00Z",
+            "logistics": [{"external_logistics_id": "ship-001", "status": "in_transit"}],
         },
     )
 
@@ -287,6 +290,49 @@ def test_context_refill_resumes_same_thread_and_completes_graph() -> None:
     assert any(edge["condition"] == "candidate" and edge["taken"] for edge in second["trace"]["graph"]["edges"])
 
 
+def test_continuations_use_atomic_repository_mutation_and_keep_idempotent_replay() -> None:
+    repository = _AtomicMutationOnlyRepository()
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    response = service.create_reply_decision(_request("req-atomic-refill", "这个商品什么时候发货？"))
+    decision_id = response["decision_id"]
+    payload = {
+        "context_request_id": response["context_requests"][0]["context_request_id"],
+        "idempotency_key": "ctx-orders-atomic",
+        "organization_id": "org-001",
+        "store_id": "store-001",
+        "captured_at": "2026-07-10T10:00:00Z",
+        "orders": [{"external_order_id": "order-001", "status": "paid"}],
+    }
+
+    first = service.refill_context(decision_id, "orders", payload)
+    replay = service.refill_context(decision_id, "orders", payload)
+    repository._by_decision_id[decision_id].response["action_requests"] = [
+        {"action_id": "action-atomic", "action_type": "lookup-logistics"}
+    ]
+    action = service.submit_action_result(
+        decision_id,
+        {
+            "action_id": "action-atomic",
+            "action_type": "lookup-logistics",
+            "idempotency_key": "action-atomic-idem",
+            "status": "succeeded",
+        },
+    )
+    feedback = service.submit_feedback(
+        {
+            "decision_id": decision_id,
+            "human_reply": "已人工处理",
+            "resolution_status": "resolved",
+        }
+    )
+
+    assert replay == first
+    assert action is not None
+    assert action["decision_status"] == "answer_ready"
+    assert feedback is not None
+    assert repository.mutation_calls == [decision_id, decision_id, decision_id, decision_id]
+
+
 def test_legacy_completed_context_refill_replays_only_on_original_typed_endpoint() -> None:
     repository = InMemoryDecisionRepository()
     service = DecisionService(Settings(environment="test"), repository=repository)
@@ -298,7 +344,8 @@ def test_legacy_completed_context_refill_replays_only_on_original_typed_endpoint
         "idempotency_key": "ctx-legacy-products",
         "organization_id": "org-001",
         "store_id": "store-001",
-        "items": [{"external_product_id": "product-001", "title": "测试商品"}],
+        "captured_at": "2026-07-10T10:00:00Z",
+        "products": [{"external_product_id": "product-001", "title": "测试商品"}],
     }
     completed = service.refill_context(decision_id, "products", payload)
     state = repository.get_by_decision_id(decision_id)
@@ -314,7 +361,7 @@ def test_legacy_completed_context_refill_replays_only_on_original_typed_endpoint
         service.refill_context(
             decision_id,
             "products",
-            {**payload, "items": [{"external_product_id": "product-other"}]},
+            {**payload, "products": [{"external_product_id": "product-other"}]},
         )
 
 
@@ -372,6 +419,19 @@ def test_decision_graph_recall_query_uses_keywords_not_full_message() -> None:
     service.create_reply_decision(_request("req-recall-query", "这个商品是什么材质？"))
 
     assert repository.queries == ["商品 材质"]
+
+
+class _AtomicMutationOnlyRepository(InMemoryDecisionRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mutation_calls: list[str] = []
+
+    def get_by_decision_id(self, decision_id: str) -> DecisionState | None:
+        raise AssertionError("continuations must use mutate_state")
+
+    def mutate_state(self, decision_id: str, mutation: Any) -> Any:
+        self.mutation_calls.append(decision_id)
+        return mutation(self._by_decision_id.get(decision_id))
 
 
 class _KnowledgeRepository(InMemoryDecisionRepository):
