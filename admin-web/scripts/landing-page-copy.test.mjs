@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 const source = readFileSync(new URL("../customer-admin/src/App.tsx", import.meta.url), "utf8");
+const customerIndex = readFileSync(new URL("../customer-admin/index.html", import.meta.url), "utf8");
 const sharedStyles = readFileSync(new URL("../shared/styles/base.css", import.meta.url), "utf8");
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
@@ -41,6 +42,8 @@ test("customer landing page uses the approved public narrative", () => {
   assert.ok(customerSite.includes("<picture>"), "landing should choose a viewport-appropriate proof asset");
   assert.equal(customerSite.includes("规则闸门"), false, "landing should avoid technical gate terminology");
   assert.equal(customerSite.includes("资料中台"), false, "landing should use a plain customer-facing product name");
+  assert.ok(customerIndex.includes("<title>AI 客服管理后台</title>"), "browser title should use the plain product name");
+  assert.equal(customerIndex.includes("资料中台"), false, "browser title should avoid internal product terminology");
 });
 
 function assertPng(relativePath, { minWidth, minHeight }) {
