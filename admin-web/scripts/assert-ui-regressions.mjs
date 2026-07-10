@@ -23,10 +23,13 @@ const topBar = sharedComponents.slice(sharedComponents.indexOf('function TopBar'
 const customerWorkspace = customerApp.slice(customerApp.indexOf('function CustomerWorkspace'), customerApp.indexOf('function CustomerOverview'));
 const customerOverview = customerApp.slice(customerApp.indexOf('function CustomerOverview'), customerApp.indexOf('function ProductContent'));
 const messageHistory = customerApp.slice(customerApp.indexOf('function MessageHistory'), customerApp.indexOf('function MessageTraceDrawer'));
+const customerLanding = customerApp.slice(customerApp.indexOf('function CustomerLanding'), customerApp.indexOf('function CustomerAdminShell'));
 const productContent = customerApp.slice(customerApp.indexOf('function ProductContent'), customerApp.indexOf('function ProductUploadModal'));
 const allSource = [customerApp, systemApp, sharedComponents, sharedData, sharedTraceReplay].join('\n');
 
 const checks = [
+  ['Customer landing uses authentic workflow proof instead of fake skeleton art', customerLanding.includes('/ai-workflow-proof.png') && !customerLanding.includes('previewLine') && !customerLanding.includes('previewTable') && !customerLanding.includes('previewNav')],
+  ['Customer landing tells the approved four-step workflow story', ['客户提问', '查商品资料', '检查规则与风险', '安全回复或转人工'].every((copy) => customerLanding.includes(copy))],
   ['Admin Web regression guard is wired into npm test', packageJson.includes('assert-ui-regressions.mjs')],
   ['Login auth failures render inline form error', loginPanel.includes('loginError') && loginPanel.includes('role="alert"') && styles.includes('.loginError')],
   ['Login 401 auth failures use user-facing credential copy', sharedComponents.includes('message.startsWith("401 ")') && loginPanel.includes('邮箱或密码错误')],

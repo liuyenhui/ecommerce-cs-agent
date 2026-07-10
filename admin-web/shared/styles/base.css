@@ -181,9 +181,8 @@ pre {
 }
 
 .heroSection,
-.demoCarousel,
 .flowSection,
-.controlSection,
+.reassuranceSection,
 .finalCta {
   width: min(1180px, calc(100% - 36px));
   margin-inline: auto;
@@ -223,7 +222,8 @@ pre {
   line-height: 1.55;
 }
 
-.heroPreview {
+.workflowProof {
+  margin: 0;
   overflow: hidden;
   border: 1px solid #d9d9df;
   border-radius: 8px;
@@ -231,63 +231,20 @@ pre {
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.08);
 }
 
-.previewTopbar {
-  height: 36px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 14px;
-  border-bottom: 1px solid #e7e7ed;
+.workflowProof img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 137 / 90;
+  object-fit: contain;
 }
 
-.previewTopbar span {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #d2d2d7;
-}
-
-.previewGrid {
-  min-height: clamp(220px, 28vw, 300px);
-  display: grid;
-  grid-template-columns: minmax(120px, 0.26fr) minmax(0, 1fr);
-}
-
-.previewNav {
-  border-right: 1px solid #eeeeF2;
-  background: linear-gradient(#f5f5f7 20%, #ffffff);
-}
-
-.previewContent {
-  display: grid;
-  align-content: start;
-  gap: 18px;
-  padding: clamp(20px, 4vw, 44px);
-}
-
-.previewLine {
-  width: 48%;
-  height: 14px;
-  border-radius: 999px;
-  background: #d8d8de;
-}
-
-.previewLine.wide {
-  width: 72%;
-  height: 26px;
-  background: #1d1d1f;
-}
-
-.previewTable {
-  display: grid;
-  gap: 10px;
-}
-
-.previewTable span {
-  height: 42px;
-  border: 1px solid #e3e3e8;
-  border-radius: 6px;
-  background: #fafafa;
+.workflowProof figcaption {
+  padding: 12px 16px;
+  border-top: 1px solid #e7e7ed;
+  color: #515154;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .sectionIntro {
@@ -297,7 +254,7 @@ pre {
 }
 
 .sectionIntro h2,
-.controlSection h2,
+.reassuranceSection h2,
 .finalCta h2 {
   color: #111111;
   font-size: clamp(30px, 4.6vw, 56px);
@@ -305,59 +262,10 @@ pre {
   line-height: 1.12;
 }
 
-.demoCarousel,
 .flowSection,
-.controlSection,
+.reassuranceSection,
 .finalCta {
   padding: 68px 0;
-}
-
-.demoViewport {
-  overflow: hidden;
-}
-
-.demoTrack {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(280px, 1fr));
-  gap: 16px;
-  animation: subtlePan 16s ease-in-out infinite alternate;
-}
-
-.demoSlide {
-  min-height: 320px;
-  display: grid;
-  align-content: end;
-  gap: 16px;
-  border: 1px solid #e2e2e7;
-  border-radius: 8px;
-  background: #ffffff;
-  padding: clamp(22px, 3vw, 34px);
-}
-
-.demoSlide h3 {
-  display: block;
-  font-size: clamp(24px, 3vw, 34px);
-  font-weight: 500;
-  line-height: 1.2;
-  margin: 0;
-}
-
-.demoSlide p,
-.controlSection p {
-  color: #515154;
-  font-size: 17px;
-  font-weight: 300;
-  line-height: 1.7;
-}
-
-.slideIcon {
-  width: 42px;
-  height: 42px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: #f2f2f7;
-  color: #0066cc;
 }
 
 .flowRail {
@@ -371,17 +279,27 @@ pre {
 
 .flowRail li {
   position: relative;
-  min-height: 150px;
+  min-height: 184px;
   display: grid;
-  align-content: center;
-  gap: 14px;
+  align-content: start;
+  gap: 16px;
   border-top: 1px solid #d2d2d7;
+  padding-top: 18px;
 }
 
 .flowRail strong {
+  display: block;
   font-size: clamp(20px, 2.4vw, 29px);
   font-weight: 500;
   line-height: 1.24;
+}
+
+.flowRail p {
+  margin-top: 10px;
+  color: #515154;
+  font-size: 15px;
+  font-weight: 300;
+  line-height: 1.65;
 }
 
 .flowIndex {
@@ -396,32 +314,36 @@ pre {
   color: #86868b;
 }
 
-.controlSection {
-  display: grid;
-  grid-template-columns: minmax(0, 0.95fr) minmax(280px, 0.65fr);
-  gap: clamp(28px, 6vw, 84px);
-  align-items: start;
+.reassuranceList {
+  border-top: 1px solid #d2d2d7;
 }
 
-.controlSection > div:first-child {
+.reassuranceList article {
+  min-height: 88px;
   display: grid;
-  gap: 16px;
-}
-
-.controlList {
-  display: grid;
-  gap: 10px;
-  border-left: 1px solid #d2d2d7;
-  padding-left: 28px;
-}
-
-.controlList span {
-  min-height: 46px;
-  display: flex;
+  grid-template-columns: 32px minmax(180px, 0.42fr) minmax(0, 1fr);
   align-items: center;
+  gap: 18px;
   border-bottom: 1px solid #e7e7ed;
+  padding: 18px 0;
+}
+
+.reassuranceIcon {
+  color: #0066cc;
+}
+
+.reassuranceList h3 {
+  margin: 0;
   color: #1d1d1f;
-  font-weight: 400;
+  font-size: clamp(20px, 2.4vw, 28px);
+  font-weight: 500;
+}
+
+.reassuranceList p {
+  color: #515154;
+  font-size: 16px;
+  font-weight: 300;
+  line-height: 1.6;
 }
 
 .finalCta {
@@ -441,20 +363,7 @@ pre {
   padding: 18px;
 }
 
-@keyframes subtlePan {
-  from {
-    transform: translateX(0);
-  }
-  to {
-    transform: translateX(-18px);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .demoTrack {
-    animation: none;
-  }
-
   .decisionGraph .trace-flow-edge.active {
     animation: none;
   }
@@ -1322,6 +1231,10 @@ tbody tr:hover {
 }
 
 @media (max-width: 900px) {
+  .landingPage button {
+    min-height: 44px;
+  }
+
   .landingHeader {
     align-items: stretch;
     flex-direction: column;
@@ -1343,60 +1256,34 @@ tbody tr:hover {
     gap: 18px;
   }
 
-  .previewGrid,
-  .controlSection,
   .flowRail {
     grid-template-columns: 1fr;
   }
 
-  .previewNav {
-    min-height: 34px;
-    border-right: 0;
-    border-bottom: 1px solid #eeeeF2;
-  }
-
-  .previewGrid {
-    min-height: 150px;
-  }
-
-  .previewContent {
-    gap: 10px;
-    padding: 14px 18px 16px;
-  }
-
-  .previewLine.wide {
-    height: 20px;
-  }
-
-  .previewTable span {
-    height: 28px;
-  }
-
-  .previewTable span:nth-child(4) {
-    display: none;
-  }
-
-  .demoTrack {
-    grid-template-columns: 1fr;
-    transform: none;
-    animation: none;
-  }
-
   .flowRail li {
-    min-height: 112px;
+    min-height: 0;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 12px;
+    padding: 16px 0 18px;
   }
 
   .flowArrow {
     top: auto;
     right: auto;
-    bottom: 8px;
-    left: 0;
+    bottom: -9px;
+    left: 5px;
     transform: rotate(90deg);
   }
 
-  .controlList {
-    border-left: 0;
-    padding-left: 0;
+  .reassuranceList article {
+    min-height: 0;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 10px 12px;
+    padding: 16px 0;
+  }
+
+  .reassuranceList p {
+    grid-column: 2;
   }
 
   .appShell {

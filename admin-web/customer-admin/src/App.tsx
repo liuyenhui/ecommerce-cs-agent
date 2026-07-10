@@ -13,7 +13,6 @@ import {
   PackagePlus,
   Search,
   ShieldCheck,
-  SlidersHorizontal,
   Store,
   UploadCloud
 } from "lucide-react";
@@ -218,24 +217,19 @@ export function App() {
 }
 
 function CustomerLanding({ customerAuthed, navigate }: { customerAuthed: boolean; navigate: (path: string) => void }) {
-  const demoSlides = [
-    {
-      title: "商品信息统一管理",
-      text: "说明书、SKU、价格、常见问题和适用范围统一维护，避免客服和 AI 各看各的资料。",
-      icon: <UploadCloud size={20} />
-    },
-    {
-      title: "AI 自动学习商品知识",
-      text: "资料先转成可审核的知识和模拟问答，让 AI 学习前后都有依据可查。",
-      icon: <Bot size={20} />
-    },
-    {
-      title: "AI 客服回复可控",
-      text: "自动回复前经过规则、风险、上下文完整性和模拟问答检查，高风险场景先转人工。",
-      icon: <SlidersHorizontal size={20} />
-    }
-  ];
-  const flowSteps = ["上传商品说明书", "AI 学习", "模拟问答", "AI 自动回复"];
+  const publicWorkflow = [
+    ["客户提问", "收到买家的商品、订单或售后问题。"],
+    ["查商品资料", "检索已审核的商品、订单、物流和规则；缺资料就先补资料，不让 AI 猜。"],
+    ["检查规则与风险", "价格、退款和高风险表达必须通过规则闸门。"],
+    ["安全回复或转人工", "满足条件才自动回复，不确定时给建议或转人工。"]
+  ] as const;
+  const reassurance = [
+    ["资料有依据", "回复使用已审核的商品、订单、物流和规则资料。", <Search size={19} />],
+    ["回复有规则", "价格、退款和风险规则决定是否允许自动发送。", <ShieldCheck size={19} />],
+    ["风险可转人工", "资料不全或风险较高时，AI 不强行作答。", <AlertTriangle size={19} />]
+  ] as const;
+  const openCustomerAdmin = () => navigate(customerAuthed ? "/admin" : "/login");
+  const showDemoFlow = () => document.getElementById("demo-flow")?.scrollIntoView({ behavior: "smooth" });
 
   return (
     <main className="landingPage">
@@ -245,106 +239,78 @@ function CustomerLanding({ customerAuthed, navigate }: { customerAuthed: boolean
           <span>AI 客服资料中台</span>
         </button>
         <nav aria-label="公开页导航">
-          <button className="textButton" onClick={() => document.getElementById("demo-flow")?.scrollIntoView({ behavior: "smooth" })}>
+          <button className="textButton" onClick={showDemoFlow}>
             查看演示流程
           </button>
-          <button className="darkButton" onClick={() => navigate(customerAuthed ? "/admin" : "/login")}>
-            客户登录
+          <button className="darkButton" onClick={openCustomerAdmin}>
+            进入客户后台
           </button>
         </nav>
       </header>
 
       <section className="heroSection">
         <div className="heroCopy">
-          <p className="landingEyebrow">AI 客服上线前，先把商品资料管好</p>
-          <h1>商品信息管好了，AI 客服才答得准。</h1>
+          <p className="landingEyebrow">可控 AI 客服工作流</p>
+          <h1>看得见 AI 怎么回答，也看得见它为什么不回答。</h1>
           <p className="heroSubtitle">
-            上传商品说明书、价格和常见问题，让 AI 先学习，再通过模拟问答检查效果。真正自动回复前，还能用规则控制范围和风险。
+            商品资料给 AI 依据，模拟问答先检查效果，规则和风险控制决定自动回复还是转人工。
           </p>
           <div className="heroActions">
-            <button className="darkButton" onClick={() => navigate(customerAuthed ? "/admin" : "/login")}>
+            <button className="darkButton" onClick={openCustomerAdmin}>
               进入客户后台 <ArrowRight size={16} />
             </button>
-            <button className="textButton" onClick={() => document.getElementById("demo-flow")?.scrollIntoView({ behavior: "smooth" })}>
+            <button className="textButton" onClick={showDemoFlow}>
               查看演示流程
             </button>
           </div>
         </div>
-        <div className="heroPreview" aria-label="客户后台产品预览">
-          <div className="previewTopbar">
-            <span />
-            <span />
-            <span />
-          </div>
-          <div className="previewGrid">
-            <div className="previewNav" />
-            <div className="previewContent">
-              <div className="previewLine wide" />
-              <div className="previewLine" />
-              <div className="previewTable">
-                <span />
-                <span />
-                <span />
-                <span />
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="demoCarousel" aria-label="产品演示轮播">
-        <div className="sectionIntro">
-          <p className="landingEyebrow">产品演示</p>
-          <h2>从资料到回复，一条线看清楚。</h2>
-        </div>
-        <div className="demoViewport">
-          <div className="demoTrack">
-            {demoSlides.map((slide) => (
-              <article className="demoSlide" key={slide.title}>
-                <div className="slideIcon">{slide.icon}</div>
-                <h3>{slide.title}</h3>
-                <p>{slide.text}</p>
-              </article>
-            ))}
-          </div>
-        </div>
+        <figure className="workflowProof">
+          <img
+            src="/ai-workflow-proof.png"
+            alt="客户问题经过资料检索、规则检查并停在资料补充步骤的真实客户后台"
+          />
+          <figcaption>真实客户后台工作流：缺资料就先补资料，不让 AI 猜。</figcaption>
+        </figure>
       </section>
 
       <section className="flowSection" id="demo-flow">
         <div className="sectionIntro">
-          <p className="landingEyebrow">怎么工作</p>
-          <h2>上传商品说明书 → AI 学习 → 模拟问答 → AI 自动回复</h2>
+          <p className="landingEyebrow">一次咨询怎么处理</p>
+          <h2>从客户提问到安全回复，每一步都有依据。</h2>
         </div>
-        <ol className="flowRail" aria-label="上传商品说明书到 AI 自动回复流程">
-          {flowSteps.map((step, index) => (
-            <li key={step}>
+        <ol className="flowRail" aria-label="AI 客服处理一次客户咨询的流程">
+          {publicWorkflow.map(([title, description], index) => (
+            <li key={title}>
               <span className="flowIndex">{index + 1}</span>
-              <strong>{step}</strong>
-              {index < flowSteps.length - 1 ? <ArrowRight className="flowArrow" size={18} aria-hidden="true" /> : null}
+              <div>
+                <strong>{title}</strong>
+                <p>{description}</p>
+              </div>
+              {index < publicWorkflow.length - 1 ? <ArrowRight className="flowArrow" size={18} aria-hidden="true" /> : null}
             </li>
           ))}
         </ol>
       </section>
 
-      <section className="controlSection">
-        <div>
-          <p className="landingEyebrow">可控自动化</p>
-          <h2>AI 先学习，规则再放行。</h2>
-          <p>
-            商品知识通过审核后才进入可用资料；模拟问答先检查效果；自动回复还要经过规则、风险和上下文完整性判断。
-          </p>
+      <section className="reassuranceSection" aria-labelledby="reassurance-title">
+        <div className="sectionIntro">
+          <p className="landingEyebrow">放心交给 AI，也保留人工判断</p>
+          <h2 id="reassurance-title">不是每个问题都让 AI 硬答。</h2>
         </div>
-        <div className="controlList">
-          <span>资料缺口提醒</span>
-          <span>知识审核状态</span>
-          <span>价格过期提示</span>
-          <span>高风险转人工</span>
+        <div className="reassuranceList">
+          {reassurance.map(([title, description, icon]) => (
+            <article key={title}>
+              <span className="reassuranceIcon" aria-hidden="true">{icon}</span>
+              <h3>{title}</h3>
+              <p>{description}</p>
+            </article>
+          ))}
         </div>
       </section>
 
       <section className="finalCta">
-        <h2>先管好商品资料，再让 AI 自动回复。</h2>
-        <button className="darkButton" onClick={() => navigate(customerAuthed ? "/admin" : "/login")}>
+        <h2>先看清工作流，再决定哪些回复可以自动发送。</h2>
+        <button className="darkButton" onClick={openCustomerAdmin}>
           进入客户后台 <ArrowRight size={16} />
         </button>
       </section>
