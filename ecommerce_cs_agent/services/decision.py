@@ -59,7 +59,28 @@ class DecisionService:
         principal_organization_id: str | None = None,
         principal_store_id: str | None = None,
     ) -> dict[str, Any] | None:
-        state = self.repository.get_by_decision_id(decision_id)
+        return self.repository.mutate_state(
+            decision_id,
+            lambda state: self._refill_context_locked(
+                state,
+                decision_id,
+                context_type,
+                payload,
+                principal_organization_id=principal_organization_id,
+                principal_store_id=principal_store_id,
+            ),
+        )
+
+    def _refill_context_locked(
+        self,
+        state: DecisionState | None,
+        decision_id: str,
+        context_type: str,
+        payload: dict[str, Any],
+        *,
+        principal_organization_id: str | None,
+        principal_store_id: str | None,
+    ) -> dict[str, Any] | None:
         if not state:
             return None
         organization_id, store_id, request_id = _request_key(state.request)
@@ -138,7 +159,6 @@ class DecisionService:
                 "_request_payload": comparable,
                 "_context_type": context_type,
             }
-        self._save_state(organization_id, store_id, request_id, decision_id, state)
         return _public(state.context_refills[key])
 
     def submit_action_result(
@@ -149,7 +169,26 @@ class DecisionService:
         principal_organization_id: str | None = None,
         principal_store_id: str | None = None,
     ) -> dict[str, Any] | None:
-        state = self.repository.get_by_decision_id(decision_id)
+        return self.repository.mutate_state(
+            decision_id,
+            lambda state: self._submit_action_result_locked(
+                state,
+                decision_id,
+                payload,
+                principal_organization_id=principal_organization_id,
+                principal_store_id=principal_store_id,
+            ),
+        )
+
+    def _submit_action_result_locked(
+        self,
+        state: DecisionState | None,
+        decision_id: str,
+        payload: dict[str, Any],
+        *,
+        principal_organization_id: str | None,
+        principal_store_id: str | None,
+    ) -> dict[str, Any] | None:
         if not state:
             return None
         organization_id, store_id, request_id = _request_key(state.request)
@@ -192,7 +231,6 @@ class DecisionService:
                     thread_id=decision_id,
                 ),
             }
-            self._save_state(organization_id, store_id, request_id, decision_id, state)
         return _public(state.action_results[key])
 
     def submit_feedback(
@@ -203,7 +241,26 @@ class DecisionService:
         principal_store_id: str | None = None,
     ) -> dict[str, Any] | None:
         decision_id = str(payload.get("decision_id", ""))
-        state = self.repository.get_by_decision_id(decision_id)
+        return self.repository.mutate_state(
+            decision_id,
+            lambda state: self._submit_feedback_locked(
+                state,
+                decision_id,
+                payload,
+                principal_organization_id=principal_organization_id,
+                principal_store_id=principal_store_id,
+            ),
+        )
+
+    def _submit_feedback_locked(
+        self,
+        state: DecisionState | None,
+        decision_id: str,
+        payload: dict[str, Any],
+        *,
+        principal_organization_id: str | None,
+        principal_store_id: str | None,
+    ) -> dict[str, Any] | None:
         if not state:
             return None
         organization_id, store_id, request_id = _request_key(state.request)
@@ -217,7 +274,6 @@ class DecisionService:
             raise PermissionError("human reply feedback does not belong to the decision tenant/store")
         human_reply_id = f"human-reply-{uuid.uuid4().hex[:12]}"
         state.feedback.append({"human_reply_id": human_reply_id, **payload})
-        self._save_state(organization_id, store_id, request_id, decision_id, state)
         return {
             "human_reply_id": human_reply_id,
             "decision_id": decision_id,

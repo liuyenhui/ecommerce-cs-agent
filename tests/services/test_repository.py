@@ -98,6 +98,57 @@ def test_postgres_repository_reads_canonical_decision_record_before_compat_state
     assert "state_payload" not in connection.executed[0][0]
 
 
+def test_postgres_repository_mutation_locks_decision_before_persisting_in_one_transaction() -> None:
+    state = DecisionState(
+        request={
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "request_id": "req-001",
+            "platform": "pdd",
+        },
+        response={"decision_id": "decision-001", "action": "context_request"},
+    )
+    connection = _FakeConnection(fetch_rows=[(_state_to_payload(state),)])
+    repository = PostgresDecisionRepository("postgresql://example")
+    connection_count = 0
+
+    def connect(_url: str) -> _FakeConnection:
+        nonlocal connection_count
+        connection_count += 1
+        return connection
+
+    repository._connect = connect
+
+    result = repository.mutate_state(
+        "decision-001",
+        lambda locked: _record_context_refill(locked),
+    )
+
+    assert result == "accepted"
+    assert connection_count == 1
+    lock_index = next(
+        index
+        for index, (sql, _params) in enumerate(connection.executed)
+        if "FOR UPDATE" in sql
+    )
+    persist_index = next(
+        index
+        for index, (sql, _params) in enumerate(connection.executed)
+        if "INSERT INTO decision_graph_checkpoint" in sql
+    )
+    assert "FROM decision_record" in connection.executed[lock_index][0]
+    assert lock_index < persist_index
+    checkpoint = connection.executed[persist_index][1]
+    persisted = checkpoint[-1].obj
+    assert "ctx-orders-001\u001fidem-orders" in persisted["context_refills"]
+
+
+def _record_context_refill(state: DecisionState | None) -> str:
+    assert state is not None
+    state.context_refills[("ctx-orders-001", "idem-orders")] = {"accepted": True}
+    return "accepted"
+
+
 def test_postgres_repository_falls_back_to_compat_state_when_canonical_missing() -> None:
     compat_state = DecisionState(
         request={"organization_id": "org-001", "store_id": "store-001", "request_id": "req-001"},

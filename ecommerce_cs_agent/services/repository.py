@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Protocol
+from threading import RLock
+from typing import Any, Callable, Protocol, TypeVar
 
 from psycopg.types.json import Jsonb
 
 from ecommerce_cs_agent.services.decision_types import DecisionState
+
+
+MutationResult = TypeVar("MutationResult")
 
 
 class DecisionRepository(Protocol):
@@ -38,11 +42,19 @@ class DecisionRepository(Protocol):
     ) -> None:
         raise NotImplementedError
 
+    def mutate_state(
+        self,
+        decision_id: str,
+        mutation: Callable[[DecisionState | None], MutationResult],
+    ) -> MutationResult:
+        raise NotImplementedError
+
 
 class InMemoryDecisionRepository:
     def __init__(self) -> None:
         self._by_request: dict[tuple[str, str, str], DecisionState] = {}
         self._by_decision_id: dict[str, DecisionState] = {}
+        self._mutation_lock = RLock()
 
     def get_by_request(self, organization_id: str, store_id: str, request_id: str) -> DecisionState | None:
         return self._by_request.get((organization_id, store_id, request_id))
@@ -77,6 +89,14 @@ class InMemoryDecisionRepository:
     ) -> None:
         self._by_request[(organization_id, store_id, request_id)] = state
         self._by_decision_id[decision_id] = state
+
+    def mutate_state(
+        self,
+        decision_id: str,
+        mutation: Callable[[DecisionState | None], MutationResult],
+    ) -> MutationResult:
+        with self._mutation_lock:
+            return mutation(self._by_decision_id.get(decision_id))
 
 
 class PostgresDecisionRepository:
@@ -225,59 +245,123 @@ class PostgresDecisionRepository:
         decision_id: str,
         state: DecisionState,
     ) -> None:
-        state_payload = _state_to_payload(state)
-        platform = str(state.request.get("platform", "unknown"))
-        conversation = state.request.get("conversation") or {}
-        message = state.request.get("message") or {}
-        response = state.response
         with self._connect(self._database_url) as conn:
             with conn.cursor() as cur:
-                self._upsert_tenant_store(cur, organization_id, store_id, platform)
-                self._upsert_conversation(cur, organization_id, store_id, platform, conversation)
-                self._upsert_message(cur, organization_id, store_id, platform, conversation, message)
-                self._upsert_decision_record(
+                self._save_state_with_cursor(
                     cur,
                     organization_id=organization_id,
                     store_id=store_id,
                     request_id=request_id,
                     decision_id=decision_id,
-                    platform=platform,
                     state=state,
                 )
-                self._replace_trace_steps(cur, organization_id, store_id, decision_id, response)
-                self._upsert_checkpoint(cur, organization_id, store_id, decision_id, state_payload)
-                self._upsert_context_snapshots(cur, organization_id, store_id, decision_id, state)
-                self._upsert_action_requests(cur, organization_id, store_id, decision_id, response)
-                self._upsert_action_results(cur, organization_id, store_id, decision_id, state)
-                self._upsert_human_reply(cur, organization_id, store_id, decision_id, state)
+
+    def mutate_state(
+        self,
+        decision_id: str,
+        mutation: Callable[[DecisionState | None], MutationResult],
+    ) -> MutationResult:
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO app_decision_state (
-                        decision_id,
-                        organization_id,
-                        store_id,
-                        request_id,
-                        request_payload,
-                        response_payload,
-                        state_payload
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (organization_id, store_id, request_id)
-                    DO UPDATE SET
-                        response_payload = EXCLUDED.response_payload,
-                        state_payload = EXCLUDED.state_payload,
-                        updated_at = now()
+                    SELECT checkpoint.state
+                    FROM decision_record decision
+                    JOIN decision_graph_checkpoint checkpoint
+                      ON checkpoint.decision_id = decision.decision_id
+                     AND checkpoint.checkpoint_key = 'latest'
+                    WHERE decision.decision_id = %s
+                    FOR UPDATE OF decision, checkpoint
                     """,
-                    (
-                        decision_id,
-                        organization_id,
-                        store_id,
-                        request_id,
-                        Jsonb(state.request),
-                        Jsonb(state.response),
-                        Jsonb(state_payload),
-                    ),
+                    (decision_id,),
                 )
+                row = cur.fetchone()
+                if not row:
+                    cur.execute(
+                        """
+                        SELECT state_payload
+                        FROM app_decision_state
+                        WHERE decision_id = %s
+                        FOR UPDATE
+                        """,
+                        (decision_id,),
+                    )
+                    row = cur.fetchone()
+                state = _state_from_payload(row[0]) if row else None
+                result = mutation(state)
+                if state is not None:
+                    organization_id, store_id, request_id = _request_key(state.request)
+                    self._save_state_with_cursor(
+                        cur,
+                        organization_id=organization_id,
+                        store_id=store_id,
+                        request_id=request_id,
+                        decision_id=decision_id,
+                        state=state,
+                    )
+                return result
+
+    def _save_state_with_cursor(
+        self,
+        cur: Any,
+        *,
+        organization_id: str,
+        store_id: str,
+        request_id: str,
+        decision_id: str,
+        state: DecisionState,
+    ) -> None:
+        state_payload = _state_to_payload(state)
+        platform = str(state.request.get("platform", "unknown"))
+        conversation = state.request.get("conversation") or {}
+        message = state.request.get("message") or {}
+        response = state.response
+        self._upsert_tenant_store(cur, organization_id, store_id, platform)
+        self._upsert_conversation(cur, organization_id, store_id, platform, conversation)
+        self._upsert_message(cur, organization_id, store_id, platform, conversation, message)
+        self._upsert_decision_record(
+            cur,
+            organization_id=organization_id,
+            store_id=store_id,
+            request_id=request_id,
+            decision_id=decision_id,
+            platform=platform,
+            state=state,
+        )
+        self._replace_trace_steps(cur, organization_id, store_id, decision_id, response)
+        self._upsert_checkpoint(cur, organization_id, store_id, decision_id, state_payload)
+        self._upsert_context_snapshots(cur, organization_id, store_id, decision_id, state)
+        self._upsert_action_requests(cur, organization_id, store_id, decision_id, response)
+        self._upsert_action_results(cur, organization_id, store_id, decision_id, state)
+        self._upsert_human_reply(cur, organization_id, store_id, decision_id, state)
+        cur.execute(
+            """
+            INSERT INTO app_decision_state (
+                decision_id,
+                organization_id,
+                store_id,
+                request_id,
+                request_payload,
+                response_payload,
+                state_payload
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (organization_id, store_id, request_id)
+            DO UPDATE SET
+                response_payload = EXCLUDED.response_payload,
+                state_payload = EXCLUDED.state_payload,
+                updated_at = now()
+            """,
+            (
+                decision_id,
+                organization_id,
+                store_id,
+                request_id,
+                Jsonb(state.request),
+                Jsonb(state.response),
+                Jsonb(state_payload),
+            ),
+        )
 
     def _fetch_one(self, sql: str, params: tuple[Any, ...]) -> tuple[Any, ...] | None:
         with self._connect(self._database_url) as conn:
@@ -775,6 +859,14 @@ def _state_from_payload(payload: Any) -> DecisionState:
         context_refills=_tuple_keyed(payload.get("context_refills", {})),
         action_results=_tuple_keyed(payload.get("action_results", {})),
         feedback=payload.get("feedback", []),
+    )
+
+
+def _request_key(payload: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(payload.get("tenant_id") or payload.get("organization_id", "")),
+        str(payload.get("external_store_id") or payload.get("store_id", "")),
+        str(payload.get("request_id", "")),
     )
 
 

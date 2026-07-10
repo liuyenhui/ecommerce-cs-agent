@@ -18,6 +18,69 @@ TENANT_SECURITY_KEYWORDS = ("隔壁店", "别的店", "其他店", "别人店", 
 SHIPPING_KEYWORDS = ("发货", "物流", "快递", "什么时候到", "ship", "shipping", "delivery")
 PRODUCT_KEYWORDS = ("商品", "产品", "材质", "尺寸", "颜色", "规格", "参数", "material", "size")
 ACTION_KEYWORDS = ("改备注", "备注", "改地址", "修改地址", "收货地址", "update note", "change address")
+RELEVANCE_ANCHORS = (
+    "材质",
+    "尺寸",
+    "颜色",
+    "规格",
+    "参数",
+    "安全",
+    "认证",
+    "发货",
+    "物流",
+    "快递",
+    "订单",
+    "地址",
+    "备注",
+    "保修",
+    "安装",
+    "material",
+    "size",
+    "color",
+    "specification",
+    "safe",
+    "certif",
+    "shipping",
+    "delivery",
+    "order",
+    "address",
+    "warranty",
+)
+RELEVANCE_STOP_TERMS = {
+    "这个",
+    "这款",
+    "商品",
+    "产品",
+    "什么",
+    "怎么",
+    "如何",
+    "请问",
+    "是否",
+    "可以",
+    "有没有",
+    "关于",
+    "客服",
+    "the",
+    "this",
+    "that",
+    "what",
+    "which",
+    "how",
+    "can",
+    "could",
+    "please",
+    "product",
+    "item",
+    "a",
+    "an",
+    "is",
+    "are",
+    "do",
+    "does",
+    "of",
+    "it",
+}
+RULE_KEYWORDS = ("规则", "退换货", "退货政策", "平台政策", "rule", "policy")
 
 GRAPH_NODE_IDS = [
     "normalize_request",
@@ -64,6 +127,7 @@ class ReplyDecisionGraphState(TypedDict, total=False):
     store_id: str
     request_id: str
     matched_knowledge: list[dict[str, Any]]
+    knowledge_relevance: list[dict[str, Any]]
     knowledge_query: str
     risk_flags: list[str]
     missing_context: list[str]
@@ -76,6 +140,7 @@ class ReplyDecisionGraphState(TypedDict, total=False):
     context_requests: list[dict[str, Any]]
     action_requests: list[dict[str, Any]]
     handoff_reason: str | None
+    auto_reply_gate: dict[str, Any]
     route: str
     resumed_from_checkpoint: bool
     steps: list[dict[str, Any]]
@@ -189,15 +254,22 @@ class ReplyDecisionGraph:
 
     def _retrieve_context(self, state: ReplyDecisionGraphState) -> ReplyDecisionGraphState:
         query = _knowledge_query(state["content"])
-        matched = self.repository.recall_knowledge(
+        recalled = self.repository.recall_knowledge(
             state["organization_id"],
             state["store_id"],
             query,
             limit=5,
         )
+        relevance = [_knowledge_relevance(state["content"], item) for item in recalled]
+        matched = [item for item, signal in zip(recalled, relevance, strict=True) if signal["relevant"]]
         outputs = ["context_candidates", *[f"knowledge:{item.get('knowledge_entry_id')}" for item in matched]]
         return _with_step(
-            {**state, "knowledge_query": query, "matched_knowledge": matched},
+            {
+                **state,
+                "knowledge_query": query,
+                "matched_knowledge": matched,
+                "knowledge_relevance": relevance,
+            },
             "retrieve_context",
             inputs_ref=["normalized_request"],
             outputs_ref=outputs,
@@ -264,7 +336,7 @@ class ReplyDecisionGraph:
                 knowledge=state.get("matched_knowledge", []),
             ),
             "evidence": evidence,
-            "confidence": 0.9 if evidence else 0.68,
+            "confidence": _evidence_confidence(state.get("knowledge_relevance", [])) if evidence else 0.68,
         }
         return _with_step({**state, "candidates": [candidate]}, "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=[f"candidate:{candidate['suggestion_id']}"])
 
@@ -275,6 +347,7 @@ class ReplyDecisionGraph:
         action_requests: list[dict[str, Any]] = []
         candidates = state.get("candidates", [])
         auto_reply: dict[str, Any] | None = None
+        auto_reply_gate: dict[str, Any] = {"eligible": False, "reasons": ["non_candidate_route"]}
         if route == "handoff":
             action = "handoff"
             status = "handoff"
@@ -296,7 +369,16 @@ class ReplyDecisionGraph:
             action_requests = [self.action_request_factory(state["decision_id"], state["payload"], state["content"])]
         else:
             confidence = _candidate_confidence(candidates)
-            if confidence >= 0.85:
+            payload = state["payload"]
+            gate_reasons: list[str] = []
+            if confidence < 0.85:
+                gate_reasons.append("insufficient_relevant_evidence")
+            if payload.get("mode") != "auto_when_safe":
+                gate_reasons.append("assist_first_mode")
+            if payload.get("source") == "simulation":
+                gate_reasons.append("simulation_only")
+            auto_reply_gate = {"eligible": not gate_reasons, "reasons": gate_reasons}
+            if auto_reply_gate["eligible"]:
                 action = "auto_reply"
                 status = "answer_ready"
                 auto_reply = {
@@ -319,6 +401,7 @@ class ReplyDecisionGraph:
             "confidence": confidence,
             "risk_level": risk_level,
             "handoff_reason": handoff_reason,
+            "auto_reply_gate": auto_reply_gate,
             "context_requests": context_requests,
             "action_requests": action_requests,
             "candidates": candidates if action in {"candidate", "auto_reply"} else [],
@@ -393,6 +476,8 @@ def _trace_payload(*, settings: Settings, reply_provider: ReplyProvider, state: 
     matched = state.get("matched_knowledge", [])
     return {
         "matched_knowledge_ids": [str(item.get("knowledge_entry_id")) for item in matched],
+        "knowledge_relevance": state.get("knowledge_relevance", []),
+        "auto_reply_gate": state.get("auto_reply_gate", {"eligible": False, "reasons": ["not_assessed"]}),
         "rule_hits": state.get("risk_flags", []),
         "graph_version": settings.graph_version,
         "thread_id": state["decision_id"],
@@ -452,6 +537,13 @@ def _candidate_confidence(candidates: list[dict[str, Any]]) -> float:
     return max(float(candidate.get("confidence", 0.0)) for candidate in candidates)
 
 
+def _evidence_confidence(signals: list[dict[str, Any]]) -> float:
+    relevant_scores = [float(signal.get("score", 0.0)) for signal in signals if signal.get("relevant")]
+    if not relevant_scores:
+        return 0.68
+    return round(0.85 + min(max(relevant_scores), 1.0) * 0.1, 4)
+
+
 def _missing_context(payload: dict[str, Any], lowered: str, content: str, *, has_product_knowledge: bool = False) -> list[str]:
     context = payload.get("context") or {}
     missing: list[str] = []
@@ -483,6 +575,9 @@ def _knowledge_query(content: str) -> str:
     for keyword in (*PRODUCT_KEYWORDS, *SHIPPING_KEYWORDS, *ACTION_KEYWORDS):
         if keyword in normalized or keyword in content:
             terms.append(keyword)
+    for anchor in RELEVANCE_ANCHORS:
+        if anchor in normalized or anchor in content:
+            terms.append(anchor)
     terms.extend(re.findall(r"[a-zA-Z0-9][a-zA-Z0-9_-]{1,31}", normalized))
     seen: set[str] = set()
     unique_terms = []
@@ -491,6 +586,42 @@ def _knowledge_query(content: str) -> str:
             seen.add(term)
             unique_terms.append(term)
     return " ".join(unique_terms)
+
+
+def _knowledge_relevance(query: str, item: dict[str, Any]) -> dict[str, Any]:
+    query_terms = _relevance_terms(query)
+    knowledge_terms = _relevance_terms(str(item.get("content", "")))
+    shared_terms = sorted(query_terms & knowledge_terms)
+    anchored = any(term in RELEVANCE_ANCHORS for term in shared_terms)
+    relevant = anchored or len(shared_terms) >= 2
+    denominator = max(len(query_terms | knowledge_terms), 1)
+    return {
+        "knowledge_entry_id": str(item.get("knowledge_entry_id", "")),
+        "relevant": relevant,
+        "matched_terms": shared_terms,
+        "score": round(len(shared_terms) / denominator, 4),
+        "method": "deterministic_lexical_overlap_v1",
+    }
+
+
+def _relevance_terms(text: str) -> set[str]:
+    normalized = text.lower()
+    terms = {_canonical_english_term(term) for term in re.findall(r"[a-z0-9]+", normalized) if len(term) >= 2}
+    for sequence in re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]+", normalized):
+        terms.update(sequence[index : index + 2] for index in range(len(sequence) - 1))
+    return {term for term in terms if term and term not in RELEVANCE_STOP_TERMS}
+
+
+def _canonical_english_term(term: str) -> str:
+    if term.startswith("certif"):
+        return "certif"
+    if term in {"safe", "safety"}:
+        return "safe"
+    if term.endswith("ies") and len(term) > 4:
+        return f"{term[:-3]}y"
+    if term.endswith("s") and len(term) > 3:
+        return term[:-1]
+    return term
 
 
 def _now() -> str:

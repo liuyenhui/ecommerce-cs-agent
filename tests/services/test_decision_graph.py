@@ -43,6 +43,89 @@ def test_decision_graph_uses_approved_knowledge_for_safe_auto_reply() -> None:
     assert any(edge["condition"] == "persist" and edge["taken"] for edge in graph["edges"])
 
 
+def test_decision_graph_does_not_auto_reply_from_unrelated_approved_knowledge() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-unrelated",
+                "product_id": "product-001",
+                "scope": "product",
+                "content": "包装盒是蓝色的。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+
+    response = service.create_reply_decision(_request("req-unrelated-knowledge", "儿童安全认证？"))
+
+    assert response["action"] == "candidate"
+    assert response["decision_status"] == "candidate"
+    assert response["auto_reply"] is None
+    assert response["confidence"] < 0.85
+    assert response["candidates"][0]["evidence"] == []
+    assert response["trace"]["matched_knowledge_ids"] == []
+    assert response["trace"]["knowledge_relevance"] == [
+        {
+            "knowledge_entry_id": "knowledge-unrelated",
+            "relevant": False,
+            "matched_terms": [],
+            "score": 0.0,
+            "method": "deterministic_lexical_overlap_v1",
+        }
+    ]
+
+
+def test_decision_graph_keeps_relevant_knowledge_as_candidate_in_assist_first_mode() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-material",
+                "product_id": "product-001",
+                "scope": "product",
+                "content": "Material: cotton.",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    request = _request("req-assist-first", "What material is this item?")
+    request["mode"] = "assist_first"
+
+    response = service.create_reply_decision(request)
+
+    assert response["action"] == "candidate"
+    assert response["auto_reply"] is None
+    assert response["confidence"] >= 0.85
+    assert response["trace"]["knowledge_relevance"][0]["matched_terms"] == ["material"]
+
+
+def test_decision_graph_never_marks_simulation_as_auto_reply() -> None:
+    repository = _KnowledgeRepository(
+        [
+            {
+                "knowledge_entry_id": "knowledge-certification",
+                "product_id": "product-001",
+                "scope": "product",
+                "content": "已通过儿童安全认证。",
+                "embedding_model": "deterministic-hash-v1",
+                "chunk_index": 0,
+            }
+        ]
+    )
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    request = _request("req-simulation-safe", "儿童安全认证？")
+    request["source"] = "simulation"
+
+    response = service.create_reply_decision(request)
+
+    assert response["action"] == "candidate"
+    assert response["auto_reply"] is None
+    assert response["trace"]["matched_knowledge_ids"] == ["knowledge-certification"]
+
+
 def test_decision_graph_does_not_auto_reply_high_risk_even_with_knowledge() -> None:
     repository = _KnowledgeRepository(
         [
@@ -62,7 +145,8 @@ def test_decision_graph_does_not_auto_reply_high_risk_even_with_knowledge() -> N
 
     assert response["action"] == "handoff"
     assert response["auto_reply"] is None
-    assert response["trace"]["matched_knowledge_ids"] == ["knowledge-001"]
+    assert response["trace"]["matched_knowledge_ids"] == []
+    assert response["trace"]["knowledge_relevance"][0]["relevant"] is False
     assert "refund_or_complaint" in response["risk_flags"]
 
 
