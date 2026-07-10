@@ -6,6 +6,7 @@ import hmac
 import json
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from ecommerce_cs_agent.api.app import create_app
@@ -348,6 +349,64 @@ def test_context_refill_rejects_cross_tenant_and_idempotency_conflict():
     assert forbidden.status_code == 403
     assert first.status_code == 200
     assert conflict.status_code == 409
+
+
+def test_context_refill_rejects_payload_scope_aliases_for_platform_token():
+    api = client()
+    decision = api.post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=minimal_reply_request("req-refill-scope-alias"),
+    ).json()
+
+    response = api.post(
+        f"/v1/reply-decisions/{decision['decision_id']}/contexts/orders",
+        headers=auth_headers(),
+        json={
+            "context_request_id": decision["context_requests"][0]["context_request_id"],
+            "idempotency_key": "ctx-scope-alias",
+            "tenant_id": "org-other",
+            "external_store_id": "store-other",
+            "items": [{"external_order_id": "order-001", "status": "paid"}],
+        },
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("planned_type", "endpoint_type", "content"),
+    [
+        ("orders", "products", "这个订单什么时候发货？"),
+        ("products", "orders", "这个商品是什么材质？"),
+        ("products", "logistics", "这个商品是什么材质？"),
+        ("products", "rules", "这个商品是什么材质？"),
+    ],
+)
+def test_typed_context_refill_rejects_endpoint_type_mismatch(
+    planned_type: str,
+    endpoint_type: str,
+    content: str,
+):
+    api = client()
+    decision = api.post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=minimal_reply_request(f"req-context-type-{endpoint_type}", content),
+    ).json()
+    planned_request = next(item for item in decision["context_requests"] if item["type"] == planned_type)
+
+    response = api.post(
+        f"/v1/reply-decisions/{decision['decision_id']}/contexts/{endpoint_type}",
+        headers=auth_headers(),
+        json={
+            "context_request_id": planned_request["context_request_id"],
+            "idempotency_key": f"ctx-type-{endpoint_type}",
+            "items": [],
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_action_result_rejects_unknown_action_and_idempotency_conflict():

@@ -15,6 +15,8 @@ from ecommerce_cs_agent.services.repository import (
     PostgresDecisionRepository,
 )
 
+SCOPE_FIELDS = ("tenant_id", "organization_id", "external_store_id", "store_id")
+
 
 class DecisionService:
     def __init__(
@@ -81,20 +83,31 @@ class DecisionService:
         }
         if any(principal_scope.values()) and not self._same_tenant_store(state, principal_scope):
             raise PermissionError("context refill principal does not belong to the decision tenant/store")
-        if ("organization_id" in payload or "store_id" in payload) and not self._same_tenant_store(state, payload):
+        if _declares_scope(payload) and not self._same_tenant_store(state, payload):
             raise PermissionError("context refill does not belong to the decision tenant/store")
         context_request_id = str(payload.get("context_request_id", ""))
         idempotency_key = str(payload.get("idempotency_key", context_request_id))
         key = (context_request_id, idempotency_key)
         existing = state.context_refills.get(key)
         comparable = {k: v for k, v in payload.items() if k != "source"}
-        if existing and existing.get("_request_payload") != comparable:
-            raise FileExistsError("idempotency conflict")
         if existing:
+            if existing.get("_context_type") != context_type:
+                raise ValueError("context_request_id does not match the URL context type")
+            if existing.get("_request_payload") != comparable:
+                raise FileExistsError("idempotency conflict")
             return _public(existing)
-        known_request_ids = {item["context_request_id"] for item in state.response.get("context_requests", [])}
-        if context_request_id not in known_request_ids:
+        planned_request = next(
+            (
+                item
+                for item in state.response.get("context_requests", [])
+                if item.get("context_request_id") == context_request_id
+            ),
+            None,
+        )
+        if planned_request is None:
             raise ValueError("context_request_id does not belong to this decision")
+        if planned_request.get("type") != context_type:
+            raise ValueError("context_request_id does not match the URL context type")
         accepted_request_ids = {
             existing_payload.get("context_request_id")
             for existing_payload in state.context_refills.values()
@@ -133,7 +146,11 @@ class DecisionService:
             )
             state.request = updated_request
             state.response = final_response
-            state.context_refills[key] = {**final_response, "_request_payload": comparable}
+            state.context_refills[key] = {
+                **final_response,
+                "_request_payload": comparable,
+                "_context_type": context_type,
+            }
         self._save_state(organization_id, store_id, request_id, decision_id, state)
         return _public(state.context_refills[key])
 
@@ -155,10 +172,7 @@ class DecisionService:
         }
         if any(principal_scope.values()) and not self._same_tenant_store(state, principal_scope):
             raise PermissionError("action result principal does not belong to the decision tenant/store")
-        declares_scope = any(
-            key in payload for key in ("tenant_id", "organization_id", "external_store_id", "store_id")
-        )
-        if declares_scope and not self._same_tenant_store(state, payload):
+        if _declares_scope(payload) and not self._same_tenant_store(state, payload):
             raise PermissionError("action result does not belong to the decision tenant/store")
         action_id = str(payload.get("action_id", ""))
         planned_action = next(
@@ -212,10 +226,7 @@ class DecisionService:
         }
         if any(principal_scope.values()) and not self._same_tenant_store(state, principal_scope):
             raise PermissionError("human reply principal does not belong to the decision tenant/store")
-        declares_scope = any(
-            key in payload for key in ("tenant_id", "organization_id", "external_store_id", "store_id")
-        )
-        if declares_scope and not self._same_tenant_store(state, payload):
+        if _declares_scope(payload) and not self._same_tenant_store(state, payload):
             raise PermissionError("human reply feedback does not belong to the decision tenant/store")
         human_reply_id = f"human-reply-{uuid.uuid4().hex[:12]}"
         state.feedback.append({"human_reply_id": human_reply_id, **payload})
@@ -512,6 +523,10 @@ def _latest_human_reply(feedback: list[dict[str, Any]]) -> str | None:
         return None
     value = feedback[-1].get("human_reply")
     return str(value) if value else None
+
+
+def _declares_scope(payload: dict[str, Any]) -> bool:
+    return any(key in payload for key in SCOPE_FIELDS)
 
 
 def _repository_for(settings: Settings) -> DecisionRepository:
