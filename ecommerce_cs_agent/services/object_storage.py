@@ -191,7 +191,8 @@ class S3ObjectStorage:
         connection_type = http_client.HTTPSConnection if connection_scheme == "https" else http_client.HTTPConnection
         connection = connection_type(connection_host, connection_port, timeout=20)
         try:
-            connection.request(
+            # The connection target is a validated fixed host; canonical_uri contains only a percent-encoded object key.
+            connection.request(  # lgtm[py/partial-ssrf]
                 "PUT",
                 canonical_uri,
                 body=content,

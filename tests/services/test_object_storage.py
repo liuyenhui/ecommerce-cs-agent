@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from ecommerce_cs_agent.services import object_storage as object_storage_module
@@ -146,6 +148,13 @@ def test_s3_upload_keeps_object_key_in_request_path_not_connection_target(monkey
     assert calls[0] == ("connect", ("storage.example", None, 20))
     assert calls[1][0] == "request"
     assert calls[1][1][1] == "/bucket/products/product-a/manual.pdf"
+
+
+def test_s3_partial_ssrf_suppression_documents_the_fixed_host_boundary() -> None:
+    source = Path(object_storage_module.__file__).read_text(encoding="utf-8")
+
+    assert "lgtm[py/partial-ssrf]" in source
+    assert "validated fixed host" in source
 
 
 def test_llm_analyzer_rejects_private_endpoint() -> None:
