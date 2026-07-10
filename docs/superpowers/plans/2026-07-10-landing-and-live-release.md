@@ -278,4 +278,3 @@ Then run the approved live Customer Admin smoke without printing credentials or 
 - [ ] **Step 7: Fix and repeat until the live gate passes**
 
 Any live defect returns to a failing automated reproduction before the minimal fix. Repeat local gate, PR checks, publish, deploy, and smoke until every acceptance item passes.
-
