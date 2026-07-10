@@ -100,8 +100,6 @@ class ReplyDecisionGraph:
         self.request_key = request_key
         self.context_request_factory = context_request_factory
         self.action_request_factory = action_request_factory
-        self._checkpointer = InMemorySaver()
-        self._compiled_stategraph = self._compile_stategraph()
 
     def invoke(
         self,
@@ -125,13 +123,15 @@ class ReplyDecisionGraph:
             "taken_conditions": [],
         }
         config = {"configurable": {"thread_id": decision_id}}
-        state = self._compiled_stategraph.invoke(state, config=config)
-        checkpoint_id = self._checkpoint_id(config)
+        checkpointer = InMemorySaver()
+        compiled_stategraph = self._compile_stategraph(checkpointer)
+        state = compiled_stategraph.invoke(state, config=config)
+        checkpoint_id = self._checkpoint_id(compiled_stategraph, config)
         if checkpoint_id:
             state["response"]["trace"]["langgraph_checkpoint_id"] = checkpoint_id
         return state["response"]
 
-    def _compile_stategraph(self) -> Any:
+    def _compile_stategraph(self, checkpointer: InMemorySaver) -> Any:
         graph = StateGraph(ReplyDecisionGraphState)
         graph.add_node("normalize_request", self._normalize_request)
         graph.add_node("retrieve_context", self._retrieve_context)
@@ -165,11 +165,12 @@ class ReplyDecisionGraph:
         graph.add_edge("generate_candidate", "policy_gate")
         graph.add_edge("policy_gate", "persist_trace")
         graph.add_edge("persist_trace", END)
-        return graph.compile(checkpointer=self._checkpointer)
+        return graph.compile(checkpointer=checkpointer)
 
-    def _checkpoint_id(self, config: dict[str, Any]) -> str | None:
+    @staticmethod
+    def _checkpoint_id(compiled_stategraph: Any, config: dict[str, Any]) -> str | None:
         try:
-            snapshot = self._compiled_stategraph.get_state(config=config)
+            snapshot = compiled_stategraph.get_state(config=config)
         except Exception:
             return None
         configurable = getattr(snapshot, "config", {}).get("configurable", {})

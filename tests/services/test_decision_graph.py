@@ -176,10 +176,22 @@ def test_context_refill_resumes_same_thread_and_completes_graph() -> None:
             "items": [{"external_logistics_id": "ship-001", "status": "in_transit"}],
         },
     )
+    second_retry = service.refill_context(
+        decision_id,
+        "logistics",
+        {
+            "context_request_id": response["context_requests"][1]["context_request_id"],
+            "idempotency_key": "ctx-logistics",
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "items": [{"external_logistics_id": "ship-001", "status": "in_transit"}],
+        },
+    )
 
     assert first is not None
     assert first["next_action"] == "wait_context"
     assert second is not None
+    assert second_retry == second
     assert second["decision_id"] == decision_id
     assert second["trace"]["thread_id"] == decision_id
     assert second["trace"]["resumed_from_checkpoint"] is True
@@ -187,6 +199,18 @@ def test_context_refill_resumes_same_thread_and_completes_graph() -> None:
     assert second["action"] == "candidate"
     assert second["missing_context"] == []
     assert any(edge["condition"] == "candidate" and edge["taken"] for edge in second["trace"]["graph"]["edges"])
+
+
+def test_decision_graph_uses_run_scoped_native_checkpointers() -> None:
+    service = DecisionService(Settings(environment="test"), repository=InMemoryDecisionRepository())
+
+    first = service.create_reply_decision(_request("req-run-checkpoint-1", "这个商品什么时候发货？"))
+    second = service.create_reply_decision(_request("req-run-checkpoint-2", "这个商品什么时候发货？"))
+
+    assert not hasattr(service.graph, "_checkpointer")
+    assert not hasattr(service.graph, "_compiled_stategraph")
+    assert first["trace"]["langgraph_checkpoint_id"]
+    assert second["trace"]["langgraph_checkpoint_id"]
 
 
 def test_postgres_decision_repository_recalls_only_approved_accepted_knowledge() -> None:

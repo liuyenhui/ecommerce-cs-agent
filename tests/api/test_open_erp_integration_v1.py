@@ -213,25 +213,33 @@ def test_context_refill_returns_candidate_when_required_context_is_complete() ->
     headers = {"Authorization": f"Bearer {connector['connector_token']}"}
     decision = client.post("/v1/reply-decisions", headers=headers, json=reply_payload(connector["connector_id"])).json()
 
+    refill_payload = {
+        "context_request_id": decision["context_requests"][0]["context_request_id"],
+        "idempotency_key": "ctx-products-001",
+        "external_store_id": "mall-001",
+        "items": [{"external_product_id": "pdd-product-001", "title": "测试商品", "attributes": {"size": "M/L"}}],
+    }
     refill = client.post(
         f"/v1/reply-decisions/{decision['decision_id']}/contexts/products",
         headers=headers,
-        json={
-            "context_request_id": decision["context_requests"][0]["context_request_id"],
-            "idempotency_key": "ctx-products-001",
-            "external_store_id": "mall-001",
-            "items": [{"external_product_id": "pdd-product-001", "title": "测试商品", "attributes": {"size": "M/L"}}],
-        },
+        json=refill_payload,
+    )
+    retry = client.post(
+        f"/v1/reply-decisions/{decision['decision_id']}/contexts/products",
+        headers=headers,
+        json=refill_payload,
     )
 
     assert refill.status_code == 200
+    assert retry.status_code == 200
+    assert retry.json() == refill.json()
     body = refill.json()
     assert body["decision_status"] == "candidate"
     assert body["action"] == "candidate"
     assert body["candidates"][0]["reply_text"]
 
 
-def test_connector_scope_rejects_cross_store_action_result_and_feedback_without_payload_scope() -> None:
+def test_connector_scope_rejects_cross_store_continuations_without_payload_scope() -> None:
     client = TestClient(create_app())
     first = provision(client)
     second_response = client.post(
@@ -258,7 +266,21 @@ def test_connector_scope_rejects_cross_store_action_result_and_feedback_without_
         ),
     ).json()
     action_id = decision["action_requests"][0]["action_id"]
+    context_decision = client.post(
+        "/v1/reply-decisions",
+        headers=first_headers,
+        json=reply_payload(first["connector_id"], "req-connector-context-scope"),
+    ).json()
 
+    context_refill = client.post(
+        f"/v1/reply-decisions/{context_decision['decision_id']}/contexts/products",
+        headers=second_headers,
+        json={
+            "context_request_id": context_decision["context_requests"][0]["context_request_id"],
+            "idempotency_key": "cross-store-context-refill",
+            "items": [{"external_product_id": "pdd-product-001", "title": "测试商品"}],
+        },
+    )
     action_result = client.post(
         f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
         headers=second_headers,
@@ -283,6 +305,7 @@ def test_connector_scope_rejects_cross_store_action_result_and_feedback_without_
         },
     )
 
+    assert context_refill.status_code == 403
     assert action_result.status_code == 403
     assert feedback.status_code == 403
 

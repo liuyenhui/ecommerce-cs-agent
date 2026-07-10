@@ -98,7 +98,9 @@ POST <external_callback_url>
 
 商品、订单、物流和规则都是可选上下文。外部系统如果已经有低成本、可信的上下文，可以随主请求传入；如果没有，Agent 先做轻量意图和上下文需求判断，一次性返回当前可判断出的 `context_requests[]`。客户端按类型并行调用补充接口，服务端用同一个 `decision_id` 聚合上下文，直到返回明确可答复内容、动作请求或人工介入。
 
-内部编排推荐使用 LangGraph：`decision_id` 映射 graph `thread_id`，主请求、typed context refill 和 `actions/results` 都恢复同一条 thread。LangGraph checkpoint 必须落 PostgreSQL、Redis 或等价外部存储；API 容器不能依赖内存保存 graph state。
+当前内部编排使用 LangGraph，`decision_id` 映射 graph `thread_id`。每次 invoke 临时创建 `InMemorySaver`，native checkpoint ID 只用于该次运行诊断，方法返回后不在长期服务实例保存 saver 或 compiled graph。typed context refill 聚合完成后从 Repository 持久化 `DecisionState` 重构输入，以同一 `decision_id/thread_id` 重新 invoke；这不是 LangGraph native snapshot 的原生 interrupt/resume。外部持久化 LangGraph checkpointer 与原生 interrupt/resume 是目标架构，当前跨进程延续依据是 PostgreSQL 中的 Repository 状态。
+
+context refill、action result 和 human feedback 必须使用已鉴权 Principal 的租户/店铺 scope 校验原决策；Connector Token 始终强制该边界，不能信任 payload 中可选的 tenant/store 字段。全局 external API Token 是平台级凭据，不作为租户隔离证明。
 
 实时性上下文采用“最近有效快照”规则：同一连续聊天里出现多个商品、订单、规则或会话摘要时，Context Builder 以当前消息显式引用为优先，其次按外部业务更新时间选择最近有效项。订单优先看订单状态更新时间、物流更新时间、支付时间；商品优先看商品更新时间、SKU 或活动更新时间；规则优先看 `effective_at` 或版本生效时间；缺失这些时间时使用 Agent 接收请求时的 `captured_at`。被替换的旧上下文不删除，只作为历史快照保留，用于回放和审计。
 
@@ -396,7 +398,7 @@ POST /v1/reply-decisions/{decision_id}/actions/results
 }
 ```
 
-服务端用 `decision_id + context_request_id + idempotency_key` 做幂等和聚合。若内部使用 LangGraph，回填接口应恢复同一个 graph `thread_id`，并写入 `decision_graph_checkpoint` 或等价 checkpointer。总等待预算最高 5 秒；超过预算仍缺关键上下文时，Agent 返回 `candidate` 或 `handoff`，不能继续阻塞客服界面。trace 必须记录每个补充请求、回填接口、LangGraph 节点、耗时、成功/失败、是否超时和最终是否降级。
+服务端用 `decision_id + context_request_id + idempotency_key` 做幂等和聚合；完成后的相同重试返回已持久化结果，不同 payload 返回 409。当前回填接口从 Repository 的 latest `DecisionState` 重构输入，以同一 graph `thread_id` 重新 invoke；每次运行的临时 native checkpoint ID 只用于 trace 诊断。总等待预算最高 5 秒；超过预算仍缺关键上下文时，Agent 返回 `candidate` 或 `handoff`，不能继续阻塞客服界面。trace 必须记录每个补充请求、回填接口、LangGraph 节点、耗时、成功/失败、是否超时和最终是否降级。
 
 ### 动作请求和执行结果
 
@@ -607,7 +609,7 @@ GET /v1/product-content/products/{product_id}/health
 - 外部动作请求必须带 `idempotency_key`，外部系统回调执行结果时也要回传 `action_id`，避免重复备注、重复改地址等副作用。
 - Webhook / callback 必须支持签名校验、超时、重试和失败降级；没有成功结果前，Agent 不能向买家确认动作已完成。
 - 补上下文回填必须带 `context_request_id` 和 `idempotency_key`；服务端以 `decision_id + context_request_id + idempotency_key` 聚合和去重。
-- LangGraph checkpoint、Admin session、补上下文聚合状态都必须使用外部持久化存储，不能依赖单 API 实例内存。
+- Admin session、补上下文聚合状态和 Repository `DecisionState` 必须使用外部持久化存储，不能依赖单 API 实例内存；当前 LangGraph native `InMemorySaver` 仅存在于单次 invoke，外部持久化 native checkpointer 是后续目标架构。
 - 单次问答等待预算最高 5 秒；超时仍缺关键上下文时返回 `candidate` 或 `handoff`，并在 trace 中记录降级原因。
 - `GET /v1/message-traces/{decision_id}` 面向内部客服运营、技术排障和系统审计，不直接暴露给买家。
 

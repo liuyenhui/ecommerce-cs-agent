@@ -6,7 +6,8 @@
 
 ### 2026-07-10
 
-- 决策 checkpoint 文档与当前实现对齐：LangGraph `InMemorySaver` 的 native checkpoint ID 只用于单进程运行诊断；跨进程重算以 Repository 持久化的决策与上下文状态为依据，`resumed_from_checkpoint=true` 表示重构输入后以同一 `decision_id/thread_id` 重算，不表示从 native snapshot 原生恢复。
+- 决策延续边界收紧：context refill、action result、human feedback 均使用已鉴权 Connector Principal scope 校验原决策租户/店铺；LangGraph `InMemorySaver` 改为每次 invoke 临时诊断对象，不在长期服务实例累积 thread。
+- 决策 checkpoint 文档与当前实现对齐：LangGraph `InMemorySaver` 的 native checkpoint ID 只用于单次运行诊断；跨进程重算以 Repository 持久化的决策与上下文状态为依据，`resumed_from_checkpoint=true` 表示重构输入后以同一 `decision_id/thread_id` 重算，不表示从 native snapshot 原生恢复。
 - 新增 [第一版需求测试矩阵](requirements-test-matrix.md)，作为 Development Readiness“第一版必须实现”需求到正向、拒绝、自动化与线上证据的测试案例覆盖入口。
 - 新增 [需求测试、AI 工作流与宣传页收口设计](superpowers/specs/2026-07-10-requirements-workflow-and-landing-closure-design.md)：第一版后续工作按需求到测试矩阵、Customer Admin 首次模拟咨询与业务化决策回放、公开页“流程故事”真实产品证明、桌面/移动验收和 GitOps 线上闭环推进；现有 LangGraph 条件分支、checkpointer、auto reply 与 X6 回放未提交改动纳入同一实现范围。
 

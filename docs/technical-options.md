@@ -132,9 +132,10 @@ LangGraph 不作为对外 API 边界。外部系统仍只接入 `POST /v1/reply-
 推荐用 LangGraph 承载：
 
 - `decision_id` 到 graph `thread_id` 的状态恢复。
-- `context_requests[]` 等待和 `/contexts/*` 回填后的 resume。
-- `action_request` 等待和 `/actions/results` 回传后的 resume。
-- 高风险回复、动作执行前确认等 human-in-the-loop interrupt。
+- 当前实现：每次 LangGraph invoke 临时创建 `InMemorySaver` 生成单次运行诊断 checkpoint ID；context refill 从 Repository latest `DecisionState` 重构输入后以同一 thread_id 重算。
+- 目标架构：`context_requests[]` 等待和 `/contexts/*` 回填后的 native resume。
+- 目标架构：`action_request` 等待和 `/actions/results` 回传后的 native resume。
+- 目标架构：高风险回复、动作执行前确认等 human-in-the-loop interrupt，并使用 PostgreSQL/Redis 等外部持久化 LangGraph checkpointer。
 - 意图、风险、RAG、生成、规则闸门等节点级 trace。
 - 后续多模型、多平台、多上下文类型扩展。
 

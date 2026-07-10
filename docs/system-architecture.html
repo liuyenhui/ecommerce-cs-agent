@@ -1475,7 +1475,7 @@
         {
           title: '数据、协议与部署',
           cards: [
-            ['PostgreSQL 16+', 'JSONB 保存商品资料版本、上下文快照、trace、持久化决策上下文和规则条件，pgvector 保存向量；LangGraph native checkpoint ID 当前只用于单进程诊断。'],
+            ['PostgreSQL 16+', 'JSONB 保存商品资料版本、上下文快照、trace、持久化决策上下文和规则条件，pgvector 保存向量；LangGraph native checkpoint ID 当前只用于单次运行诊断。'],
             ['HTTP/JSON 接入', 'OpenAPI 描述同步接口，Webhook 和轮询用于后续异步任务与结果回传。'],
             ['k8s 无状态', 'Agent 服务容器无状态运行，持久化交给 PostgreSQL 和对象存储。'],
             ['dev 真实拓扑', '公网域名先进入 ai-agent Traefik / FRPS，再通过 K3s frp-system/bpg-frpc 的 cs-agent-dev-http HTTP vhost 进入 ecommerce-cs-agent-dev namespace。'],
@@ -1496,7 +1496,7 @@
       matrix: [
         ['编程语言', 'Python 3.12', '后端 Agent 服务主语言，便于 FastAPI、Pydantic 和 AI/RAG 生态集成。'],
         ['服务框架', 'FastAPI + Pydantic v2', '定义 HTTP API、请求响应 schema、OpenAPI 文档和结构化校验。'],
-        ['Agent 编排', 'LangGraph StateGraph + InMemorySaver', '内部表达决策状态、真实条件边和节点级 trace；native checkpoint ID 只用于当前进程诊断，不作为跨 Pod 恢复依据。'],
+        ['Agent 编排', 'LangGraph StateGraph + run-scoped InMemorySaver', '内部表达决策状态、真实条件边和节点级 trace；每次 invoke 临时创建 saver/compiled graph，native checkpoint ID 只用于该次运行诊断。'],
         ['数据库', 'PostgreSQL 16+ / JSONB / pgvector', '业务主库、商品资料、价格快照、上下文快照、持久化决策上下文、决策 trace、知识库和向量召回统一落库，供重算与跨进程恢复。'],
         ['ORM / 迁移', 'SQLAlchemy + Alembic', '管理表结构、索引、JSONB 字段和后续版本迁移。'],
         ['接入协议', 'HTTP/JSON / Webhook / Polling', '第一版同步决策，后续支持异步事件、任务查询和回调。'],
@@ -1521,6 +1521,7 @@
         '系统 Admin 后台属于平台内部入口，使用独立 host、登录页、Cookie、路由守卫和 /v1/system-admin/* 鉴权域；不得伪装客户用户调用客户 Admin API。',
         'Customer Admin 只使用 admin.ecommerce-cs-agent-dev.fcihome.com、agent_admin_session 和 /v1/admin/auth/me；System Admin 只使用 system-admin.ecommerce-cs-agent-dev.fcihome.com、agent_system_admin_session 和 /v1/system-admin/auth/me。',
         'open_erp_agent compose 与 Chatwoot / Feishu K3s 是外部系统或相邻运行时，只能通过 HTTP API 接入，不作为默认身份源、不共享 Cookie/session、不跨库。',
+        'context refill、action result 和 human feedback 使用已鉴权 Connector Principal scope 校验原决策租户/店铺；不能信任 payload 中可选的 scope 字段。',
         'Agent 只输出 candidate、auto_reply、handoff、context_request 或 action_request。',
         '人工最终回复和商品资料 Markdown 都不会自动进入知识库，必须经过知识片段候选和 Admin 审核。',
         '价格回答以外部系统当前有效价格快照为权威，ERP、平台或其他业务系统都只是来源示例。',
@@ -1528,7 +1529,7 @@
       ],
       principles: [
         '第一版优先同步 HTTP 接入，外部系统提交最小问答请求，缺商品、订单、物流或规则时按类型回填。',
-        '内部 Decision Orchestrator 采用 LangGraph 状态图，decision_id 映射 graph thread_id；当前 native checkpointer 为进程内 InMemorySaver，跨进程重算依据是 Repository 写入外部存储的决策与上下文状态。',
+        '内部 Decision Orchestrator 采用 LangGraph 状态图，decision_id 映射 graph thread_id；每次 invoke 临时创建 InMemorySaver 和 compiled graph，跨进程重算依据是 Repository 写入外部存储的决策与上下文状态。',
         '公开宣传页只作为产品介绍和登录入口；客户后台 /admin 由 agent_admin_session 校验，系统后台由 agent_system_admin_session 校验。',
         '宣传页由 Notion 主导：黑白中性基调、大留白、AI Agent 叙事、产品能力模块、可信背书、产品预览和黑色主 CTA；Admin 不做 Notion 化，仍按 IBM / Carbon 企业后台规则设计。',
         'dev 排障顺序按公网 Host rule、FRPS / bpg-frpc customDomains、Ingress / TLS、Service / Pod、Secret / PostgreSQL / MinIO 逐层收敛。',
@@ -2339,7 +2340,7 @@
       decision: {
         title: '决策机制',
         summary: '展示 LangGraph 状态图中的上下文完整性、风险识别、知识召回、候选生成、动作规划、置信度评分和规则闸门。',
-        description: '决策不能依赖模型自评。LangGraph 负责编排节点、真实条件边和 trace；当前 InMemorySaver 的 checkpoint ID 只用于进程内诊断，模型可以生成候选和辅助分类，但自动回复必须被规则闸门放行，且高风险规则优先级高于置信度。',
+        description: '决策不能依赖模型自评。LangGraph 负责编排节点、真实条件边和 trace；当前每次 invoke 临时创建 InMemorySaver，其 checkpoint ID 只用于单次运行诊断，模型可以生成候选和辅助分类，但自动回复必须被规则闸门放行，且高风险规则优先级高于置信度。',
         points: [
           'decision_id 映射 LangGraph thread_id；补上下文从 Repository 持久化状态重构同一决策输入后重算，动作结果写回同一持久化决策记录。',
           'P0 风险包括投诉升级、赔付承诺、退款争议、平台处罚和辱骂威胁。',
@@ -2361,7 +2362,7 @@
         description: '数据资产不只是问答文本。系统必须保存商品资料版本、Markdown 审稿稿件、价格快照、上下文快照、决策 trace、持久化决策上下文、外部动作请求与结果、人工最终回复、编辑差异和处理结果；人工回复和商品资料 Markdown 都只能进入待审核知识候选，不能自动进入知识库或向量库。',
         points: [
           'decision_record.trace 保存规则命中、知识来源、商品资料版本、价格快照、模型版本、缺失上下文和 selected_snapshot_refs。',
-          'decision_graph_checkpoint 当前由 Repository 保存 latest DecisionState（请求、响应、context refills、action results、feedback），是重算和跨进程读取依据；它不是 InMemorySaver native snapshot，当前也不支持基于 get_state 的原生 interrupt/resume。',
+          'decision_graph_checkpoint 当前由 Repository 保存 latest DecisionState（请求、响应、context refills、action results、feedback），是重算和跨进程读取依据；它不是 run-scoped InMemorySaver native snapshot，当前也不支持跨调用的原生 interrupt/resume。',
           'product_master / product_sku / listing / product_asset 记录客户后台维护的商品主资料、SKU、销售实例和原始资产。',
           'product_asset_markdown 是可读审稿稿件，不直接作为自动回复知识源。',
           'product_knowledge_candidate 是从 Markdown 抽取的待审核知识片段，批准后才进入 knowledge_entry。',

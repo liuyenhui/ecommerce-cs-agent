@@ -140,7 +140,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             payload = await request.json()
             _require_fields(payload, ["context_request_id"])
             try:
-                response = decisions.refill_context(decision_id, context_type, payload)
+                response = decisions.refill_context(
+                    decision_id,
+                    context_type,
+                    payload,
+                    principal_organization_id=_principal.organization_id,
+                    principal_store_id=_principal.store_id,
+                )
             except PermissionError as exc:
                 raise api_error(403, "forbidden", str(exc)) from exc
             except FileExistsError as exc:

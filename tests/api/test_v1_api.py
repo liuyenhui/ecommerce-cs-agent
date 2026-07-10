@@ -372,6 +372,11 @@ def test_action_result_rejects_unknown_action_and_idempotency_conflict():
         headers=auth_headers(),
         json={**payload, "action_id": "action-unknown"},
     )
+    wrong_action_type = api.post(
+        f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
+        headers=auth_headers(),
+        json={**payload, "action_type": "change-address", "idempotency_key": "wrong-action-type"},
+    )
     first = api.post(
         f"/v1/reply-decisions/{decision['decision_id']}/actions/results",
         headers=auth_headers(),
@@ -384,6 +389,7 @@ def test_action_result_rejects_unknown_action_and_idempotency_conflict():
     )
 
     assert unknown_action.status_code == 422
+    assert wrong_action_type.status_code == 422
     assert first.status_code == 200
     assert conflict.status_code == 409
 

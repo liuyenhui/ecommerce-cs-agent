@@ -220,6 +220,24 @@ class OpenApiContractTest(unittest.TestCase):
 
         self.assertEqual(failures, [], "\n".join(failures))
 
+    def test_decision_continuation_routes_document_trusted_scope_forbidden_response(self):
+        paths = self.document["paths"]
+        continuation_paths = [
+            "/v1/reply-decisions/{decision_id}/contexts/products",
+            "/v1/reply-decisions/{decision_id}/contexts/orders",
+            "/v1/reply-decisions/{decision_id}/contexts/logistics",
+            "/v1/reply-decisions/{decision_id}/contexts/rules",
+            "/v1/reply-decisions/{decision_id}/actions/results",
+            "/v1/feedback/human-replies",
+        ]
+
+        for path in continuation_paths:
+            self.assertEqual(
+                paths[path]["post"]["responses"]["403"]["$ref"],
+                "#/components/responses/Forbidden",
+                path,
+            )
+
     def test_product_asset_declares_object_storage_unavailable_response(self):
         responses = self.document["paths"]["/v1/product-content/assets"]["post"]["responses"]
 

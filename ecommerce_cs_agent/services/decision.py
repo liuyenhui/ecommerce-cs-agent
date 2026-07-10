@@ -48,7 +48,15 @@ class DecisionService:
         self._save_state(organization_id, store_id, request_id, decision_id, state)
         return response
 
-    def refill_context(self, decision_id: str, context_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    def refill_context(
+        self,
+        decision_id: str,
+        context_type: str,
+        payload: dict[str, Any],
+        *,
+        principal_organization_id: str | None = None,
+        principal_store_id: str | None = None,
+    ) -> dict[str, Any] | None:
         state = self.repository.get_by_decision_id(decision_id)
         if not state:
             return {
@@ -67,59 +75,66 @@ class DecisionService:
                 ),
             }
         organization_id, store_id, request_id = _request_key(state.request)
+        principal_scope = {
+            "organization_id": principal_organization_id,
+            "store_id": principal_store_id,
+        }
+        if any(principal_scope.values()) and not self._same_tenant_store(state, principal_scope):
+            raise PermissionError("context refill principal does not belong to the decision tenant/store")
         if ("organization_id" in payload or "store_id" in payload) and not self._same_tenant_store(state, payload):
             raise PermissionError("context refill does not belong to the decision tenant/store")
-        known_request_ids = {item["context_request_id"] for item in state.response.get("context_requests", [])}
         context_request_id = str(payload.get("context_request_id", ""))
-        if context_request_id not in known_request_ids:
-            raise ValueError("context_request_id does not belong to this decision")
         idempotency_key = str(payload.get("idempotency_key", context_request_id))
         key = (context_request_id, idempotency_key)
         existing = state.context_refills.get(key)
         comparable = {k: v for k, v in payload.items() if k != "source"}
         if existing and existing.get("_request_payload") != comparable:
             raise FileExistsError("idempotency conflict")
-        if not existing:
-            accepted_request_ids = {
-                existing_payload.get("context_request_id")
-                for existing_payload in state.context_refills.values()
-            }
-            accepted_request_ids.add(context_request_id)
-            remaining = [
-                item
-                for item in state.response.get("context_requests", [])
-                if item.get("context_request_id") not in accepted_request_ids
-            ]
-            accepted = {
-                "decision_id": decision_id,
-                "context_request_id": context_request_id,
-                "decision_status": "partial_context" if remaining else "ready_to_decide",
-                "accepted": True,
-                "remaining_context_requests": [
-                    {"context_request_id": item["context_request_id"], "type": item["type"], "status": "pending"}
-                    for item in remaining
-                ],
-                "next_action": "wait_context" if remaining else "decide",
-                "trace": self._trace(
-                    "context_refill",
-                    "上下文回填",
-                    outputs_ref=[f"context:{context_type}:{context_request_id}"],
-                    thread_id=decision_id,
-                ),
-            }
-            state.context_refills[key] = {**accepted, "_request_payload": comparable, "_context_type": context_type}
-            if not remaining:
-                updated_request = _request_with_refill_contexts(state.request, state.context_refills)
-                final_response = self._build_response(
-                    decision_id,
-                    updated_request,
-                    str(updated_request.get("message", {}).get("content", "")),
-                    resumed_from_checkpoint=True,
-                )
-                state.request = updated_request
-                state.response = final_response
-                state.context_refills[key] = {**final_response, "_request_payload": comparable}
-            self._save_state(organization_id, store_id, request_id, decision_id, state)
+        if existing:
+            return _public(existing)
+        known_request_ids = {item["context_request_id"] for item in state.response.get("context_requests", [])}
+        if context_request_id not in known_request_ids:
+            raise ValueError("context_request_id does not belong to this decision")
+        accepted_request_ids = {
+            existing_payload.get("context_request_id")
+            for existing_payload in state.context_refills.values()
+        }
+        accepted_request_ids.add(context_request_id)
+        remaining = [
+            item
+            for item in state.response.get("context_requests", [])
+            if item.get("context_request_id") not in accepted_request_ids
+        ]
+        accepted = {
+            "decision_id": decision_id,
+            "context_request_id": context_request_id,
+            "decision_status": "partial_context" if remaining else "ready_to_decide",
+            "accepted": True,
+            "remaining_context_requests": [
+                {"context_request_id": item["context_request_id"], "type": item["type"], "status": "pending"}
+                for item in remaining
+            ],
+            "next_action": "wait_context" if remaining else "decide",
+            "trace": self._trace(
+                "context_refill",
+                "上下文回填",
+                outputs_ref=[f"context:{context_type}:{context_request_id}"],
+                thread_id=decision_id,
+            ),
+        }
+        state.context_refills[key] = {**accepted, "_request_payload": comparable, "_context_type": context_type}
+        if not remaining:
+            updated_request = _request_with_refill_contexts(state.request, state.context_refills)
+            final_response = self._build_response(
+                decision_id,
+                updated_request,
+                str(updated_request.get("message", {}).get("content", "")),
+                resumed_from_checkpoint=True,
+            )
+            state.request = updated_request
+            state.response = final_response
+            state.context_refills[key] = {**final_response, "_request_payload": comparable}
+        self._save_state(organization_id, store_id, request_id, decision_id, state)
         return _public(state.context_refills[key])
 
     def submit_action_result(
@@ -146,9 +161,14 @@ class DecisionService:
         if declares_scope and not self._same_tenant_store(state, payload):
             raise PermissionError("action result does not belong to the decision tenant/store")
         action_id = str(payload.get("action_id", ""))
-        known_action_ids = {item["action_id"] for item in state.response.get("action_requests", [])}
-        if action_id not in known_action_ids:
+        planned_action = next(
+            (item for item in state.response.get("action_requests", []) if item.get("action_id") == action_id),
+            None,
+        )
+        if planned_action is None:
             raise ValueError("action_id does not belong to this decision")
+        if payload.get("action_type") != planned_action.get("action_type"):
+            raise ValueError("action_type does not match the planned action")
         idempotency_key = str(payload.get("idempotency_key", action_id))
         key = (action_id, idempotency_key)
         existing = state.action_results.get(key)
