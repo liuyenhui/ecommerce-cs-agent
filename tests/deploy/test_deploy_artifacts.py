@@ -218,6 +218,12 @@ def test_codeql_gate_counts_security_results_not_quality_findings() -> None:
     assert "[.runs[].results[]?] | length" not in workflow
 
 
+def test_api_image_installs_decision_graph_runtime_dependency() -> None:
+    dockerfile = Path("Dockerfile.api").read_text(encoding="utf-8")
+
+    assert '"langgraph>=1.2,<2"' in dockerfile
+
+
 def test_k8s_security_check_script_is_available() -> None:
     script = Path("scripts/check_k8s_security.py").read_text(encoding="utf-8")
 
