@@ -49,6 +49,7 @@ export function SimulationComposer({
         模拟客户咨询
         <textarea
           value={value}
+          disabled={loading}
           onChange={(event) => change(event.target.value)}
           placeholder="例如：这款商品有哪些尺寸，什么时候可以发货？"
           aria-describedby={visibleError ? "simulation-composer-error" : undefined}

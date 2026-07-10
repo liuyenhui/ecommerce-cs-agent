@@ -1066,12 +1066,19 @@ tbody tr:hover {
 }
 
 .traceGraphFallback {
-  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   border: 1px solid #fbbf24;
   border-radius: 6px;
   background: #fffbeb;
   padding: 9px 10px;
   color: #92400e;
+}
+
+.traceGraphFallback button {
+  flex: 0 0 auto;
 }
 
 .traceReplayMeta {
@@ -1146,6 +1153,28 @@ tbody tr:hover {
 
 .traceNodeDetail h3 {
   margin: 0;
+}
+
+.traceNodeStatus {
+  margin: 0;
+  color: #475569;
+  font-weight: 720;
+}
+
+.traceNodeTechnicalDetails {
+  border-top: 1px solid #d8dee8;
+  padding-top: 8px;
+}
+
+.traceNodeTechnicalDetails summary {
+  cursor: pointer;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.traceNodeTechnicalDetails[open] summary {
+  margin-bottom: 10px;
 }
 
 .traceNodeDetail dl {

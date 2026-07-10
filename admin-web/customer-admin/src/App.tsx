@@ -38,7 +38,12 @@ import { DecisionTraceReplay } from "../../shared/trace-replay";
 import { presentDecisionTrace } from "../../shared/trace-presentation";
 import type { JsonRecord, NavItem, Page, ToastState } from "../../shared/types";
 import { SimulationComposer } from "./SimulationComposer";
-import { requireReloadedSimulation } from "./simulation-workflow";
+import {
+  buildCanonicalSimulationTrace,
+  isCurrentOperation,
+  requireReloadedSimulation,
+  type OperationToken
+} from "./simulation-workflow";
 
 type CustomerTab = "overview" | "messages" | "products" | "knowledge" | "audit";
 
@@ -567,32 +572,79 @@ function MessageHistory({ storeId, setToast, setSelected }: {
   const [selectedTrace, setSelectedTrace] = React.useState<CustomerTrace | null>(null);
   const [selectedConversationId, setSelectedConversationId] = React.useState("");
   const [searchText, setSearchText] = React.useState("");
+  const currentStoreRef = React.useRef(storeId);
+  const generationRef = React.useRef(0);
+  const loadRequestRef = React.useRef(0);
+  const simulationRequestRef = React.useRef(0);
+  const mountedRef = React.useRef(true);
 
   const conversations = React.useMemo(() => buildCustomerConversations(rows, searchText), [rows, searchText]);
   const selectedConversation = conversations.find((conversation) => conversation.id === selectedConversationId) || conversations[0] || null;
 
-  async function load(source = "", options: { reportError?: boolean; throwOnError?: boolean } = {}) {
-    setLoading(true);
+  function operationIsCurrent(operation: OperationToken, currentRequestId: number) {
+    return isCurrentOperation(
+      operation,
+      currentStoreRef.current,
+      generationRef.current,
+      currentRequestId,
+      mountedRef.current
+    );
+  }
+
+  async function load(
+    source = "",
+    options: { reportError?: boolean; throwOnError?: boolean } = {},
+    operationStoreId = currentStoreRef.current,
+    operationGeneration = generationRef.current
+  ) {
+    const operation: OperationToken = {
+      storeId: operationStoreId,
+      generation: operationGeneration,
+      requestId: ++loadRequestRef.current
+    };
+    if (operationIsCurrent(operation, loadRequestRef.current)) setLoading(true);
     try {
-      const query = new URLSearchParams({ store_id: storeId });
+      const query = new URLSearchParams({ store_id: operation.storeId });
       if (source) query.set("source", source);
       const response = await requestJson<Page>(`/v1/admin/message-traces?${query.toString()}`);
       const loadedRows = arrayFrom(response.items) as CustomerTrace[];
+      if (!operationIsCurrent(operation, loadRequestRef.current)) return [];
       setRows(loadedRows);
       return loadedRows;
     } catch (error) {
+      if (!operationIsCurrent(operation, loadRequestRef.current)) return [];
       if (options.reportError !== false) {
         setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) });
       }
       if (options.throwOnError) throw error;
       return [];
     } finally {
-      setLoading(false);
+      if (operationIsCurrent(operation, loadRequestRef.current)) setLoading(false);
     }
   }
 
-  React.useEffect(() => {
-    void load();
+  React.useLayoutEffect(() => {
+    mountedRef.current = true;
+    if (currentStoreRef.current !== storeId) {
+      currentStoreRef.current = storeId;
+      generationRef.current += 1;
+      loadRequestRef.current += 1;
+      simulationRequestRef.current += 1;
+    }
+    setRows([]);
+    setQuestion("");
+    setSearchText("");
+    setSelectedConversationId("");
+    setSelectedTrace(null);
+    setSimulationError(null);
+    setSimulationLoading(false);
+    void load("", {}, storeId, generationRef.current);
+    return () => {
+      mountedRef.current = false;
+      generationRef.current += 1;
+      loadRequestRef.current += 1;
+      simulationRequestRef.current += 1;
+    };
   }, [storeId]);
 
   React.useEffect(() => {
@@ -608,40 +660,37 @@ function MessageHistory({ storeId, setToast, setSelected }: {
   async function simulate() {
     const content = question.trim();
     if (!content || simulationLoading) return;
+    const operation: OperationToken = {
+      storeId: currentStoreRef.current,
+      generation: generationRef.current,
+      requestId: ++simulationRequestRef.current
+    };
     setSimulationLoading(true);
     setSimulationError(null);
     try {
       const response = await requestJson<JsonRecord>("/v1/admin/message-simulations", {
         method: "POST",
-        body: JSON.stringify({ store_id: storeId, platform: "pdd", message: { content } })
+        body: JSON.stringify({ store_id: operation.storeId, platform: "pdd", message: { content } })
       });
+      if (!operationIsCurrent(operation, simulationRequestRef.current)) return;
       const decision = readRecord(response, "decision");
-      const newTrace: CustomerTrace = {
-        decision_id: String(decision.decision_id || ""),
-        source: "simulation",
-        customer_message: content,
-        ai_reply: firstCandidateText(decision),
-        conversation_id: String(readRecord(decision, "request").conversation_id || decision.conversation_id || decision.decision_id || ""),
-        action: String(decision.action || ""),
-        status: String(decision.decision_status || ""),
-        risk_level: String(decision.risk_level || ""),
-        missing_context: decision.missing_context,
-        trace: readRecord(decision, "trace")
-      };
+      const decisionId = String(decision.decision_id || "");
       const createdTrace = await requireReloadedSimulation(
-        load("", { reportError: false, throwOnError: true }),
-        String(newTrace.decision_id || "")
+        () => load("", { reportError: false, throwOnError: true }, operation.storeId, operation.generation),
+        decisionId
       );
-      const selectedResult = { ...createdTrace, ...newTrace, conversation_id: createdTrace.conversation_id };
+      if (!operationIsCurrent(operation, simulationRequestRef.current)) return;
       setSearchText("");
-      setSelectedConversationId(String(selectedResult.conversation_id || selectedResult.decision_id || ""));
-      setSelectedTrace(selectedResult);
+      setSelectedConversationId(String(createdTrace.conversation_id || createdTrace.decision_id || ""));
+      setSelectedTrace(buildCanonicalSimulationTrace(createdTrace, content));
       setQuestion("");
       setToast({ tone: "success", text: "模拟决策已完成" });
     } catch (error) {
-      setSimulationError(error instanceof Error ? error.message : String(error));
+      if (operationIsCurrent(operation, simulationRequestRef.current)) {
+        setSimulationError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      setSimulationLoading(false);
+      if (operationIsCurrent(operation, simulationRequestRef.current)) setSimulationLoading(false);
     }
   }
 

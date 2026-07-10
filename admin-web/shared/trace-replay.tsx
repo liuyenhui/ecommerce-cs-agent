@@ -1,5 +1,7 @@
 import React from "react";
 import { readRecord } from "./data";
+import { applySelectedNodeStyles } from "./trace-graph-selection";
+import { reduceGraphUiState } from "./trace-graph-state";
 import { presentDecisionTrace } from "./trace-presentation";
 import type { JsonRecord } from "./types";
 
@@ -55,15 +57,23 @@ const knownLayout: Record<string, { x: number; y: number; width?: number; height
 };
 
 const statusLabel: Record<string, string> = {
+  received: "已接收",
+  queued: "等待处理",
   completed: "已完成",
-  running: "运行中",
-  failed: "失败",
+  running: "处理中",
+  failed: "处理失败",
+  retrying: "正在重试",
+  canceled: "已取消",
+  waiting_context: "等待补充资料",
+  partial_context: "资料待补齐",
+  ready_to_decide: "准备决策",
+  candidate: "建议回复待确认",
   skipped: "未走此分支",
   pending: "等待中",
-  action_request: "等待动作",
-  context_request: "缺少上下文",
-  handoff: "转人工",
-  answer_ready: "可回复"
+  action_request: "等待外部操作",
+  context_request: "等待补充资料",
+  handoff: "转人工处理",
+  answer_ready: "可以安全回复"
 };
 
 const nodeToneStyle = {
@@ -93,21 +103,32 @@ export function DecisionTraceReplay({ trace, action, status, risk, missingContex
   const rawStatus = String(status || action || "");
   const currentNodeId = findCurrentNodeId(graphData, presentation.currentNodeId, rawStatus);
   const blocker = describeBlocker(graphData, rawStatus, currentNodeId);
-  const [graphUnavailable, setGraphUnavailable] = React.useState(false);
-  const handleGraphUnavailable = React.useCallback(() => setGraphUnavailable(true), []);
-  const handleGraphAvailable = React.useCallback(() => setGraphUnavailable(false), []);
+  const [graphUi, dispatchGraphUi] = React.useReducer(reduceGraphUiState, { unavailable: false, retryKey: 0 });
+  const graphUnavailable = graphUi.unavailable;
+  const retryKey = graphUi.retryKey;
+  const handleGraphUnavailable = React.useCallback(() => dispatchGraphUi({ type: "failed" }), []);
+  const handleGraphAvailable = React.useCallback(() => dispatchGraphUi({ type: "available" }), []);
   const [selectedNodeId, setSelectedNodeId] = React.useState(() => currentNodeId || graphData.nodes[0]?.id || "");
+  const latestSelectionRef = React.useRef(selectedNodeId);
+  const handleSelectNode = React.useCallback((nodeId: string) => {
+    latestSelectionRef.current = nodeId;
+    setSelectedNodeId(nodeId);
+  }, []);
   const selectedNode = graphData.nodes.find((node) => node.id === selectedNodeId) || graphData.nodes.find((node) => node.id === currentNodeId) || graphData.nodes[0] || null;
 
   React.useEffect(() => {
     if (!graphData.nodes.some((node) => node.id === selectedNodeId)) {
-      setSelectedNodeId(currentNodeId || graphData.nodes[0]?.id || "");
+      handleSelectNode(currentNodeId || graphData.nodes[0]?.id || "");
     }
-  }, [graphData.nodes, currentNodeId, selectedNodeId]);
+  }, [graphData.nodes, currentNodeId, selectedNodeId, handleSelectNode]);
 
   React.useEffect(() => {
-    setGraphUnavailable(false);
+    dispatchGraphUi({ type: "reset" });
   }, [trace]);
+
+  function retryGraph() {
+    dispatchGraphUi({ type: "retry" });
+  }
 
   return (
     <section className="traceReplay" aria-label="LangGraph 单条消息运行回放">
@@ -124,24 +145,32 @@ export function DecisionTraceReplay({ trace, action, status, risk, missingContex
           <span>status: {rawStatus || "-"}</span>
         </div>
       </details>
-      {graphUnavailable ? <p className="traceGraphFallback" role="status">流程图暂时无法显示，请查看下方节点时间线。</p> : null}
+      {graphUnavailable ? (
+        <div className="traceGraphFallback" role="status">
+          <span>流程图暂时无法显示，请查看下方节点时间线。</span>
+          <button type="button" onClick={retryGraph}>重试流程图</button>
+        </div>
+      ) : null}
       <DecisionFlowGraph
         graphData={graphData}
         status={rawStatus}
         selectedNodeId={selectedNode?.id || ""}
         currentNodeId={currentNodeId}
         blocker={blocker}
-        onSelect={setSelectedNodeId}
+        onSelect={handleSelectNode}
         onUnavailable={handleGraphUnavailable}
         onAvailable={handleGraphAvailable}
+        latestSelectionRef={latestSelectionRef}
+        retryKey={retryKey}
+        hidden={graphUnavailable}
       />
       <ol className="traceTimeline" aria-label="节点时间线">
         {graphData.nodes.map((node) => {
           const nodeBlocker = describeNodeBlocker(node, rawStatus);
           return (
             <li key={node.id} className={node.id === selectedNode?.id ? "active" : ""}>
-              <button type="button" onClick={() => setSelectedNodeId(node.id)}>
-                <strong title={node.label || node.id}>{businessNodeLabel(node.id, node.label)}</strong>
+              <button type="button" onClick={() => handleSelectNode(node.id)}>
+                <strong title={node.label || node.id}>{businessNodeLabel(node.id)}</strong>
                 <span title={String(node.status || "completed")}>{nodeBlocker || statusLabel[String(node.status || "completed")] || String(node.status || "completed")}</span>
               </button>
             </li>
@@ -161,7 +190,10 @@ function DecisionFlowGraph({
   blocker,
   onSelect,
   onUnavailable,
-  onAvailable
+  onAvailable,
+  latestSelectionRef,
+  retryKey,
+  hidden
 }: {
   graphData: TraceGraph;
   status?: string;
@@ -171,6 +203,9 @@ function DecisionFlowGraph({
   onSelect: (nodeId: string) => void;
   onUnavailable: () => void;
   onAvailable: () => void;
+  latestSelectionRef: React.MutableRefObject<string>;
+  retryKey: number;
+  hidden: boolean;
 }) {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const graphRef = React.useRef<any>(null);
@@ -263,10 +298,10 @@ function DecisionFlowGraph({
           attrs: {
             body: {
               fill: style.fill,
-              stroke: item.node.id === selectedNodeId ? "#0f172a" : style.stroke,
-              strokeWidth: item.node.id === selectedNodeId ? 3 : 2
+              stroke: style.stroke,
+              strokeWidth: 2
             },
-            title: { text: businessNodeLabel(item.node.id, item.node.label), fill: style.title },
+            title: { text: businessNodeLabel(item.node.id), fill: style.title },
             status: { text: item.statusText, fill: style.text },
             note: { text: item.note, fill: style.text }
           }
@@ -324,9 +359,17 @@ function DecisionFlowGraph({
       activeGraph.on("node:click", ({ node }: { node?: { id?: string } }) => {
         if (node?.id) onSelect(String(node.id));
       });
+      applySelectedNodeStyles(
+        nodeViews.map((item) => ({ id: item.node.id, stroke: nodeToneStyle[item.tone].stroke })),
+        latestSelectionRef.current,
+        (id) => activeGraph.getCellById(id)
+      );
       activeGraph.centerContent();
       onAvailable();
     }).catch(() => {
+      graph?.dispose();
+      graph = null;
+      graphRef.current = null;
       if (!disposed) onUnavailable();
     });
     return () => {
@@ -334,46 +377,48 @@ function DecisionFlowGraph({
       graph?.dispose();
       if (graphRef.current === graph) graphRef.current = null;
     };
-  }, [graphData, status, currentNodeId, blocker, onSelect, onUnavailable, onAvailable]);
+  }, [graphData, status, currentNodeId, blocker, onSelect, onUnavailable, onAvailable, latestSelectionRef, retryKey]);
 
   React.useEffect(() => {
     const nodeViews = layoutGraphNodes(graphData, currentNodeId, status, blocker);
-    nodeViews.forEach((item) => {
-      const cell = graphRef.current?.getCellById(item.node.id);
-      if (!cell) return;
-      const style = nodeToneStyle[item.tone];
-      cell.attr("body/stroke", item.node.id === selectedNodeId ? "#0f172a" : style.stroke);
-      cell.attr("body/strokeWidth", item.node.id === selectedNodeId ? 3 : 2);
-    });
+    applySelectedNodeStyles(
+      nodeViews.map((item) => ({ id: item.node.id, stroke: nodeToneStyle[item.tone].stroke })),
+      selectedNodeId,
+      (id) => graphRef.current?.getCellById(id)
+    );
   }, [graphData, status, currentNodeId, blocker, selectedNodeId]);
 
-  return <div className="decisionGraph" ref={containerRef} aria-label="LangGraph 决策运行图" />;
+  return <div className="decisionGraph" ref={containerRef} aria-label="LangGraph 决策运行图" hidden={hidden} />;
 }
 
 function TraceNodeDetail({ node, status }: { node: TraceNode; status?: string }) {
   const blocker = describeNodeBlocker(node, status);
   return (
     <section className="traceNodeDetail">
-      <h3>{node.label || node.id}</h3>
+      <h3 title={node.label || node.id}>{businessNodeLabel(node.id)}</h3>
+      <p className="traceNodeStatus">{statusLabel[String(node.status || "completed")] || "状态未知"}</p>
       {blocker ? <p className="traceBlocker">卡点原因：{blocker}</p> : null}
-      <dl>
-        <div><dt>节点 ID</dt><dd>{node.id}</dd></div>
-        <div><dt>类型</dt><dd>{String(node.kind || "langgraph_node")}</dd></div>
-        <div><dt>状态</dt><dd>{statusLabel[String(node.status || "completed")] || String(node.status || "completed")}</dd></div>
-        <div><dt>开始</dt><dd>{String(node.started_at || "-")}</dd></div>
-        <div><dt>结束</dt><dd>{String(node.ended_at || "-")}</dd></div>
-      </dl>
-      <div className="traceRefs">
-        <div>
-          <strong>输入引用</strong>
-          <code>{JSON.stringify(node.inputs_ref || [])}</code>
+      <details className="traceNodeTechnicalDetails">
+        <summary>技术详情</summary>
+        <dl>
+          <div><dt>节点 ID</dt><dd>{node.id}</dd></div>
+          <div><dt>类型</dt><dd>{String(node.kind || "langgraph_node")}</dd></div>
+          <div><dt>原始状态</dt><dd>{String(node.status || "completed")}</dd></div>
+          <div><dt>开始</dt><dd>{String(node.started_at || "-")}</dd></div>
+          <div><dt>结束</dt><dd>{String(node.ended_at || "-")}</dd></div>
+        </dl>
+        <div className="traceRefs">
+          <div>
+            <strong>输入引用</strong>
+            <code>{JSON.stringify(node.inputs_ref || [])}</code>
+          </div>
+          <div>
+            <strong>输出引用</strong>
+            <code>{JSON.stringify(node.outputs_ref || [])}</code>
+          </div>
         </div>
-        <div>
-          <strong>输出引用</strong>
-          <code>{JSON.stringify(node.outputs_ref || [])}</code>
-        </div>
-      </div>
-      {node.error ? <p className="traceError">错误：{String(node.error)}</p> : null}
+        {node.error ? <p className="traceError">节点执行失败</p> : null}
+      </details>
     </section>
   );
 }
@@ -475,7 +520,7 @@ function describeBlocker(graphData: TraceGraph, status: string | undefined, curr
 }
 
 function describeNodeBlocker(node: TraceNode, status?: string) {
-  if (node.error) return String(node.error);
+  if (node.error) return "节点执行失败";
   const refs = refsArray(node.outputs_ref);
   const contextRequests = refs.filter((item) => item.startsWith("context_request:")).map((item) => item.split(":").slice(1).join(":")).filter(Boolean);
   if (contextRequests.length) return `等待补充上下文：${contextRequests.join("、")}`;
@@ -515,7 +560,7 @@ function inferMissingContext(graphData: TraceGraph) {
     .filter(Boolean);
 }
 
-function businessNodeLabel(nodeId: string, fallback?: string) {
+function businessNodeLabel(nodeId: string) {
   const labels: Record<string, string> = {
     normalize_request: "请求标准化",
     retrieve_context: "资料检索",
@@ -530,7 +575,7 @@ function businessNodeLabel(nodeId: string, fallback?: string) {
     handoff: "转人工处理",
     auto_reply: "安全自动回复"
   };
-  return labels[nodeId] || fallback || nodeId || "暂无运行节点";
+  return labels[nodeId] || (nodeId ? "流程节点" : "暂无运行节点");
 }
 
 function isRecord(value: unknown): value is JsonRecord {

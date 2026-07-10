@@ -128,10 +128,17 @@ test("customer message history reuses the simulation composer for existing and e
   assert.match(composer, /role="alert"/);
   assert.match(composer, /请输入模拟客户问题/);
   assert.match(composer, /disabled=\{loading\}/);
+  assert.match(composer, /textarea[\s\S]*disabled=\{loading\}/);
   assert.match(messageHistory, /setSearchText\(""\)/);
   assert.match(messageHistory, /const createdTrace = await requireReloadedSimulation\(/);
   assert.match(messageHistory, /reportError: false, throwOnError: true/);
   assert.doesNotMatch(messageHistory, /setRows\(\(current\) => \[newTrace, \.\.\.current\]\)/);
+  assert.match(messageHistory, /generationRef/);
+  assert.match(messageHistory, /currentStoreRef/);
+  assert.match(messageHistory, /mountedRef/);
+  assert.match(messageHistory, /return \(\) => \{[\s\S]*mountedRef\.current = false/);
+  assert.match(messageHistory, /isCurrentOperation/);
+  assert.match(messageHistory, /setSelectedTrace\(buildCanonicalSimulationTrace\(createdTrace, content\)\)/);
 });
 
 test("decision metrics preserve raw values as accessible titles", () => {

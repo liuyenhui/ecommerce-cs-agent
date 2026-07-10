@@ -220,48 +220,6 @@
   background: #ffffff;
 }
 
-.messageTraceDrawer {
-  width: min(980px, calc(100vw - 28px));
-}
-
-.traceSummary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 14px;
-}
-
-.traceTextBlock {
-  display: grid;
-  gap: 8px;
-  margin-bottom: 14px;
-  padding: 12px;
-  border: 1px solid #d8dee8;
-  border-radius: 6px;
-  background: #f8fafc;
-}
-
-.traceTextBlock h3 {
-  margin: 0;
-}
-
-.traceTextBlock p {
-  color: #334155;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.decisionGraph {
-  width: 100%;
-  min-height: 720px;
-  margin: 12px 0;
-  overflow: hidden;
-  border: 1px solid #d8dee8;
-  border-radius: 6px;
-  background: #020617;
-}
-
 .simulationError {
   margin: 0;
   color: #b91c1c;
@@ -279,10 +237,6 @@
 }
 
 @media (max-width: 720px) {
-  .decisionGraph {
-    display: none;
-  }
-
   .traceTimeline {
     min-width: 0;
   }
@@ -317,11 +271,4 @@
     width: 92%;
   }
 
-  .traceSummary {
-    grid-template-columns: 1fr;
-  }
-
-  .messageTraceDrawer {
-    width: calc(100vw - 18px);
-  }
 }

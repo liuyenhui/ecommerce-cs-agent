@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { presentDecisionTrace } from "./trace-presentation";
+import { decisionStatuses, presentDecisionTrace } from "./trace-presentation";
 
 describe("presentDecisionTrace", () => {
   it.each([
@@ -88,5 +88,45 @@ describe("presentDecisionTrace", () => {
       title: "等待补充资料",
       explanation: "缺少商品资料，补充后 AI 才能继续判断。"
     });
+  });
+
+  it("localizes a legacy action value passed through the status field", () => {
+    expect(presentDecisionTrace({ status: "context_request" })).toMatchObject({
+      statusLabel: "等待补充资料",
+      title: "等待补充资料"
+    });
+  });
+
+  it.each([
+    ["received", "已接收"],
+    ["queued", "等待处理"],
+    ["running", "处理中"],
+    ["waiting_context", "等待补充资料"],
+    ["partial_context", "资料待补齐"],
+    ["ready_to_decide", "准备决策"],
+    ["answer_ready", "可以安全回复"],
+    ["candidate", "建议回复待确认"],
+    ["action_request", "等待外部操作"],
+    ["handoff", "转人工处理"],
+    ["completed", "处理完成"],
+    ["failed", "处理失败"],
+    ["retrying", "正在重试"],
+    ["canceled", "已取消"]
+  ])("presents DecisionStatus %s as %s", (status, expectedTitle) => {
+    expect(presentDecisionTrace({ status })).toMatchObject({ title: expectedTitle, statusLabel: expectedTitle });
+  });
+
+  it("covers every OpenAPI DecisionStatus", () => {
+    expect(decisionStatuses).toHaveLength(14);
+  });
+
+  it.each([
+    ["failed", "candidate", "处理失败"],
+    ["canceled", "auto_reply", "已取消"],
+    ["retrying", "handoff", "正在重试"],
+    ["running", "candidate", "处理中"],
+    ["waiting_context", "candidate", "等待补充资料"]
+  ])("keeps status %s ahead of conflicting action %s", (status, action, expectedTitle) => {
+    expect(presentDecisionTrace({ status, action }).title).toBe(expectedTitle);
   });
 });
