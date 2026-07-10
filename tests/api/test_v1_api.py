@@ -375,6 +375,48 @@ def test_context_refill_rejects_payload_scope_aliases_for_platform_token():
 
 
 @pytest.mark.parametrize(
+    "scope",
+    [
+        {"tenant_id": "org-other"},
+        {"organization_id": "org-other"},
+        {"external_store_id": "store-other"},
+        {"store_id": "store-other"},
+        {"tenant_id": "org-001", "organization_id": "org-other"},
+        {"external_store_id": "store-001", "store_id": "store-other"},
+    ],
+    ids=[
+        "tenant-id-mismatch",
+        "organization-id-mismatch",
+        "external-store-id-mismatch",
+        "store-id-mismatch",
+        "tenant-alias-conflict",
+        "store-alias-conflict",
+    ],
+)
+def test_context_refill_rejects_each_declared_scope_alias_mismatch(scope: dict[str, str]):
+    api = client()
+    request_id = "req-scope-" + "-".join(scope)
+    decision = api.post(
+        "/v1/reply-decisions",
+        headers=auth_headers(),
+        json=minimal_reply_request(request_id),
+    ).json()
+
+    response = api.post(
+        f"/v1/reply-decisions/{decision['decision_id']}/contexts/orders",
+        headers=auth_headers(),
+        json={
+            "context_request_id": decision["context_requests"][0]["context_request_id"],
+            "idempotency_key": f"ctx-{request_id}",
+            **scope,
+            "items": [{"external_order_id": "order-001", "status": "paid"}],
+        },
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
     ("planned_type", "endpoint_type", "content"),
     [
         ("orders", "products", "这个订单什么时候发货？"),

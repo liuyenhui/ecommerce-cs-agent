@@ -91,7 +91,8 @@ class DecisionService:
         existing = state.context_refills.get(key)
         comparable = {k: v for k, v in payload.items() if k != "source"}
         if existing:
-            if existing.get("_context_type") != context_type:
+            stored_context_type = existing.get("_context_type") or _legacy_context_type(context_request_id)
+            if stored_context_type != context_type:
                 raise ValueError("context_request_id does not match the URL context type")
             if existing.get("_request_payload") != comparable:
                 raise FileExistsError("idempotency conflict")
@@ -357,13 +358,15 @@ class DecisionService:
         }
 
     def _same_tenant_store(self, state: DecisionState, payload: dict[str, Any]) -> bool:
-        request = state.request
-        payload_tenant = payload.get("tenant_id") or payload.get("organization_id")
-        payload_store = payload.get("external_store_id") or payload.get("store_id")
-        if payload_tenant and str(payload_tenant) not in {str(request.get("tenant_id")), str(request.get("organization_id"))}:
-            return False
-        if payload_store and str(payload_store) not in {str(request.get("external_store_id")), str(request.get("store_id"))}:
-            return False
+        decision_organization_id, decision_store_id, _request_id = _request_key(state.request)
+        for field in ("tenant_id", "organization_id"):
+            value = payload.get(field)
+            if value not in {None, ""} and str(value) != decision_organization_id:
+                return False
+        for field in ("external_store_id", "store_id"):
+            value = payload.get(field)
+            if value not in {None, ""} and str(value) != decision_store_id:
+                return False
         return True
 
     def _trace(
@@ -527,6 +530,13 @@ def _latest_human_reply(feedback: list[dict[str, Any]]) -> str | None:
 
 def _declares_scope(payload: dict[str, Any]) -> bool:
     return any(key in payload for key in SCOPE_FIELDS)
+
+
+def _legacy_context_type(context_request_id: str) -> str | None:
+    for context_type in ("products", "orders", "logistics", "rules"):
+        if context_request_id.startswith(f"ctx-{context_type}-"):
+            return context_type
+    return None
 
 
 def _repository_for(settings: Settings) -> DecisionRepository:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.decision import DecisionService
 from ecommerce_cs_agent.services.repository import InMemoryDecisionRepository, PostgresDecisionRepository
@@ -199,6 +201,37 @@ def test_context_refill_resumes_same_thread_and_completes_graph() -> None:
     assert second["action"] == "candidate"
     assert second["missing_context"] == []
     assert any(edge["condition"] == "candidate" and edge["taken"] for edge in second["trace"]["graph"]["edges"])
+
+
+def test_legacy_completed_context_refill_replays_only_on_original_typed_endpoint() -> None:
+    repository = InMemoryDecisionRepository()
+    service = DecisionService(Settings(environment="test"), repository=repository)
+    response = service.create_reply_decision(_request("req-legacy-context", "这个商品是什么材质？"))
+    decision_id = response["decision_id"]
+    context_request_id = response["context_requests"][0]["context_request_id"]
+    payload = {
+        "context_request_id": context_request_id,
+        "idempotency_key": "ctx-legacy-products",
+        "organization_id": "org-001",
+        "store_id": "store-001",
+        "items": [{"external_product_id": "product-001", "title": "测试商品"}],
+    }
+    completed = service.refill_context(decision_id, "products", payload)
+    state = repository.get_by_decision_id(decision_id)
+    assert state is not None
+    state.context_refills[(context_request_id, "ctx-legacy-products")].pop("_context_type")
+
+    replay = service.refill_context(decision_id, "products", payload)
+
+    assert replay == completed
+    with pytest.raises(ValueError, match="URL context type"):
+        service.refill_context(decision_id, "orders", payload)
+    with pytest.raises(FileExistsError, match="idempotency conflict"):
+        service.refill_context(
+            decision_id,
+            "products",
+            {**payload, "items": [{"external_product_id": "product-other"}]},
+        )
 
 
 def test_decision_graph_uses_run_scoped_native_checkpointers() -> None:
