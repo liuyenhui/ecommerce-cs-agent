@@ -119,18 +119,26 @@ def test_address_change_returns_action_request_with_human_confirm(monkeypatch) -
 
 def test_context_refill_returns_partial_context(monkeypatch) -> None:
     client = make_client(monkeypatch)
+    decision = client.post(
+        "/v1/reply-decisions",
+        headers={"Authorization": "Bearer dev-token"},
+        json=base_request("我这单怎么还没发货？"),
+    ).json()
+    order_request = next(item for item in decision["context_requests"] if item["type"] == "orders")
 
     response = client.post(
-        "/v1/reply-decisions/decision-001/contexts/orders",
+        f"/v1/reply-decisions/{decision['decision_id']}/contexts/orders",
         headers={"Authorization": "Bearer dev-token"},
         json={
-            "context_request_id": "ctx-001",
+            "context_request_id": order_request["context_request_id"],
+            "idempotency_key": "ctx-orders-partial",
+            "captured_at": "2026-06-14T10:01:00+08:00",
             "orders": [{"external_order_id": "order-a-001"}],
         },
     )
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["decision_id"] == "decision-001"
+    assert payload["decision_id"] == decision["decision_id"]
     assert payload["decision_status"] == "partial_context"
-    assert payload["action"] == "context_request"
+    assert payload["next_action"] == "wait_context"

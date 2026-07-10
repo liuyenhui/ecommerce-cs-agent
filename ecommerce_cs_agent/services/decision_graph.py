@@ -556,6 +556,9 @@ def _missing_context(payload: dict[str, Any], lowered: str, content: str, *, has
     asks_product = any(word in lowered or word in content for word in PRODUCT_KEYWORDS)
     if asks_product and not context.get("products") and not has_product_knowledge:
         missing.append("products")
+    asks_rules = any(word in lowered or word in content for word in RULE_KEYWORDS)
+    if asks_rules and not context.get("rules"):
+        missing.append("rules")
     return missing
 
 
