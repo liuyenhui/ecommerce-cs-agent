@@ -192,7 +192,8 @@ class S3ObjectStorage:
         connection = connection_type(connection_host, connection_port, timeout=20)
         try:
             # The connection target is a validated fixed host; canonical_uri contains only a percent-encoded object key.
-            connection.request(  # lgtm[py/partial-ssrf]
+            # codeql[py/partial-ssrf]
+            connection.request(
                 "PUT",
                 canonical_uri,
                 body=content,

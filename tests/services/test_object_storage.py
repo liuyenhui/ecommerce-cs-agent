@@ -153,7 +153,7 @@ def test_s3_upload_keeps_object_key_in_request_path_not_connection_target(monkey
 def test_s3_partial_ssrf_suppression_documents_the_fixed_host_boundary() -> None:
     source = Path(object_storage_module.__file__).read_text(encoding="utf-8")
 
-    assert "lgtm[py/partial-ssrf]" in source
+    assert "codeql[py/partial-ssrf]" in source
     assert "validated fixed host" in source
 
 
