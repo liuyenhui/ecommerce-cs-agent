@@ -130,6 +130,25 @@ def test_reply_decision_requests_missing_order_and_logistics_context_and_is_idem
     assert body["trace"]["steps"]
 
 
+def test_reply_decision_request_idempotency_is_scoped_by_store():
+    api = client()
+    first_payload = minimal_reply_request("req-shared-store-scope", "这个商品是什么材质？")
+    second_payload = {
+        **minimal_reply_request("req-shared-store-scope", "这个商品是什么材质？"),
+        "store_id": "store-002",
+        "billing_lease": billing_lease("req-shared-store-scope", "store-002"),
+    }
+
+    first = api.post("/v1/reply-decisions", headers=auth_headers(), json=first_payload)
+    second = api.post("/v1/reply-decisions", headers=auth_headers(), json=second_payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["decision_id"] != second.json()["decision_id"]
+    assert first.json()["trace"]["thread_id"] == first.json()["decision_id"]
+    assert second.json()["trace"]["thread_id"] == second.json()["decision_id"]
+
+
 def test_reply_decision_accepts_platform_store_listing_context_without_public_organization_id():
     response = client().post(
         "/v1/reply-decisions",

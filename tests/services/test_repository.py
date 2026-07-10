@@ -262,6 +262,46 @@ def test_postgres_repository_dual_writes_canonical_runtime_tables_and_compat_sta
     assert checkpoint[1][7] == "action_request"
 
 
+def test_postgres_repository_scopes_canonical_request_idempotency_and_checkpoints_by_store() -> None:
+    connection = _FakeConnection(fetch_rows=[])
+    repository = PostgresDecisionRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    for store_id, decision_id in (("store-001", "decision-store-001"), ("store-002", "decision-store-002")):
+        state = DecisionState(
+            request={
+                "organization_id": "org-001",
+                "store_id": store_id,
+                "request_id": "req-shared",
+                "platform": "pdd",
+                "message": {"external_message_id": f"msg-{store_id}", "content": "商品材质？"},
+                "conversation": {"external_conversation_id": f"conv-{store_id}"},
+            },
+            response={
+                "decision_id": decision_id,
+                "decision_status": "candidate",
+                "action": "candidate",
+                "trace": {"graph_version": "reply-decision-graph-v1", "steps": []},
+            },
+        )
+        repository.save_state(
+            organization_id="org-001",
+            store_id=store_id,
+            request_id="req-shared",
+            decision_id=decision_id,
+            state=state,
+        )
+
+    decision_inserts = [item for item in connection.executed if "INSERT INTO decision_record" in item[0]]
+    assert len(decision_inserts) == 2
+    assert all("ON CONFLICT (organization_id, store_id, request_id)" in sql for sql, _params in decision_inserts)
+    checkpoints = [params for sql, params in connection.executed if "INSERT INTO decision_graph_checkpoint" in sql]
+    assert [(params[2], params[3]) for params in checkpoints] == [
+        ("store-001", "decision-store-001"),
+        ("store-002", "decision-store-002"),
+    ]
+
+
 class _FakeConnection:
     def __init__(self, fetch_rows: list[tuple[Any, ...]]) -> None:
         self.fetch_rows = fetch_rows

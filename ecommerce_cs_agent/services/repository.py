@@ -112,7 +112,9 @@ class PostgresDecisionRepository:
             SELECT checkpoint.state
             FROM decision_record decision
             JOIN organization org ON org.id::text = decision.organization_id::text
-            JOIN store st ON st.id::text = decision.store_id::text
+            JOIN store st
+              ON st.id::text = decision.store_id::text
+             AND st.organization_id = org.id
             JOIN decision_graph_checkpoint checkpoint
               ON checkpoint.decision_id = decision.decision_id
              AND checkpoint.checkpoint_key = 'latest'
@@ -541,7 +543,7 @@ class PostgresDecisionRepository:
                 %s,
                 %s
             )
-            ON CONFLICT (organization_id, request_id)
+            ON CONFLICT (organization_id, store_id, request_id)
             DO UPDATE SET
                 status = EXCLUDED.status,
                 decision_type = EXCLUDED.decision_type,
