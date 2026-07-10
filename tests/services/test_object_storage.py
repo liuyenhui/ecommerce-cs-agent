@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from ecommerce_cs_agent.services import object_storage as object_storage_module
 from ecommerce_cs_agent.services.object_storage import (
     FilesystemObjectStorage,
     ObjectStorageUnavailable,
@@ -103,6 +104,75 @@ def test_s3_object_storage_allows_kubernetes_service_endpoint() -> None:
     )
 
     assert storage.endpoint == "http://minio.ecommerce-cs-agent-dev.svc.cluster.local:9000"
+
+
+def test_s3_upload_uses_server_owned_key_in_request_path_not_connection_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class _Response:
+        status = 200
+
+        def read(self) -> bytes:
+            return b""
+
+    class _Connection:
+        def __init__(self, host: str, port: int | None = None, *, timeout: int) -> None:
+            calls.append(("connect", (host, port, timeout)))
+
+        def request(self, method: str, path: str, *, body: bytes, headers: dict[str, str]) -> None:
+            calls.append(("request", (method, path, body, headers["host"])))
+
+        def getresponse(self) -> _Response:
+            return _Response()
+
+        def close(self) -> None:
+            calls.append(("close", None))
+
+    monkeypatch.setattr(object_storage_module.http_client, "HTTPSConnection", _Connection)
+    storage = S3ObjectStorage(
+        endpoint="https://storage.example",
+        bucket="bucket",
+        region="us-east-1",
+        access_key_id="access",
+        secret_access_key="secret",
+    )
+
+    stored = storage.put_or_reference(
+        asset_id="asset-001",
+        payload={"file_ref": "products/product-a/manual.pdf", "content_base64": "bWFudWFs"},
+    )
+
+    assert stored.storage_status == "stored"
+    assert stored.object_key == "product-assets/asset001"
+    assert calls[0] == ("connect", ("storage.example", None, 20))
+    assert calls[1][0] == "request"
+    assert calls[1][1][1] == "/bucket/product-assets/asset001"
+
+
+@pytest.mark.parametrize(
+    "object_key",
+    [
+        "products/product-a/manual?redirect=internal",
+        "products/product-a/manual#fragment",
+        "products/product-a/%2e%2e%2finternal",
+        "products/product-a/manual pdf",
+        "products//manual.pdf",
+    ],
+)
+def test_s3_upload_rejects_object_keys_outside_the_path_allowlist(object_key: str) -> None:
+    storage = S3ObjectStorage(
+        endpoint="https://storage.example",
+        bucket="bucket",
+        region="us-east-1",
+        access_key_id="access",
+        secret_access_key="secret",
+    )
+
+    with pytest.raises(ObjectStorageValidationError, match="invalid object key"):
+        storage.put_or_reference(
+            asset_id="asset-001",
+            payload={"file_ref": object_key, "content_base64": "bWFudWFs"},
+        )
 
 
 def test_llm_analyzer_rejects_private_endpoint() -> None:
