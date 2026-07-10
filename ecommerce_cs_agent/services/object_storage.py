@@ -155,7 +155,10 @@ class S3ObjectStorage:
         content = _content_bytes(payload)
         if content is None:
             return ReferenceObjectStorage().put_or_reference(asset_id=asset_id, payload=payload)
-        object_key = str(payload.get("file_ref") or f"product-assets/{asset_id}")
+        safe_asset_id = asset_id.replace("-", "").replace("_", "")
+        if not safe_asset_id.isalnum():
+            raise ObjectStorageValidationError("invalid asset id")
+        object_key = f"product-assets/{safe_asset_id}"
         canonical_uri, host, connection_host, connection_port, connection_scheme = self._target_for(object_key)
         payload_hash = hashlib.sha256(content).hexdigest()
         now = datetime.now(timezone.utc)

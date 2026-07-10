@@ -106,7 +106,7 @@ def test_s3_object_storage_allows_kubernetes_service_endpoint() -> None:
     assert storage.endpoint == "http://minio.ecommerce-cs-agent-dev.svc.cluster.local:9000"
 
 
-def test_s3_upload_keeps_object_key_in_request_path_not_connection_target(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_s3_upload_uses_server_owned_key_in_request_path_not_connection_target(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, object]] = []
 
     class _Response:
@@ -143,9 +143,10 @@ def test_s3_upload_keeps_object_key_in_request_path_not_connection_target(monkey
     )
 
     assert stored.storage_status == "stored"
+    assert stored.object_key == "product-assets/asset001"
     assert calls[0] == ("connect", ("storage.example", None, 20))
     assert calls[1][0] == "request"
-    assert calls[1][1][1] == "/bucket/products/product-a/manual.pdf"
+    assert calls[1][1][1] == "/bucket/product-assets/asset001"
 
 
 @pytest.mark.parametrize(
