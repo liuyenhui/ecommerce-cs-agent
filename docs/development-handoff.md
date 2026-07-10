@@ -4,6 +4,14 @@
 
 ## 最近文档更新
 
+### 2026-07-10
+
+- 新增 [需求测试、AI 工作流与宣传页收口设计](superpowers/specs/2026-07-10-requirements-workflow-and-landing-closure-design.md)：第一版后续工作按需求到测试矩阵、Customer Admin 首次模拟咨询与业务化决策回放、公开页“流程故事”真实产品证明、桌面/移动验收和 GitOps 线上闭环推进；现有 LangGraph 条件分支、checkpointer、auto reply 与 X6 回放未提交改动纳入同一实现范围。
+
+### 2026-07-09
+
+- ACS 决策编排实现补齐到 LangGraph 条件边执行：`context_gate` / `action_gate` 现在按真实分支跳转，未走节点在 `trace.graph.nodes[]` 标记 `skipped`；安全且命中审核知识的低风险回复可经 `policy_gate` 输出 `auto_reply`；LangGraph 原生 checkpointer 写入 `trace.langgraph_checkpoint_id`，补上下文完成后的重算 trace 标记 `resumed_from_checkpoint=true`。
+
 ### 2026-06-30
 
 - ACS 决策编排第一版接入 LangGraph 运行回放契约：`trace.steps` 继续保留线性节点记录，新增 `trace.graph.nodes[]` / `trace.graph.edges[]` 供 Customer Admin 本店铺脱敏回放和 System Admin 跨租户排障回放使用；`decision_id` 仍映射 `thread_id`，checkpoint 继续复用 `decision_graph_checkpoint`。
