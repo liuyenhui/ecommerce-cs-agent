@@ -34,7 +34,7 @@ import {
 } from "../../shared/components";
 import { arrayFrom, firstId, readRecord } from "../../shared/data";
 import { DecisionTraceReplay } from "../../shared/trace-replay";
-import { presentDecisionTrace } from "../../shared/trace-presentation";
+import { presentDecisionBadges, presentDecisionTrace } from "../../shared/trace-presentation";
 import type { JsonRecord, NavItem, Page, ToastState } from "../../shared/types";
 import { SimulationComposer } from "./SimulationComposer";
 import { scrollBehaviorForReducedMotion } from "./landing-motion";
@@ -738,7 +738,7 @@ function MessageHistory({ storeId, setToast, setSelected }: {
                         roleLabel="AI 客服"
                         time={messageTimeLabel(trace)}
                         text={String(trace.ai_reply)}
-                        meta={decisionMeta(trace)}
+                        meta={decisionBadges(trace)}
                         action={<button onClick={() => setSelectedTrace(trace)}><Search size={15} />决策路径</button>}
                       />
                     ) : null}
@@ -802,7 +802,7 @@ function ChatBubble({ side, roleLabel, time, text, meta, action }: {
   roleLabel: string;
   time: string;
   text: string;
-  meta?: string;
+  meta?: React.ReactNode;
   action?: React.ReactNode;
 }) {
   return (
@@ -814,7 +814,7 @@ function ChatBubble({ side, roleLabel, time, text, meta, action }: {
       <p>{text}</p>
       {meta || action ? (
         <div className="chatBubbleFooter">
-          {meta ? <small>{meta}</small> : <span />}
+          {meta || <span />}
           {action}
         </div>
       ) : null}
@@ -887,8 +887,19 @@ function messageTimeLabel(trace: CustomerTrace) {
   return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-function decisionMeta(trace: CustomerTrace) {
-  return [trace.action ? `动作 ${trace.action}` : "", trace.risk_level ? `风险 ${trace.risk_level}` : ""].filter(Boolean).join(" · ");
+function decisionBadges(trace: CustomerTrace) {
+  const badges = presentDecisionBadges({
+    action: trace.action,
+    status: trace.status,
+    risk: trace.risk_level
+  });
+  return (
+    <span className="decisionBadges" aria-label="本次 AI 决策摘要">
+      {badges.map((badge) => (
+        <span key={badge.key} className={`decisionBadge ${badge.tone}`} title={badge.raw}>{badge.label}</span>
+      ))}
+    </span>
+  );
 }
 
 function MessageTraceDrawer({ trace, onClose, onRaw }: { trace: CustomerTrace; onClose: () => void; onRaw: () => void }) {
