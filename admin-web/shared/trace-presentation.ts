@@ -224,10 +224,14 @@ function presentBadge(
   const lookupKey = raw.trim().toLowerCase();
   return {
     key,
-    label: labels[lookupKey] || unknownLabel,
+    label: ownValue(labels, lookupKey) || unknownLabel,
     raw,
-    tone: tones[lookupKey] || "neutral"
+    tone: ownValue(tones, lookupKey) || "neutral"
   };
+}
+
+function ownValue<T>(record: Record<string, T>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
 }
 
 function normalizeList(value: unknown) {

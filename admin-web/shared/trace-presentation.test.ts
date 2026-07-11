@@ -51,6 +51,14 @@ describe("presentDecisionBadges", () => {
       { key: "status", label: "未知状态", raw: "false", tone: "neutral" }
     ]);
   });
+
+  it("treats inherited object property names as unknown badge values", () => {
+    expect(presentDecisionBadges({ action: "constructor", risk: "toString", status: "__proto__" })).toEqual([
+      { key: "action", label: "未知动作", raw: "constructor", tone: "neutral" },
+      { key: "risk", label: "未知风险", raw: "toString", tone: "neutral" },
+      { key: "status", label: "未知状态", raw: "__proto__", tone: "neutral" }
+    ]);
+  });
 });
 
 describe("presentDecisionTrace", () => {
