@@ -4,6 +4,10 @@
 
 ## 最近文档更新
 
+### 2026-07-11
+
+- Customer Admin 模拟咨询的动作、风险与处理状态改为中文业务 Badge；共享决策回放底部节点导航改为紧凑、可换行且保留节点详情联动的阶段 Badge，原始后端枚举仅通过 `title` 保留，详见 [决策状态 Badge 与节点导航优化设计](superpowers/specs/2026-07-11-decision-status-badges-design.md)。
+
 ### 2026-07-10
 
 - 商品级知识自动回复必须绑定请求的稳定 `external_product_id`，PostgreSQL 召回与 evidence 门禁双重拒绝跨商品知识；请求缺少商品绑定时只允许显式 `scope=store/tenant` 且不关联商品的通用知识自动回复。
