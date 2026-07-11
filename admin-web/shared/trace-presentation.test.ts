@@ -1,5 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { decisionStatuses, presentDecisionTrace } from "./trace-presentation";
+import { decisionStatuses, presentDecisionBadges, presentDecisionTrace } from "./trace-presentation";
+
+describe("presentDecisionBadges", () => {
+  it("presents candidate decisions as localized badges in a stable order", () => {
+    expect(presentDecisionBadges({ action: "candidate", status: "candidate", risk: "low" })).toEqual([
+      { key: "action", label: "建议回复", raw: "candidate", tone: "info" },
+      { key: "risk", label: "低风险", raw: "low", tone: "success" },
+      { key: "status", label: "等待人工确认", raw: "candidate", tone: "warning" }
+    ]);
+  });
+
+  it("keeps unknown raw values out of visible labels", () => {
+    expect(presentDecisionBadges({
+      action: "new_action",
+      status: "new_status",
+      risk: "new_risk"
+    })).toEqual([
+      { key: "action", label: "未知动作", raw: "new_action", tone: "neutral" },
+      { key: "risk", label: "未知风险", raw: "new_risk", tone: "neutral" },
+      { key: "status", label: "未知状态", raw: "new_status", tone: "neutral" }
+    ]);
+  });
+
+  it.each([
+    [{ action: "auto_reply", risk: "low", status: "completed" }, ["info", "success", "success"]],
+    [{ action: "candidate", risk: "medium", status: "waiting_context" }, ["info", "warning", "warning"]],
+    [{ action: "handoff", risk: "high", status: "failed" }, ["danger", "danger", "danger"]],
+    [{ action: "action_request", status: "retrying" }, ["info", "warning"]]
+  ])("maps known values to semantic tones", (input, expectedTones) => {
+    expect(presentDecisionBadges(input).map(({ tone }) => tone)).toEqual(expectedTones);
+  });
+
+  it("omits badges whose raw values are empty", () => {
+    expect(presentDecisionBadges({ action: " ", status: undefined, risk: "low" })).toEqual([
+      { key: "risk", label: "低风险", raw: "low", tone: "success" }
+    ]);
+  });
+});
 
 describe("presentDecisionTrace", () => {
   it.each([

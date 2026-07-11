@@ -14,6 +14,15 @@ export type TracePresentation = {
   explanation: string;
 };
 
+export type DecisionBadgeTone = "info" | "success" | "warning" | "danger" | "neutral";
+
+export type DecisionBadge = {
+  key: "action" | "risk" | "status";
+  label: string;
+  raw: string;
+  tone: DecisionBadgeTone;
+};
+
 export const decisionStatuses = [
   "received",
   "queued",
@@ -72,6 +81,52 @@ const riskLabels: Record<string, string> = {
   high: "高风险"
 };
 
+const badgeActionLabels: Record<string, string> = {
+  context_request: "补充资料",
+  action_request: "执行外部操作",
+  handoff: "转人工",
+  auto_reply: "自动回复",
+  answer_ready: "回复已就绪",
+  candidate: "建议回复"
+};
+
+const badgeStatusLabels: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(statusPresentations).map(([key, value]) => [key, value.label])),
+  candidate: "等待人工确认"
+};
+
+const actionBadgeTones: Record<string, DecisionBadgeTone> = {
+  context_request: "info",
+  action_request: "info",
+  handoff: "danger",
+  auto_reply: "info",
+  answer_ready: "info",
+  candidate: "info"
+};
+
+const statusBadgeTones: Record<string, DecisionBadgeTone> = {
+  received: "info",
+  queued: "info",
+  running: "info",
+  waiting_context: "warning",
+  partial_context: "warning",
+  ready_to_decide: "info",
+  answer_ready: "success",
+  candidate: "warning",
+  action_request: "warning",
+  handoff: "danger",
+  completed: "success",
+  failed: "danger",
+  retrying: "warning",
+  canceled: "neutral"
+};
+
+const riskBadgeTones: Record<string, DecisionBadgeTone> = {
+  low: "success",
+  medium: "warning",
+  high: "danger"
+};
+
 const contextLabels: Record<string, string> = {
   product: "商品资料",
   products: "商品资料",
@@ -81,6 +136,19 @@ const contextLabels: Record<string, string> = {
   rule: "规则资料",
   rules: "规则资料"
 };
+
+export function presentDecisionBadges(input: TracePresentationInput): DecisionBadge[] {
+  const action = normalized(input.action);
+  const risk = normalized(input.risk);
+  const status = normalized(input.status);
+  const badges: DecisionBadge[] = [];
+
+  if (action) badges.push(presentBadge("action", action, badgeActionLabels, actionBadgeTones, "未知动作"));
+  if (risk) badges.push(presentBadge("risk", risk, riskLabels, riskBadgeTones, "未知风险"));
+  if (status) badges.push(presentBadge("status", status, badgeStatusLabels, statusBadgeTones, "未知状态"));
+
+  return badges;
+}
 
 export function presentDecisionTrace(input: TracePresentationInput): TracePresentation {
   const action = normalized(input.action);
@@ -140,6 +208,21 @@ function buildPresentation(
 
 function normalized(value: unknown) {
   return String(value || "").trim().toLowerCase();
+}
+
+function presentBadge(
+  key: DecisionBadge["key"],
+  raw: string,
+  labels: Record<string, string>,
+  tones: Record<string, DecisionBadgeTone>,
+  unknownLabel: string
+): DecisionBadge {
+  return {
+    key,
+    label: labels[raw] || unknownLabel,
+    raw,
+    tone: tones[raw] || "neutral"
+  };
 }
 
 function normalizeList(value: unknown) {
