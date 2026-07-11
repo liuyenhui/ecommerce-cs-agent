@@ -36,6 +36,21 @@ describe("presentDecisionBadges", () => {
       { key: "risk", label: "低风险", raw: "low", tone: "success" }
     ]);
   });
+
+  it("normalizes badge lookups without changing the original raw values", () => {
+    expect(presentDecisionBadges({ action: " Candidate ", risk: " LOW ", status: " COMPLETED " })).toEqual([
+      { key: "action", label: "建议回复", raw: " Candidate ", tone: "info" },
+      { key: "risk", label: "低风险", raw: " LOW ", tone: "success" },
+      { key: "status", label: "处理完成", raw: " COMPLETED ", tone: "success" }
+    ]);
+  });
+
+  it("retains numeric zero and boolean false as unknown raw values", () => {
+    expect(presentDecisionBadges({ action: 0, status: false })).toEqual([
+      { key: "action", label: "未知动作", raw: "0", tone: "neutral" },
+      { key: "status", label: "未知状态", raw: "false", tone: "neutral" }
+    ]);
+  });
 });
 
 describe("presentDecisionTrace", () => {

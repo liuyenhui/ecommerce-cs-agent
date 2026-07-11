@@ -104,7 +104,7 @@ const actionBadgeTones: Record<string, DecisionBadgeTone> = {
   candidate: "info"
 };
 
-const statusBadgeTones: Record<string, DecisionBadgeTone> = {
+const statusBadgeTones = {
   received: "info",
   queued: "info",
   running: "info",
@@ -119,7 +119,7 @@ const statusBadgeTones: Record<string, DecisionBadgeTone> = {
   failed: "danger",
   retrying: "warning",
   canceled: "neutral"
-};
+} satisfies Record<DecisionStatus, DecisionBadgeTone>;
 
 const riskBadgeTones: Record<string, DecisionBadgeTone> = {
   low: "success",
@@ -138,14 +138,14 @@ const contextLabels: Record<string, string> = {
 };
 
 export function presentDecisionBadges(input: TracePresentationInput): DecisionBadge[] {
-  const action = normalized(input.action);
-  const risk = normalized(input.risk);
-  const status = normalized(input.status);
+  const action = rawString(input.action);
+  const risk = rawString(input.risk);
+  const status = rawString(input.status);
   const badges: DecisionBadge[] = [];
 
-  if (action) badges.push(presentBadge("action", action, badgeActionLabels, actionBadgeTones, "未知动作"));
-  if (risk) badges.push(presentBadge("risk", risk, riskLabels, riskBadgeTones, "未知风险"));
-  if (status) badges.push(presentBadge("status", status, badgeStatusLabels, statusBadgeTones, "未知状态"));
+  if (action.trim()) badges.push(presentBadge("action", action, badgeActionLabels, actionBadgeTones, "未知动作"));
+  if (risk.trim()) badges.push(presentBadge("risk", risk, riskLabels, riskBadgeTones, "未知风险"));
+  if (status.trim()) badges.push(presentBadge("status", status, badgeStatusLabels, statusBadgeTones, "未知状态"));
 
   return badges;
 }
@@ -210,6 +210,10 @@ function normalized(value: unknown) {
   return String(value || "").trim().toLowerCase();
 }
 
+function rawString(value: unknown) {
+  return value === null || value === undefined ? "" : String(value);
+}
+
 function presentBadge(
   key: DecisionBadge["key"],
   raw: string,
@@ -217,11 +221,12 @@ function presentBadge(
   tones: Record<string, DecisionBadgeTone>,
   unknownLabel: string
 ): DecisionBadge {
+  const lookupKey = raw.trim().toLowerCase();
   return {
     key,
-    label: labels[raw] || unknownLabel,
+    label: labels[lookupKey] || unknownLabel,
     raw,
-    tone: tones[raw] || "neutral"
+    tone: tones[lookupKey] || "neutral"
   };
 }
 
