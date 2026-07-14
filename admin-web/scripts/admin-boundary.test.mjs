@@ -305,6 +305,21 @@ test("LLM raw-secret guard accepts only concrete Kubernetes Secret reference con
   assert.doesNotThrow(() => assertLlmUiUsesSecretReferencesOnly(safeFixture));
 });
 
+test("Provider credential boundary keeps the real DOM allowlist regression and stable panel locator", () => {
+  const providerPage = readRelative("system-admin/src/pages/LlmGovernancePage.tsx");
+  const regression = readRelative("system-admin/src/system-admin.test.tsx");
+  const packageJson = JSON.parse(readRelative("package.json"));
+
+  assert.match(providerPage, /data-testid="llm-provider-panel"/);
+  assert.match(regression, /allowlists the exact Provider create and edit controls across the real rendered panel/);
+  assert.match(regression, /querySelectorAll<[^>]+>\("input, select, textarea"\)/);
+  assert.match(regression, /APPROVED_PROVIDER_CREATE_CONTROLS/);
+  assert.match(regression, /APPROVED_PROVIDER_UPDATE_CONTROLS/);
+  assert.match(regression, /providerControlMutant/);
+  assert.match(regression, /"credential", "密钥值"/);
+  assert.match(packageJson.scripts.test, /system-admin\/src\/system-admin\.test\.tsx/);
+});
+
 test("shared components do not import System Admin request-state types", () => {
   const sharedComponents = readRelative("shared/components.tsx");
   const systemTypes = readRelative("system-admin/src/system-types.ts");

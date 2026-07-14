@@ -2,7 +2,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { AdminFrame, RequestStateView } from "../../shared/components";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -38,6 +38,45 @@ function response(payload: unknown, status = 200): Response {
     json: async () => payload,
     text: async () => JSON.stringify(payload)
   } as Response;
+}
+
+const APPROVED_PROVIDER_CREATE_CONTROLS = [
+  "name",
+  "provider_type",
+  "base_url",
+  "secret_ref.namespace",
+  "secret_ref.name",
+  "secret_ref.key",
+  "reason",
+  "idempotency_key"
+] as const;
+const APPROVED_PROVIDER_UPDATE_CONTROLS = ["name", "enabled", "reason", "idempotency_key"] as const;
+
+function assertExactProviderControls(container: HTMLElement, approvedNames: readonly string[]) {
+  const controls = Array.from(container.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea"));
+  const names = controls.map((control) => control.getAttribute("name"));
+  if (names.some((name) => !name)) throw new Error("Provider control is missing an explicit name");
+  const actual = names.map(String).sort();
+  const expected = [...approvedNames].sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`Provider controls differ from allowlist: ${actual.join(", ")}`);
+  }
+  if (container.querySelector('input[type="password"]')) throw new Error("Provider panel must not render a password input");
+  return names;
+}
+
+function providerControlMutant(extraName: string | null, duplicateAllowedName = false) {
+  const panel = document.createElement("section");
+  for (const name of APPROVED_PROVIDER_CREATE_CONTROLS) {
+    const input = document.createElement("input");
+    input.name = name;
+    panel.append(input);
+  }
+  const extra = document.createElement("input");
+  if (extraName !== null) extra.name = duplicateAllowedName ? APPROVED_PROVIDER_CREATE_CONTROLS[0] : extraName;
+  panel.append(extra);
+  panel.append("Kubernetes Secret 引用：agent/llm-provider:api-key");
+  return panel;
 }
 
 beforeEach(() => {
@@ -402,6 +441,38 @@ describe("LLM governance and releases", () => {
     expect(screen.queryByDisplayValue(/sk-/i)).toBeNull();
     expect(screen.queryByText(/must-never-render/i)).toBeNull();
     expect(screen.getByText(/agent\/llm-provider:api-key/)).toBeTruthy();
+  });
+
+  it("allowlists the exact Provider create and edit controls across the real rendered panel", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("/providers") ? response({ items: [provider] }) : response({ items: [] })));
+    render(<LlmGovernancePage />);
+
+    const panel = await screen.findByTestId("llm-provider-panel");
+    expect(within(panel).getByText(/只显示 Kubernetes Secret 引用名和 key，不读取或编辑密钥值/)).toBeTruthy();
+    expect(within(panel).getByText(/agent\/llm-provider:api-key/)).toBeTruthy();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "新增 Provider" }));
+    const createEditor = within(panel).getByRole("group", { name: "新增 Provider 表单" });
+    expect(assertExactProviderControls(panel, APPROVED_PROVIDER_CREATE_CONTROLS)).toHaveLength(APPROVED_PROVIDER_CREATE_CONTROLS.length);
+    expect(within(createEditor).getByLabelText("Secret namespace").getAttribute("name")).toBe("secret_ref.namespace");
+    expect(within(createEditor).getByLabelText("Secret name").getAttribute("name")).toBe("secret_ref.name");
+    expect(within(createEditor).getByLabelText("Secret key").getAttribute("name")).toBe("secret_ref.key");
+    expect(panel.querySelector('input[type="password"]')).toBeNull();
+
+    fireEvent.click(within(createEditor).getByRole("button", { name: "取消" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "编辑 Production OpenAI" }));
+    expect(within(panel).getByRole("group", { name: "编辑 Provider 表单" })).toBeTruthy();
+    expect(assertExactProviderControls(panel, APPROVED_PROVIDER_UPDATE_CONTROLS)).toHaveLength(APPROVED_PROVIDER_UPDATE_CONTROLS.length);
+    expect(panel.querySelector('input[type="password"]')).toBeNull();
+  });
+
+  it.each(["credential", "密钥值"])("rejects an extra %s control even beside approved Secret markers", (extraName) => {
+    expect(() => assertExactProviderControls(providerControlMutant(extraName), APPROVED_PROVIDER_CREATE_CONTROLS)).toThrow(/differ from allowlist/);
+  });
+
+  it("rejects unnamed and duplicate Provider controls", () => {
+    expect(() => assertExactProviderControls(providerControlMutant(null), APPROVED_PROVIDER_CREATE_CONTROLS)).toThrow(/missing an explicit name/);
+    expect(() => assertExactProviderControls(providerControlMutant("name", true), APPROVED_PROVIDER_CREATE_CONTROLS)).toThrow(/differ from allowlist/);
   });
 
   it("uses monospace styling only for model identifiers and Secret references", async () => {
