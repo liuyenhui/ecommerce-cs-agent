@@ -72,7 +72,7 @@
 
 ## 4. 页面与模块
 
-第一版系统后台建议按“平台运营、决策排障、任务运行、安全治理”租户导航。
+第一版系统后台按平台运营、AI 与发布、排障与安全三组任务导航。一级菜单固定为系统总览、租户与店铺、配置完成度、LLM 治理、评测与发布、决策追踪、任务中心、安全审计和系统健康；细分能力在对应页面内使用二级页或详情抽屉，不继续扩张一级菜单。
 
 | 模块 | 核心能力 |
 | --- | --- |
@@ -87,7 +87,7 @@
 | 消息决策追踪 | 按 `decision_id`、请求 ID、外部消息 ID、租户、店铺、平台和时间查询完整决策摘要。 |
 | 上下文与动作排障 | 查看 `context_requests[]`、上下文回填、`action_request`、`action_result`、超时、重试和失败原因。 |
 | 异步任务中心 | 查看资料解析、Markdown 转换、知识抽取、embedding、批量导入、评测运行等任务状态。 |
-| 模型与用量 | 查看 LLM provider 状态、调用量、成本、延迟、超时、错误、token 使用和降级情况。 |
+| LLM 治理 | 管理 LLM Provider、Kubernetes Secret 引用、模型参数、场景主/降级路由、连接测试、草稿、发布、回滚、调用量、成本、延迟、错误、Token 和审计。 |
 | 评测与发布门禁 | 查看 deterministic 测试、盲测、红线用例、Prompt/Graph/规则版本和发布阻断原因。 |
 | API 与接入凭据 | 管理租户 API Key / Bearer Token 引用、轮换状态、最后使用时间、限流和 IP 白名单预留。 |
 | Webhook 与回调 | 查看 callback 配置、签名状态、失败重试、死信记录和最近回调错误。 |
@@ -110,7 +110,7 @@
 
 ### 5.2 全局布局
 
-第一版系统后台采用三栏工作台结构：
+第一版系统后台采用可收缩导航、主工作区和按需上下文栏组成的工作台结构：
 
 站点和路由口径：
 
@@ -122,15 +122,15 @@
 | 区域 | 说明 |
 | --- | --- |
 | 顶部栏 | 黑色固定栏，包含产品标识、租户范围选择、全局搜索、告警入口、命令入口和当前系统用户。 |
-| 左侧导航 | 浅灰固定导航，按“平台运营 / 排障治理 / 发布安全”分组，不按数据库表名堆菜单。 |
+| 左侧导航 | 深色固定导航，按“平台运营 / AI 与发布 / 排障与安全”分组。桌面可在完整菜单与 64px 图标栏间切换；菜单统一使用 Lucide 图标。 |
 | 主内容区 | 当前模块的标题、说明、主操作、指标、表格、列表和工作流详情。 |
 | 右侧上下文栏 | 当前运行摘要、高优先级告警和快捷定位；窄屏时隐藏。 |
 
 响应式规则：
 
-- 桌面端优先保证三栏布局，右侧上下文栏用于承载全局状态和快捷入口。
-- 中等宽度时左侧导航收缩为图标栏，主内容保持可读。
-- 移动端未登录时不渲染系统后台导航，系统登录页首屏必须优先展示邮箱、密码和提交按钮，不允许六个系统导航项在登录表单前占用固定高度。
+- 桌面端优先保证导航与主工作区，只有当前任务确实需要全局状态或快捷定位时才显示右侧上下文栏，避免重复首页指标。
+- 桌面导航可由用户主动在完整菜单和 64px 图标栏之间切换；中等宽度默认收缩，主内容保持可读。
+- 移动端未登录时不渲染系统后台导航，系统登录页首屏必须优先展示邮箱、密码和提交按钮，不允许系统导航项在登录表单前占用固定高度。
 - 移动端登录后隐藏右侧上下文栏，左侧导航改为顶部应用栏按钮触发的抽屉式导航；导航项点击后关闭抽屉，触控高度不小于 44px，表格必须降级为关键列或列表，不允许横向溢出。
 - 固定格式元素需要明确宽度、最小宽度或响应式网格，避免图标、标签、状态徽标挤压正文。
 
@@ -140,9 +140,9 @@
 
 | 分组 | 页面 |
 | --- | --- |
-| 平台运营 | 系统首页、租户与店铺、配置完成度、资料与知识 |
-| 排障治理 | 决策追踪、异步任务、规则与动作 |
-| 发布安全 | 评测与发布、安全审计、系统健康 |
+| 平台运营 | 系统总览、租户与店铺、配置完成度 |
+| AI 与发布 | LLM 治理、评测与发布 |
+| 排障与安全 | 决策追踪、任务中心、安全审计、系统健康 |
 
 导航命名面向使用场景，不直接暴露内部表名。页面标题和导航名应保持一致，避免一个能力在多个入口重复出现。
 
@@ -264,6 +264,24 @@
 3. 红线失败或严重回归时阻断发布。
 4. 发布通过后记录版本、操作者、时间、评测摘要和回滚入口。
 
+### 6.6 LLM 配置与用量治理
+
+1. 发布管理员在“LLM 治理 / 配置与路由”分别维护 Provider 连接和场景模型路由；两个功能必须使用独立区块、表头和说明。
+2. Provider 只保存端点和 Kubernetes Secret 引用，不读取、返回或持久化 Secret 明文。
+3. 参数修改先保存为草稿；连接测试只验证草稿并记录操作者、耗时、结果和脱敏错误摘要，不改变运行版本。
+4. 场景路由至少支持客服回复生成、知识抽取和盲测问题生成，并可配置主模型、降级模型、温度、Token 上限、超时、重试、熔断和恢复探测。
+5. 发布前执行参数校验、Provider 连接检查和评测门禁；失败时继续使用原运行版本，成功后记录不可变版本和审计。
+6. “调用与成本”按时间、Provider、模型、业务场景、租户和店铺统计调用次数、输入/输出 Token、估算成本、P95、错误率和失败原因。
+7. 调用统计不保存或展示完整 Prompt、客户消息、模型回复和密钥；无真实统计时显示空态，不绘制示例曲线。
+
+### 6.7 真实数据与环境边界
+
+- development 和 production 必须使用 PostgreSQL 系统后台仓库；缺少 `DATABASE_URL` 时启动失败，不能回退到带示例租户/店铺的 In-memory 仓库。
+- In-memory 仓库和 fixture 只允许显式 `APP_ENV=test`。
+- 前端不得构造 demo 记录、静态统计或示例图表；列表总数使用服务端 `page.total`，平台指标使用专用聚合 API。
+- 不得按 ID、名称或消息正文判断数据是否为 demo。已有模拟记录必须通过稳定来源字段或经审核的一次性清理清单处理。
+- loading、真实空态、权限不足、局部失败和页面级失败必须使用不同状态表达。
+
 ## 7. 系统后台 API 分组
 
 系统后台 API 建议与客户后台 API 分组隔离，避免客户后台 session 获得系统级能力。路径可以使用 `/v1/system-admin/*`。
@@ -281,7 +299,11 @@
 | 动作治理 | `GET /v1/system-admin/action-capabilities`、`POST /v1/system-admin/action-templates` | 查看动作能力和维护默认动作模板。 |
 | 决策追踪 | `GET /v1/system-admin/message-traces`、`GET /v1/system-admin/message-traces/{decision_id}` | 跨租户查询消息决策摘要、LangGraph 运行回放和排障信息。 |
 | 任务中心 | `GET /v1/system-admin/tasks`、`POST /v1/system-admin/tasks/{task_id}/retry` | 查看和重试幂等安全任务。 |
-| 模型与用量 | `GET /v1/system-admin/llm-usage`、`GET /v1/system-admin/provider-health` | 查看模型调用、成本、延迟和 provider 健康。 |
+| 系统总览 | `GET /v1/system-admin/dashboard-summary` | 返回服务端聚合的租户、店铺、决策、阻断、任务、告警和待发布配置指标。 |
+| LLM Provider | `GET/POST /v1/system-admin/llm/providers`、`PATCH /v1/system-admin/llm/providers/{provider_id}`、`POST /v1/system-admin/llm/providers/{provider_id}/connection-tests` | 管理 Provider、Secret 引用和连接测试，不返回密钥值。 |
+| LLM 配置版本 | `GET/POST /v1/system-admin/llm/config-versions`、`PATCH /v1/system-admin/llm/config-versions/{version_id}`、`POST /v1/system-admin/llm/config-versions/{version_id}/publish`、`POST /v1/system-admin/llm/config-versions/{version_id}/rollback` | 管理草稿、校验、发布、运行版本和回滚。 |
+| LLM 场景路由 | `GET/PATCH /v1/system-admin/llm/config-versions/{version_id}/routes` | 管理业务场景的主模型、降级模型与运行参数。 |
+| LLM 用量 | `GET /v1/system-admin/llm/usage/summary`、`GET /v1/system-admin/llm/usage/timeseries`、`GET /v1/system-admin/llm/usage/breakdown`、`GET /v1/system-admin/llm/invocations` | 查看真实调用、Token、成本、延迟、失败和脱敏调用元数据。 |
 | 评测与发布 | `GET /v1/system-admin/eval-runs`、`GET /v1/system-admin/releases`、`POST /v1/system-admin/releases` | 查看评测报告和发布版本。 |
 | API 凭据 | `GET /v1/system-admin/api-keys`、`POST /v1/system-admin/api-keys/{key_id}/rotate` | 管理租户接入凭据引用和轮换状态。 |
 | 审计 | `GET /v1/system-admin/audit-logs` | 查询系统后台操作、跨租户访问和敏感数据查看记录。 |
@@ -295,6 +317,7 @@
 - 所有跨租户查询必须带查询范围，不能默认返回全部 raw 数据。
 - 写接口必须记录 `system_user_id`、目标租户、目标店铺、对象、动作、差异摘要、原因和时间。
 - API 返回敏感字段时默认脱敏；密钥、token、密码和私钥永不返回明文。
+- LLM 配置写接口必须携带 `reason`、`idempotency_key` 和当前版本/ETag；并发覆盖返回 409。
 
 ### 7.1 字段级 API 契约
 
@@ -370,6 +393,11 @@
 | `system_action_template` | 系统默认动作能力模板、`action_type`、payload schema、风险等级和确认要求。 |
 | `background_task` | 后台任务状态、输入输出引用、重试次数、错误摘要和幂等键。 |
 | `provider_health_snapshot` | LLM、对象存储、队列、数据库等依赖的健康状态和错误摘要。 |
+| `llm_provider_config` | Provider 类型、端点、Kubernetes Secret 引用、启用状态和最近验证结果；不保存 Secret 值。 |
+| `llm_config_version` | 不可变 LLM 配置版本、草稿/运行/回滚状态、创建人、发布人和时间。 |
+| `llm_scenario_route` | 配置版本下的业务场景、主模型、降级模型和运行参数。 |
+| `llm_connection_test` | 连接测试目标、操作者、状态、耗时和脱敏错误摘要。 |
+| `llm_invocation_metric` | 调用维度、Token、耗时、状态和估算成本；不保存完整 Prompt、客户消息或模型回复。 |
 | `release_record` | Prompt、Graph、规则模板、模型配置等发布记录和回滚引用。 |
 | `eval_run` | 自动化测试、盲测、红线用例运行结果、报告路径和门禁状态。 |
 
@@ -404,6 +432,9 @@
 - 技术支持可以按 `decision_id`、请求 ID 或外部消息 ID 查询消息决策摘要。
 - 系统后台可以查看资料解析、知识抽取、embedding、批量导入和评测任务状态。
 - 系统后台可以查看 LLM provider、API、Worker、数据库、对象存储和队列健康状态。
+- 发布管理员可以创建 LLM 配置草稿、验证 Provider、配置主/降级路由、通过评测门禁发布或回滚，并查看真实调用、Token、成本、延迟和失败统计。
+- development/production 缺少 PostgreSQL 时系统后台启动失败；不得回退到 Demo Organization、Demo PDD Store 或其他 In-memory 示例记录。
+- 系统首页总数来自服务端聚合，列表总数来自 `page.total`；不得用当前页数组长度冒充系统总量。
 - 系统后台关键写操作、跨租户查询和敏感数据查看都有审计。
 - 代客户操作必须通过系统后台专用接口记录 `actor_system_user_id`、原因和目标租户，不允许伪装客户用户调用客户 Admin API。
 - API Key、Secret、平台凭证、SMTP 密码、LLM Key 和私钥不以明文出现在数据库、文档、日志或前端响应。

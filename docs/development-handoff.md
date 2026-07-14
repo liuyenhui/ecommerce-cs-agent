@@ -4,6 +4,12 @@
 
 ## 最近文档更新
 
+### 2026-07-14
+
+- 确认系统后台采用任务导向完整重构：9 个可达页面、可收缩 Lucide 图标导航、移动抽屉、统一状态组件和真实数据空态；development/production 禁止回退 In-memory demo 仓库，系统指标必须来自服务端总量/聚合 API。
+- LLM 治理纳入第一版完整范围：Provider 与 Kubernetes Secret 引用、场景主/降级模型、运行参数、连接测试、草稿、发布/回滚、用量成本、版本和审计；不展示完整 Prompt、客户消息、模型回复或密钥。
+- 新增 [系统后台重设计与 LLM 治理规格](superpowers/specs/2026-07-14-system-admin-redesign-and-llm-governance-design.md)，作为本轮实现与验收入口；详细长期约束继续归入 [System Admin Design](system-admin-design.md)。
+
 ### 2026-07-10
 
 - 商品级知识自动回复必须绑定请求的稳定 `external_product_id`，PostgreSQL 召回与 evidence 门禁双重拒绝跨商品知识；请求缺少商品绑定时只允许显式 `scope=store/tenant` 且不关联商品的通用知识自动回复。
