@@ -157,6 +157,15 @@ def test_ci_runs_with_pgvector_postgres_service() -> None:
         assert "pgvector/pgvector:pg16" in workflow
         assert "PG_DSN" in workflow
         assert 'DATABASE_URL="$PG_DSN"' in workflow
+        pytest_commands = [
+            line.strip()
+            for line in workflow.splitlines()
+            if line.strip().startswith("run:") and "pytest" in line
+        ]
+        assert len(pytest_commands) == 1
+        assert 'APP_ENV=test' in pytest_commands[0]
+        assert 'DATABASE_URL="$PG_DSN"' in pytest_commands[0]
+        assert 'TEST_DATABASE_URL="$PG_DSN"' in pytest_commands[0]
         assert "python -m ecommerce_cs_agent.db.cli migrate" in workflow
         assert "python scripts/check_k8s_security.py" in workflow
 

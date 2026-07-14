@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS llm_config_version (
         CHECK (status IN ('draft', 'validated', 'pending_publish', 'running', 'superseded', 'rolled_back')),
     revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
     description text CHECK (description IS NULL OR length(description) <= 512),
-    configuration_hash text NOT NULL,
+    configuration_hash char(64) NOT NULL
+        CHECK (configuration_hash ~ '^[0-9a-f]{64}$'),
     created_by_system_admin_user_id uuid NOT NULL
         REFERENCES system_admin_user(id) ON DELETE RESTRICT,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -145,6 +146,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_release_record_one_running
 
 CREATE INDEX IF NOT EXISTS idx_llm_release_record_org_status_submitted
     ON llm_release_record (organization_id, status, submitted_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_llm_release_record_evaluation_reference
+    ON llm_release_record (evaluation_run_id, organization_id, evaluation_config_version_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_config_version_one_running
     ON llm_config_version (organization_id)
@@ -412,14 +416,21 @@ BEGIN
         PERFORM 1
         FROM llm_config_version AS route_version
         WHERE route_version.id = NEW.config_version_id
-          AND route_version.status = 'draft'
         ORDER BY route_version.id::text
         FOR KEY SHARE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'scenario route config version does not exist'
+                USING ERRCODE = '23503';
+        END IF;
+        PERFORM lock_llm_config_versions(NEW.config_version_id);
+        PERFORM 1
+        FROM llm_config_version AS route_version
+        WHERE route_version.id = NEW.config_version_id
+          AND route_version.status = 'draft';
         IF NOT FOUND THEN
             RAISE EXCEPTION 'scenario routes can only be added to draft config versions'
                 USING ERRCODE = '23514';
         END IF;
-        PERFORM lock_llm_config_versions(NEW.config_version_id);
         RETURN NEW;
     END IF;
 

@@ -652,6 +652,12 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
         second_draft = service.create_draft(session, {"organization_id": organization_id, "reason": "integration", "idempotency_key": "integration-draft-two"})
         second_changed = service.replace_routes(session, second_draft["version_id"], _all_routes(provider["provider_id"]), expected_revision=1, payload={"reason": "integration", "idempotency_key": "integration-routes-two"})
         service.test_connection(session, provider["provider_id"], {"config_version_id": second_draft["version_id"], "reason": "integration", "idempotency_key": "integration-test-two"})
+        service.update_provider(session, provider["provider_id"], {"enabled": False, "reason": "integration", "idempotency_key": "integration-disable"}, expected_revision=3)
+        with pytest.raises(HTTPException) as disabled_provider:
+            service.validate_draft(session, second_draft["version_id"], {"expected_revision": second_changed["revision"], "reason": "integration", "idempotency_key": "integration-disabled-validate"})
+        assert disabled_provider.value.detail["error"]["code"] == "provider_not_ready"
+        service.update_provider(session, provider["provider_id"], {"enabled": True, "reason": "integration", "idempotency_key": "integration-enable"}, expected_revision=4)
+        service.test_connection(session, provider["provider_id"], {"config_version_id": second_draft["version_id"], "reason": "integration", "idempotency_key": "integration-retest-after-enable"})
         second_validated = service.validate_draft(session, second_draft["version_id"], {"expected_revision": second_changed["revision"], "reason": "integration", "idempotency_key": "integration-validate-two"})
         complete_evaluation(second_validated, "integration-eval-two")
         second_pending = service.submit_publish(session, second_draft["version_id"], {"expected_revision": second_validated["revision"], "evaluation_run_id": "integration-eval-two", "reason": "integration", "idempotency_key": "integration-submit-two"})
@@ -675,9 +681,6 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
                 assert cur.fetchone() == ("running",)
                 cur.execute("SELECT status FROM llm_release_record WHERE config_version_id=%s", (second_draft["version_id"],))
                 assert cur.fetchone() == ("pending",)
-        service.update_provider(session, provider["provider_id"], {"enabled": False, "reason": "integration", "idempotency_key": "integration-disable"}, expected_revision=3)
-        with pytest.raises(HTTPException):
-            service.publish(session, second_draft["version_id"], {"expected_revision": second_pending["revision"], "reason": "integration", "idempotency_key": "integration-publish-two"})
         assert service.get_version(session, running["version_id"])["status"] == "running"
         with psycopg.connect(scoped_url) as metrics_connection:
             with metrics_connection.cursor() as cur:
@@ -692,7 +695,6 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
         assert {row["currency"] for row in service.usage_breakdown(session, {"organization_id": organization_id}, "model")} == {"CNY", "USD"}
         assert len(service.list_invocations(session, {"organization_id": organization_id, "currency": "CNY", "limit": 1})) == 1
         assert len(service.list_providers(session)) == 2
-        service.update_provider(session, provider["provider_id"], {"enabled": True, "reason": "integration", "idempotency_key": "integration-enable"}, expected_revision=4)
         second_running = service.publish(session, second_draft["version_id"], {"expected_revision": second_pending["revision"], "reason": "integration", "idempotency_key": "integration-publish-two-success"})
         assert second_running["status"] == "running"
         original_audit = service._audit

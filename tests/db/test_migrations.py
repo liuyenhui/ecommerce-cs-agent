@@ -266,6 +266,8 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "unique (organization_id, version_number)",
             "check (status in ('draft', 'validated', 'pending_publish', 'running', 'superseded', 'rolled_back'))",
             "revision integer not null default 1 check (revision > 0)",
+            "configuration_hash char(64) not null",
+            "configuration_hash ~ '^[0-9a-f]{64}$'",
             "created_by_system_admin_user_id uuid not null references system_admin_user(id) on delete restrict",
             "created_at timestamptz not null default now()",
             "published_by_system_admin_user_id uuid references system_admin_user(id) on delete restrict",
@@ -311,6 +313,7 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "rollback_of_release_id is null and rollback_of_version_id is null",
             "rollback_of_release_id is not null and rollback_of_version_id is not null",
             "create unique index if not exists idx_llm_release_record_one_running",
+            "create index if not exists idx_llm_release_record_evaluation_reference on llm_release_record (evaluation_run_id, organization_id, evaluation_config_version_id)",
         ]),
         (eval_sql, [
             "id varchar(128) primary key",

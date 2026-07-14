@@ -186,6 +186,22 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 (schema_name,),
             )
             assert cursor.fetchone() == ("NO",)
+            cursor.execute(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = %s
+                  AND tablename = 'llm_release_record'
+                  AND indexname = 'idx_llm_release_record_evaluation_reference'
+                """,
+                (schema_name,),
+            )
+            release_evaluation_index = cursor.fetchone()
+            assert release_evaluation_index is not None
+            assert (
+                "(evaluation_run_id, organization_id, evaluation_config_version_id)"
+                in release_evaluation_index[0]
+            )
 
             cursor.execute(
                 """
@@ -267,15 +283,20 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 (provider_id,),
             )
             assert cursor.fetchone() == (2,)
+            assert_integrity_error(
+                cursor,
+                "INSERT INTO llm_config_version (organization_id, version_number, configuration_hash, created_by_system_admin_user_id) VALUES (%s, 98, %s, %s)",
+                (organization_id, "not-a-sha256-hash", system_admin_user_id),
+            )
             cursor.execute(
                 """
                 INSERT INTO llm_config_version (
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id
-                ) VALUES (%s, 1, 'draft', 'test-hash', %s)
+                ) VALUES (%s, 1, 'draft', %s, %s)
                 RETURNING id
                 """,
-                (organization_id, system_admin_user_id),
+                (organization_id, "f" * 64, system_admin_user_id),
             )
             config_version_id = cursor.fetchone()[0]
             assert_integrity_error(
@@ -369,7 +390,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 INSERT INTO llm_config_version (
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id
-                ) VALUES (%s, 10, 'draft', 'metadata-rewrite-target', %s)
+                ) VALUES (%s, 10, 'draft', repeat('1', 64), %s)
                 RETURNING id
                 """,
                 (organization_id, system_admin_user_id),
@@ -380,7 +401,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 INSERT INTO llm_config_version (
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id
-                ) VALUES (%s, 11, 'draft', 'deletable-draft', %s)
+                ) VALUES (%s, 11, 'draft', repeat('2', 64), %s)
                 RETURNING id
                 """,
                 (organization_id, system_admin_user_id),
@@ -394,7 +415,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 INSERT INTO llm_config_version (
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id, rollback_of_version_id
-                ) VALUES (%s, 29, 'draft', 'invalid-draft-rollback', %s, %s)
+                ) VALUES (%s, 29, 'draft', repeat('3', 64), %s, %s)
                 """,
                 (organization_id, system_admin_user_id, metadata_rewrite_target_id),
             )
@@ -403,7 +424,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 INSERT INTO llm_config_version (
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id
-                ) VALUES (%s, 20, 'draft', 'validated-target', %s)
+                ) VALUES (%s, 20, 'draft', repeat('4', 64), %s)
                 RETURNING id
                 """,
                 (organization_id, system_admin_user_id),
@@ -423,7 +444,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 INSERT INTO llm_config_version (
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id, rollback_of_version_id
-                ) VALUES (%s, 30, 'draft', 'invalid-validated-rollback', %s, %s)
+                ) VALUES (%s, 30, 'draft', repeat('5', 64), %s, %s)
                 """,
                 (organization_id, system_admin_user_id, validated_target_id),
             )
@@ -432,7 +453,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 INSERT INTO llm_config_version (
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id
-                ) VALUES (%s, 21, 'draft', 'pending-target', %s)
+                ) VALUES (%s, 21, 'draft', repeat('6', 64), %s)
                 RETURNING id
                 """,
                 (organization_id, system_admin_user_id),
@@ -452,7 +473,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 INSERT INTO llm_config_version (
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id, rollback_of_version_id
-                ) VALUES (%s, 31, 'draft', 'invalid-pending-rollback', %s, %s)
+                ) VALUES (%s, 31, 'draft', repeat('7', 64), %s, %s)
                 """,
                 (organization_id, system_admin_user_id, pending_target_id),
             )
@@ -463,7 +484,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 INSERT INTO llm_config_version (
                     id, organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id, rollback_of_version_id
-                ) VALUES (%s, %s, 32, 'draft', 'invalid-self-rollback', %s, %s)
+                ) VALUES (%s, %s, 32, 'draft', repeat('8', 64), %s, %s)
                 """,
                 (self_target_id, organization_id, system_admin_user_id, self_target_id),
             )
@@ -520,7 +541,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id,
                     published_by_system_admin_user_id, published_at
-                ) VALUES (%s, 2, 'draft', 'invalid-published-draft', %s, %s, now())
+                ) VALUES (%s, 2, 'draft', repeat('9', 64), %s, %s, now())
                 """,
                 (organization_id, system_admin_user_id, system_admin_user_id),
             )
@@ -531,7 +552,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id,
                     published_by_system_admin_user_id, published_at
-                ) VALUES (%s, 3, 'running', 'invalid-direct-running', %s, %s, now())
+                ) VALUES (%s, 3, 'running', repeat('a', 64), %s, %s, now())
                 """,
                 (organization_id, system_admin_user_id, system_admin_user_id),
             )
@@ -693,7 +714,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 INSERT INTO llm_config_version (
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id, rollback_of_version_id
-                ) VALUES (%s, 33, 'draft', 'invalid-running-rollback', %s, %s)
+                ) VALUES (%s, 33, 'draft', repeat('b', 64), %s, %s)
                 """,
                 (organization_id, system_admin_user_id, config_version_id),
             )
@@ -722,7 +743,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 """
                 UPDATE llm_config_version
                 SET status = 'superseded', revision = revision + 1,
-                    configuration_hash = 'rewritten-history',
+                    configuration_hash = repeat('c', 64),
                     description = 'rewritten history',
                     published_by_system_admin_user_id = %s,
                     published_at = published_at + interval '1 second',
@@ -776,7 +797,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 INSERT INTO llm_config_version (
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id
-                ) VALUES (%s, 1, 'draft', 'other-org-terminal', %s)
+                ) VALUES (%s, 1, 'draft', repeat('d', 64), %s)
                 RETURNING id
                 """,
                 (other_organization_id, system_admin_user_id),
@@ -810,7 +831,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 INSERT INTO llm_config_version (
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id, rollback_of_version_id
-                ) VALUES (%s, 34, 'draft', 'invalid-cross-org-rollback', %s, %s)
+                ) VALUES (%s, 34, 'draft', repeat('e', 64), %s, %s)
                 """,
                 (organization_id, system_admin_user_id, other_organization_terminal_id),
             )
@@ -910,7 +931,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id,
                     rollback_of_version_id
-                ) VALUES (%s, 12, 'draft', 'rollback-version', %s, %s)
+                ) VALUES (%s, 12, 'draft', repeat('f', 64), %s, %s)
                 RETURNING id
                 """,
                 (organization_id, system_admin_user_id, config_version_id),
@@ -982,6 +1003,10 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
             cursor.execute("INSERT INTO organization (name) VALUES ('Release Consistency') RETURNING id")
             organization_id = cursor.fetchone()[0]
             cursor.execute(
+                "INSERT INTO organization (name) VALUES ('Other Release Consistency') RETURNING id"
+            )
+            other_organization_id = cursor.fetchone()[0]
+            cursor.execute(
                 """
                 INSERT INTO llm_provider_config (
                     name, provider_type, base_url, secret_namespace, secret_name, secret_key
@@ -997,7 +1022,7 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                 INSERT INTO llm_config_version (
                     organization_id, version_number, configuration_hash,
                     created_by_system_admin_user_id
-                ) VALUES (%s, 1, 'draft-without-release', %s)
+                ) VALUES (%s, 1, repeat('1', 64), %s)
                 RETURNING id
                 """,
                 (organization_id, admin_id),
@@ -1195,7 +1220,7 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                 INSERT INTO llm_config_version (
                     organization_id, version_number, configuration_hash,
                     created_by_system_admin_user_id, rollback_of_version_id
-                ) VALUES (%s, 20, 'rollback-draft', %s, %s)
+                ) VALUES (%s, 20, repeat('2', 64), %s, %s)
                 RETURNING id
                 """,
                 (organization_id, admin_id, first_version_id),
@@ -1414,6 +1439,16 @@ def test_postgres_evaluation_release_gate_checker_reads_migrated_table() -> None
         with psycopg.connect(DATABASE_URL, options=f"-csearch_path={schema_name},public") as transition:
             with transition.cursor() as cursor:
                 cursor.execute("UPDATE llm_config_version SET status='pending_publish', revision=3 WHERE id=%s", (version_id,))
+                cursor.execute(
+                    """
+                    INSERT INTO llm_release_record (
+                        organization_id, config_version_id, evaluation_run_id,
+                        evaluation_config_version_id,
+                        submitted_by_system_admin_user_id
+                    ) VALUES (%s, %s, 'eval-real', %s, %s)
+                    """,
+                    (organization_id, version_id, version_id, admin_id),
+                )
         assert checker(candidate, "eval-real")["status"] == "failed"
     finally:
         connection.rollback()
@@ -1460,7 +1495,7 @@ def test_llm_version_lock_serializes_route_metric_and_release_writes() -> None:
                 INSERT INTO llm_config_version (
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id
-                ) VALUES (%s, 1, 'draft', 'route-race', %s)
+                ) VALUES (%s, 1, 'draft', repeat('3', 64), %s)
                 RETURNING id
                 """,
                 (organization_id, system_admin_user_id),
@@ -1674,7 +1709,7 @@ def test_llm_version_lock_serializes_route_metric_and_release_writes() -> None:
                     (
                         organization_id,
                         offset,
-                        f"rollback-deadlock-{mutation_name}",
+                        format(offset, "064x"),
                         system_admin_user_id,
                         metric_race_version_id,
                     ),
