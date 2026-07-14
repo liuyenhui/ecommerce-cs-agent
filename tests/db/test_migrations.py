@@ -254,6 +254,8 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "check ((enabled and status <> 'disabled') or (not enabled and status = 'disabled'))",
         ]),
         (version_sql, [
+            "organization_id uuid not null references organization(id) on delete restrict",
+            "unique (organization_id, version_number)",
             "check (status in ('draft', 'validated', 'pending_publish', 'running', 'superseded', 'rolled_back'))",
             "revision integer not null default 1 check (revision > 0)",
             "created_by_system_admin_user_id uuid not null references system_admin_user(id) on delete restrict",
@@ -264,7 +266,7 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "status in ('draft', 'validated', 'pending_publish') and published_at is null and published_by_system_admin_user_id is null",
             "status in ('running', 'superseded', 'rolled_back') and published_at is not null and published_by_system_admin_user_id is not null",
             "rollback_of_version_id is null or rollback_of_version_id <> id",
-            "create unique index if not exists idx_llm_config_version_one_running on llm_config_version (status) where status = 'running'",
+            "create unique index if not exists idx_llm_config_version_one_running on llm_config_version (organization_id) where status = 'running'",
         ]),
         (route_sql, [
             "unique (config_version_id, scenario)",
@@ -317,6 +319,14 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "create trigger trg_protect_llm_scenario_route_history",
             "before insert or update or delete on llm_scenario_route",
             "create or replace function validate_llm_config_version_transition()",
+            "create or replace function lock_llm_config_versions",
+            "version rows in uuid order, then version advisory locks",
+            "order by route_version.id::text for key share",
+            "perform lock_llm_config_versions",
+            "new.id is distinct from old.id",
+            "rollback_target.organization_id = new.organization_id",
+            "rollback_target.status in ('superseded', 'rolled_back')",
+            "for key share",
             "old.status = 'draft' and new.status = 'validated'",
             "old.status = 'validated' and new.status = 'pending_publish'",
             "old.status = 'pending_publish' and new.status = 'running'",
@@ -341,6 +351,8 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
     for scoped_sql, required_snippets in required_by_section:
         for snippet in required_snippets:
             assert snippet in scoped_sql
+
+    assert invocation_sql.count("perform lock_llm_config_versions") >= 3
 
     for redundant_attribution_column in [
         "provider_config_id uuid",

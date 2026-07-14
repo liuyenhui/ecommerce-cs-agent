@@ -30,7 +30,8 @@ CREATE INDEX IF NOT EXISTS idx_llm_provider_config_type_status
 
 CREATE TABLE IF NOT EXISTS llm_config_version (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    version_number bigint NOT NULL UNIQUE CHECK (version_number > 0),
+    organization_id uuid NOT NULL REFERENCES organization(id) ON DELETE RESTRICT,
+    version_number bigint NOT NULL CHECK (version_number > 0),
     status text NOT NULL DEFAULT 'draft'
         CHECK (status IN ('draft', 'validated', 'pending_publish', 'running', 'superseded', 'rolled_back')),
     revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
@@ -54,15 +55,16 @@ CREATE TABLE IF NOT EXISTS llm_config_version (
     ),
     -- Rollback creates a new running version from a historical source. Once
     -- superseded, that derived version retains the source link for history.
-    CHECK (rollback_of_version_id IS NULL OR rollback_of_version_id <> id)
+    CHECK (rollback_of_version_id IS NULL OR rollback_of_version_id <> id),
+    UNIQUE (organization_id, version_number)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_config_version_one_running
-    ON llm_config_version (status)
+    ON llm_config_version (organization_id)
     WHERE status = 'running';
 
 CREATE INDEX IF NOT EXISTS idx_llm_config_version_status_created
-    ON llm_config_version (status, created_at DESC);
+    ON llm_config_version (organization_id, status, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS llm_scenario_route (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -182,21 +184,81 @@ BEGIN
     END IF;
 END $$;
 
+-- Lock order: route row when present, version rows in UUID order, then version advisory locks.
+CREATE OR REPLACE FUNCTION lock_llm_config_versions(
+    first_version_id uuid,
+    second_version_id uuid DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    lower_version_id uuid;
+    higher_version_id uuid;
+BEGIN
+    IF first_version_id IS NULL THEN
+        RETURN;
+    END IF;
+
+    IF second_version_id IS NULL OR first_version_id = second_version_id THEN
+        PERFORM pg_advisory_xact_lock(
+            hashtextextended('llm_config_version:' || first_version_id::text, 0)
+        );
+        RETURN;
+    END IF;
+
+    IF first_version_id::text < second_version_id::text THEN
+        lower_version_id := first_version_id;
+        higher_version_id := second_version_id;
+    ELSE
+        lower_version_id := second_version_id;
+        higher_version_id := first_version_id;
+    END IF;
+
+    PERFORM pg_advisory_xact_lock(
+        hashtextextended('llm_config_version:' || lower_version_id::text, 0)
+    );
+    PERFORM pg_advisory_xact_lock(
+        hashtextextended('llm_config_version:' || higher_version_id::text, 0)
+    );
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION validate_llm_invocation_metric_route_role()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    metric_version_id uuid;
 BEGIN
-    PERFORM pg_advisory_xact_lock(hashtextextended(NEW.scenario_route_id::text, 0));
+    SELECT route.config_version_id
+    INTO metric_version_id
+    FROM llm_scenario_route AS route
+    WHERE route.id = NEW.scenario_route_id
+    FOR KEY SHARE;
 
-    IF NOT EXISTS (
-        SELECT 1
-        FROM llm_scenario_route AS route
-        JOIN llm_config_version AS route_version
-          ON route_version.id = route.config_version_id
-        WHERE route.id = NEW.scenario_route_id
-          AND route_version.status = 'running'
-    ) THEN
+    IF metric_version_id IS NULL THEN
+        RAISE EXCEPTION 'invocation metric route does not exist'
+            USING ERRCODE = '23503';
+    END IF;
+
+    PERFORM 1
+    FROM llm_config_version AS route_version
+    WHERE route_version.id = metric_version_id
+    ORDER BY route_version.id::text
+    FOR KEY SHARE;
+    PERFORM lock_llm_config_versions(metric_version_id);
+
+    PERFORM 1
+    FROM llm_scenario_route AS route
+    JOIN llm_config_version AS route_version
+      ON route_version.id = route.config_version_id
+    WHERE route.id = NEW.scenario_route_id
+      AND route.config_version_id = metric_version_id
+      AND route_version.status = 'running'
+    FOR KEY SHARE OF route, route_version;
+
+    IF NOT FOUND THEN
         RAISE EXCEPTION 'invocation metrics require a route from the running config version'
             USING ERRCODE = '23514';
     END IF;
@@ -230,20 +292,35 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     IF TG_OP = 'INSERT' THEN
-        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.id::text, 0));
-        IF NOT EXISTS (
-            SELECT 1
-            FROM llm_config_version AS route_version
-            WHERE route_version.id = NEW.config_version_id
-              AND route_version.status = 'draft'
-        ) THEN
+        PERFORM 1
+        FROM llm_config_version AS route_version
+        WHERE route_version.id = NEW.config_version_id
+          AND route_version.status = 'draft'
+        ORDER BY route_version.id::text
+        FOR KEY SHARE;
+        IF NOT FOUND THEN
             RAISE EXCEPTION 'scenario routes can only be added to draft config versions'
                 USING ERRCODE = '23514';
         END IF;
+        PERFORM lock_llm_config_versions(NEW.config_version_id);
         RETURN NEW;
     END IF;
 
-    PERFORM pg_advisory_xact_lock(hashtextextended(OLD.id::text, 0));
+    IF TG_OP = 'UPDATE' THEN
+        PERFORM 1
+        FROM llm_config_version AS route_version
+        WHERE route_version.id IN (OLD.config_version_id, NEW.config_version_id)
+        ORDER BY route_version.id::text
+        FOR KEY SHARE;
+        PERFORM lock_llm_config_versions(OLD.config_version_id, NEW.config_version_id);
+    ELSE
+        PERFORM 1
+        FROM llm_config_version AS route_version
+        WHERE route_version.id = OLD.config_version_id
+        ORDER BY route_version.id::text
+        FOR KEY SHARE;
+        PERFORM lock_llm_config_versions(OLD.config_version_id);
+    END IF;
 
     IF EXISTS (
         SELECT 1
@@ -254,23 +331,23 @@ BEGIN
             USING ERRCODE = '23514';
     END IF;
 
-    IF EXISTS (
-        SELECT 1
-        FROM llm_config_version AS route_version
-        WHERE route_version.id = OLD.config_version_id
-          AND route_version.status <> 'draft'
-    ) THEN
+    PERFORM 1
+    FROM llm_config_version AS route_version
+    WHERE route_version.id = OLD.config_version_id
+      AND route_version.status <> 'draft'
+    FOR KEY SHARE;
+    IF FOUND THEN
         RAISE EXCEPTION 'scenario routes are immutable after their config version leaves draft'
             USING ERRCODE = '23514';
     END IF;
 
     IF TG_OP = 'UPDATE' THEN
-        IF EXISTS (
-            SELECT 1
-            FROM llm_config_version AS route_version
-            WHERE route_version.id = NEW.config_version_id
-              AND route_version.status <> 'draft'
-        ) THEN
+        PERFORM 1
+        FROM llm_config_version AS route_version
+        WHERE route_version.id = NEW.config_version_id
+          AND route_version.status <> 'draft'
+        FOR KEY SHARE;
+        IF FOUND THEN
             RAISE EXCEPTION 'scenario routes cannot be moved into a non-draft config version'
                 USING ERRCODE = '23514';
         END IF;
@@ -297,6 +374,7 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     IF TG_OP = 'DELETE' THEN
+        PERFORM lock_llm_config_versions(OLD.id);
         IF OLD.status <> 'draft' THEN
             RAISE EXCEPTION 'only draft config versions may be deleted'
                 USING ERRCODE = '23514';
@@ -312,7 +390,30 @@ BEGIN
             RAISE EXCEPTION 'config versions must start as unpublished revision-one drafts'
                 USING ERRCODE = '23514';
         END IF;
+        IF NEW.rollback_of_version_id IS NOT NULL THEN
+            PERFORM 1
+            FROM llm_config_version AS rollback_target
+            WHERE rollback_target.id = NEW.rollback_of_version_id
+              AND rollback_target.organization_id = NEW.organization_id
+              AND rollback_target.status IN ('superseded', 'rolled_back')
+            ORDER BY rollback_target.id::text
+            FOR KEY SHARE;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION 'rollback source must be a terminal version from the same organization'
+                    USING ERRCODE = '23514';
+            END IF;
+            PERFORM lock_llm_config_versions(NEW.id, NEW.rollback_of_version_id);
+        ELSE
+            PERFORM lock_llm_config_versions(NEW.id);
+        END IF;
         RETURN NEW;
+    END IF;
+
+    PERFORM lock_llm_config_versions(OLD.id, NEW.id);
+
+    IF NEW.id IS DISTINCT FROM OLD.id THEN
+        RAISE EXCEPTION 'config version id is immutable'
+            USING ERRCODE = '23514';
     END IF;
 
     IF NEW.revision <> OLD.revision + 1 THEN
@@ -332,8 +433,10 @@ BEGIN
             USING ERRCODE = '23514';
     END IF;
 
-    IF NEW.version_number IS DISTINCT FROM OLD.version_number THEN
-        RAISE EXCEPTION 'config version number is immutable'
+    IF NEW.organization_id IS DISTINCT FROM OLD.organization_id
+        OR NEW.version_number IS DISTINCT FROM OLD.version_number
+    THEN
+        RAISE EXCEPTION 'config version organization and number are immutable'
             USING ERRCODE = '23514';
     END IF;
 

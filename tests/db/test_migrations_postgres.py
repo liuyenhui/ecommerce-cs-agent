@@ -1,6 +1,8 @@
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
+from threading import Event
 
 import psycopg
 import pytest
@@ -22,6 +24,33 @@ def assert_integrity_error(cursor: psycopg.Cursor[object], statement: str, param
         cursor.execute(statement, parameters)
     cursor.execute("ROLLBACK TO SAVEPOINT expected_integrity_error")
     cursor.execute("RELEASE SAVEPOINT expected_integrity_error")
+
+
+def set_test_search_path(cursor: psycopg.Cursor[object], schema_name: str) -> None:
+    cursor.execute(sql.SQL("SET LOCAL search_path TO {}, public").format(sql.Identifier(schema_name)))
+    cursor.execute("SET LOCAL lock_timeout = '2s'")
+    cursor.execute("SET LOCAL statement_timeout = '5s'")
+
+
+def execute_concurrent_statement(
+    schema_name: str,
+    statement: str,
+    parameters: tuple[object, ...],
+    started: Event,
+) -> str:
+    connection = psycopg.connect(DATABASE_URL)
+    try:
+        with connection.cursor() as cursor:
+            set_test_search_path(cursor, schema_name)
+            started.set()
+            cursor.execute(statement, parameters)
+        connection.commit()
+        return "committed"
+    except psycopg.IntegrityError as exc:
+        connection.rollback()
+        return exc.sqlstate or "integrity_error"
+    finally:
+        connection.close()
 
 
 def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constraints() -> None:
@@ -105,11 +134,12 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
             cursor.execute(
                 """
                 INSERT INTO llm_config_version (
-                    version_number, status, configuration_hash, created_by_system_admin_user_id
-                ) VALUES (1, 'draft', 'test-hash', %s)
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id
+                ) VALUES (%s, 1, 'draft', 'test-hash', %s)
                 RETURNING id
                 """,
-                (system_admin_user_id,),
+                (organization_id, system_admin_user_id),
             )
             config_version_id = cursor.fetchone()[0]
             cursor.execute(
@@ -125,24 +155,106 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
             cursor.execute(
                 """
                 INSERT INTO llm_config_version (
-                    version_number, status, configuration_hash, created_by_system_admin_user_id
-                ) VALUES (10, 'draft', 'metadata-rewrite-target', %s)
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id
+                ) VALUES (%s, 10, 'draft', 'metadata-rewrite-target', %s)
                 RETURNING id
                 """,
-                (system_admin_user_id,),
+                (organization_id, system_admin_user_id),
             )
             metadata_rewrite_target_id = cursor.fetchone()[0]
             cursor.execute(
                 """
                 INSERT INTO llm_config_version (
-                    version_number, status, configuration_hash, created_by_system_admin_user_id
-                ) VALUES (11, 'draft', 'deletable-draft', %s)
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id
+                ) VALUES (%s, 11, 'draft', 'deletable-draft', %s)
                 RETURNING id
                 """,
-                (system_admin_user_id,),
+                (organization_id, system_admin_user_id),
             )
             deletable_draft_id = cursor.fetchone()[0]
             cursor.execute("DELETE FROM llm_config_version WHERE id = %s", (deletable_draft_id,))
+
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_config_version (
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id, rollback_of_version_id
+                ) VALUES (%s, 29, 'draft', 'invalid-draft-rollback', %s, %s)
+                """,
+                (organization_id, system_admin_user_id, metadata_rewrite_target_id),
+            )
+            cursor.execute(
+                """
+                INSERT INTO llm_config_version (
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id
+                ) VALUES (%s, 20, 'draft', 'validated-target', %s)
+                RETURNING id
+                """,
+                (organization_id, system_admin_user_id),
+            )
+            validated_target_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                UPDATE llm_config_version
+                SET status = 'validated', revision = revision + 1
+                WHERE id = %s
+                """,
+                (validated_target_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_config_version (
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id, rollback_of_version_id
+                ) VALUES (%s, 30, 'draft', 'invalid-validated-rollback', %s, %s)
+                """,
+                (organization_id, system_admin_user_id, validated_target_id),
+            )
+            cursor.execute(
+                """
+                INSERT INTO llm_config_version (
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id
+                ) VALUES (%s, 21, 'draft', 'pending-target', %s)
+                RETURNING id
+                """,
+                (organization_id, system_admin_user_id),
+            )
+            pending_target_id = cursor.fetchone()[0]
+            cursor.execute(
+                "UPDATE llm_config_version SET status = 'validated', revision = revision + 1 WHERE id = %s",
+                (pending_target_id,),
+            )
+            cursor.execute(
+                "UPDATE llm_config_version SET status = 'pending_publish', revision = revision + 1 WHERE id = %s",
+                (pending_target_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_config_version (
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id, rollback_of_version_id
+                ) VALUES (%s, 31, 'draft', 'invalid-pending-rollback', %s, %s)
+                """,
+                (organization_id, system_admin_user_id, pending_target_id),
+            )
+            self_target_id = uuid.uuid4()
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_config_version (
+                    id, organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id, rollback_of_version_id
+                ) VALUES (%s, %s, 32, 'draft', 'invalid-self-rollback', %s, %s)
+                """,
+                (self_target_id, organization_id, system_admin_user_id, self_target_id),
+            )
             cursor.execute(
                 """
                 INSERT INTO llm_scenario_route (
@@ -184,21 +296,23 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 cursor,
                 """
                 INSERT INTO llm_config_version (
-                    version_number, status, configuration_hash, created_by_system_admin_user_id,
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id,
                     published_by_system_admin_user_id, published_at
-                ) VALUES (2, 'draft', 'invalid-published-draft', %s, %s, now())
+                ) VALUES (%s, 2, 'draft', 'invalid-published-draft', %s, %s, now())
                 """,
-                (system_admin_user_id, system_admin_user_id),
+                (organization_id, system_admin_user_id, system_admin_user_id),
             )
             assert_integrity_error(
                 cursor,
                 """
                 INSERT INTO llm_config_version (
-                    version_number, status, configuration_hash, created_by_system_admin_user_id,
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id,
                     published_by_system_admin_user_id, published_at
-                ) VALUES (3, 'running', 'invalid-direct-running', %s, %s, now())
+                ) VALUES (%s, 3, 'running', 'invalid-direct-running', %s, %s, now())
                 """,
-                (system_admin_user_id, system_admin_user_id),
+                (organization_id, system_admin_user_id, system_admin_user_id),
             )
             assert_integrity_error(
                 cursor,
@@ -216,6 +330,11 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 SET status = 'validated', revision = revision + 1
                 WHERE id = %s
                 """,
+                (config_version_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_config_version SET id = gen_random_uuid(), revision = revision + 1 WHERE id = %s",
                 (config_version_id,),
             )
             assert_integrity_error(
@@ -290,6 +409,16 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
             assert_integrity_error(
                 cursor,
                 """
+                INSERT INTO llm_config_version (
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id, rollback_of_version_id
+                ) VALUES (%s, 33, 'draft', 'invalid-running-rollback', %s, %s)
+                """,
+                (organization_id, system_admin_user_id, config_version_id),
+            )
+            assert_integrity_error(
+                cursor,
+                """
                 UPDATE llm_config_version
                 SET status = 'draft', revision = revision + 1,
                     published_by_system_admin_user_id = NULL,
@@ -350,6 +479,49 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 cursor,
                 "DELETE FROM llm_scenario_route WHERE id = %s",
                 (scenario_route_id,),
+            )
+            cursor.execute(
+                """
+                INSERT INTO llm_config_version (
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id
+                ) VALUES (%s, 1, 'draft', 'other-org-terminal', %s)
+                RETURNING id
+                """,
+                (other_organization_id, system_admin_user_id),
+            )
+            other_organization_terminal_id = cursor.fetchone()[0]
+            cursor.execute(
+                "UPDATE llm_config_version SET status = 'validated', revision = revision + 1 WHERE id = %s",
+                (other_organization_terminal_id,),
+            )
+            cursor.execute(
+                "UPDATE llm_config_version SET status = 'pending_publish', revision = revision + 1 WHERE id = %s",
+                (other_organization_terminal_id,),
+            )
+            cursor.execute(
+                """
+                UPDATE llm_config_version
+                SET status = 'running', revision = revision + 1,
+                    published_by_system_admin_user_id = %s,
+                    published_at = now()
+                WHERE id = %s
+                """,
+                (system_admin_user_id, other_organization_terminal_id),
+            )
+            cursor.execute(
+                "UPDATE llm_config_version SET status = 'rolled_back', revision = revision + 1 WHERE id = %s",
+                (other_organization_terminal_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_config_version (
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id, rollback_of_version_id
+                ) VALUES (%s, 34, 'draft', 'invalid-cross-org-rollback', %s, %s)
+                """,
+                (organization_id, system_admin_user_id, other_organization_terminal_id),
             )
             cursor.execute(
                 """
@@ -414,12 +586,13 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
             cursor.execute(
                 """
                 INSERT INTO llm_config_version (
-                    version_number, status, configuration_hash, created_by_system_admin_user_id,
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id,
                     rollback_of_version_id
-                ) VALUES (12, 'draft', 'rollback-version', %s, %s)
+                ) VALUES (%s, 12, 'draft', 'rollback-version', %s, %s)
                 RETURNING id
                 """,
-                (system_admin_user_id, config_version_id),
+                (organization_id, system_admin_user_id, config_version_id),
             )
             rollback_version_id = cursor.fetchone()[0]
             cursor.execute(
@@ -464,3 +637,169 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
     finally:
         connection.rollback()
         connection.close()
+
+
+def test_llm_version_lock_serializes_route_and_metric_writes() -> None:
+    schema_name = f"migration_concurrency_{uuid.uuid4().hex}"
+    setup_connection = psycopg.connect(DATABASE_URL)
+    transition_connection: psycopg.Connection[object] | None = None
+
+    try:
+        with setup_connection.cursor() as cursor:
+            cursor.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema_name)))
+            set_test_search_path(cursor, schema_name)
+            for migration in load_migrations(Path("migrations")):
+                cursor.execute(migration.sql)
+            cursor.execute(
+                """
+                INSERT INTO system_admin_user (email, password_hash, display_name, role)
+                VALUES ('concurrency-test@example.invalid', 'not-a-real-password-hash',
+                        'Concurrency Test', 'super_admin')
+                RETURNING id
+                """
+            )
+            system_admin_user_id = cursor.fetchone()[0]
+            cursor.execute("INSERT INTO organization (name) VALUES ('Concurrency Test') RETURNING id")
+            organization_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO llm_provider_config (
+                    name, provider_type, base_url, secret_namespace, secret_name, secret_key
+                ) VALUES ('concurrency-provider', 'test', 'https://example.invalid',
+                          'test', 'llm', 'key')
+                RETURNING id
+                """
+            )
+            provider_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO llm_config_version (
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id
+                ) VALUES (%s, 1, 'draft', 'route-race', %s)
+                RETURNING id
+                """,
+                (organization_id, system_admin_user_id),
+            )
+            route_race_version_id = cursor.fetchone()[0]
+        setup_connection.commit()
+
+        transition_connection = psycopg.connect(DATABASE_URL)
+        with transition_connection.cursor() as cursor:
+            set_test_search_path(cursor, schema_name)
+            cursor.execute(
+                """
+                UPDATE llm_config_version
+                SET status = 'validated', revision = revision + 1
+                WHERE id = %s
+                """,
+                (route_race_version_id,),
+            )
+
+        route_started = Event()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            route_future = executor.submit(
+                execute_concurrent_statement,
+                schema_name,
+                """
+                INSERT INTO llm_scenario_route (
+                    config_version_id, scenario, primary_provider_config_id, primary_model
+                ) VALUES (%s, 'concurrent-route', %s, 'test-model')
+                """,
+                (route_race_version_id, provider_id),
+                route_started,
+            )
+            assert route_started.wait(timeout=2)
+            with pytest.raises(FutureTimeoutError):
+                route_future.result(timeout=0.2)
+            transition_connection.commit()
+            assert route_future.result(timeout=5) == "23514"
+        transition_connection.close()
+        transition_connection = None
+
+        with setup_connection.cursor() as cursor:
+            set_test_search_path(cursor, schema_name)
+            cursor.execute(
+                """
+                INSERT INTO llm_config_version (
+                    organization_id, version_number, status, configuration_hash,
+                    created_by_system_admin_user_id
+                ) VALUES (%s, 2, 'draft', 'metric-race', %s)
+                RETURNING id
+                """,
+                (organization_id, system_admin_user_id),
+            )
+            metric_race_version_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO llm_scenario_route (
+                    config_version_id, scenario, primary_provider_config_id, primary_model
+                ) VALUES (%s, 'metric-race', %s, 'test-model')
+                RETURNING id
+                """,
+                (metric_race_version_id, provider_id),
+            )
+            metric_race_route_id = cursor.fetchone()[0]
+            cursor.execute(
+                "UPDATE llm_config_version SET status = 'validated', revision = revision + 1 WHERE id = %s",
+                (metric_race_version_id,),
+            )
+            cursor.execute(
+                "UPDATE llm_config_version SET status = 'pending_publish', revision = revision + 1 WHERE id = %s",
+                (metric_race_version_id,),
+            )
+            cursor.execute(
+                """
+                UPDATE llm_config_version
+                SET status = 'running', revision = revision + 1,
+                    published_by_system_admin_user_id = %s,
+                    published_at = now()
+                WHERE id = %s
+                """,
+                (system_admin_user_id, metric_race_version_id),
+            )
+        setup_connection.commit()
+
+        transition_connection = psycopg.connect(DATABASE_URL)
+        with transition_connection.cursor() as cursor:
+            set_test_search_path(cursor, schema_name)
+            cursor.execute(
+                """
+                UPDATE llm_config_version
+                SET status = 'superseded', revision = revision + 1
+                WHERE id = %s
+                """,
+                (metric_race_version_id,),
+            )
+
+        metric_started = Event()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            metric_future = executor.submit(
+                execute_concurrent_statement,
+                schema_name,
+                """
+                INSERT INTO llm_invocation_metric (
+                    scenario_route_id, route_role, latency_ms, status, currency
+                ) VALUES (%s, 'primary', 10, 'succeeded', 'USD')
+                """,
+                (metric_race_route_id,),
+                metric_started,
+            )
+            assert metric_started.wait(timeout=2)
+            with pytest.raises(FutureTimeoutError):
+                metric_future.result(timeout=0.2)
+            transition_connection.commit()
+            assert metric_future.result(timeout=5) == "23514"
+    finally:
+        if transition_connection is not None:
+            transition_connection.rollback()
+            transition_connection.close()
+        setup_connection.rollback()
+        setup_connection.close()
+        cleanup_connection = psycopg.connect(DATABASE_URL)
+        try:
+            with cleanup_connection.cursor() as cursor:
+                cursor.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema_name)))
+            cleanup_connection.commit()
+        finally:
+            cleanup_connection.close()
