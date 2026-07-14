@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS llm_release_record (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id uuid NOT NULL REFERENCES organization(id) ON DELETE RESTRICT,
     config_version_id uuid NOT NULL,
-    evaluation_run_id varchar(128) NOT NULL,
+    evaluation_run_id varchar(128) NOT NULL
+        CHECK (length(btrim(evaluation_run_id)) BETWEEN 1 AND 128),
     status text NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'running', 'superseded', 'rolled_back')),
     submitted_by_system_admin_user_id uuid NOT NULL
@@ -85,6 +86,10 @@ CREATE TABLE IF NOT EXISTS llm_release_record (
         (status = 'pending' AND published_by_system_admin_user_id IS NULL AND published_at IS NULL)
         OR (status IN ('running', 'superseded', 'rolled_back')
             AND published_by_system_admin_user_id IS NOT NULL AND published_at IS NOT NULL)
+    ),
+    CHECK (
+        (rollback_of_release_id IS NULL AND rollback_of_version_id IS NULL)
+        OR (rollback_of_release_id IS NOT NULL AND rollback_of_version_id IS NOT NULL)
     )
 );
 
@@ -561,36 +566,70 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     IF TG_OP = 'INSERT' THEN
+        PERFORM 1
+        FROM llm_config_version AS release_version
+        WHERE release_version.id IN (NEW.config_version_id, NEW.rollback_of_version_id)
+        ORDER BY release_version.id::text
+        FOR KEY SHARE;
+        IF NOT EXISTS (
+            SELECT 1 FROM llm_config_version WHERE id = NEW.config_version_id
+        ) THEN
+            RAISE EXCEPTION 'release config version does not exist'
+                USING ERRCODE = '23503';
+        END IF;
+        IF NEW.rollback_of_version_id IS NULL THEN
+            PERFORM lock_llm_config_versions(NEW.config_version_id);
+        ELSE
+            PERFORM lock_llm_config_versions(
+                NEW.config_version_id,
+                NEW.rollback_of_version_id
+            );
+        END IF;
+
         IF NEW.status <> 'pending' OR NEW.revision <> 1
             OR NEW.published_by_system_admin_user_id IS NOT NULL OR NEW.published_at IS NOT NULL
         THEN
             RAISE EXCEPTION 'release records must start as pending revision one'
                 USING ERRCODE = '23514';
         END IF;
-        IF NEW.rollback_of_release_id IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM llm_release_record source
+        IF NEW.rollback_of_release_id IS NOT NULL THEN
+            PERFORM 1
+            FROM llm_release_record AS source
+            JOIN llm_config_version AS source_version
+              ON source_version.id = source.config_version_id
             WHERE source.id = NEW.rollback_of_release_id
+              AND source.config_version_id = NEW.rollback_of_version_id
               AND source.organization_id = NEW.organization_id
-              AND source.status IN ('running', 'superseded', 'rolled_back')
-        ) THEN
-            RAISE EXCEPTION 'rollback release source must belong to the same organization'
-                USING ERRCODE = '23514';
-        END IF;
-        IF NEW.rollback_of_version_id IS NOT NULL AND NOT EXISTS (
-            SELECT 1 FROM llm_config_version source
-            WHERE source.id = NEW.rollback_of_version_id
-              AND source.organization_id = NEW.organization_id
-              AND source.status IN ('running', 'superseded', 'rolled_back')
-        ) THEN
-            RAISE EXCEPTION 'rollback version source must belong to the same organization'
-                USING ERRCODE = '23514';
+              AND source_version.organization_id = NEW.organization_id
+              AND source.status IN ('superseded', 'rolled_back')
+              AND source_version.status = source.status
+            FOR KEY SHARE OF source, source_version;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION 'rollback release and version must identify matching terminal history'
+                    USING ERRCODE = '23514';
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
+
     IF TG_OP = 'DELETE' THEN
+        PERFORM 1
+        FROM llm_config_version AS release_version
+        WHERE release_version.id = OLD.config_version_id
+        ORDER BY release_version.id::text
+        FOR KEY SHARE;
+        PERFORM lock_llm_config_versions(OLD.config_version_id);
         RAISE EXCEPTION 'release records are immutable history'
             USING ERRCODE = '23514';
     END IF;
+
+    PERFORM 1
+    FROM llm_config_version AS release_version
+    WHERE release_version.id IN (OLD.config_version_id, NEW.config_version_id)
+    ORDER BY release_version.id::text
+    FOR KEY SHARE;
+    PERFORM lock_llm_config_versions(OLD.config_version_id, NEW.config_version_id);
+
     IF OLD.status IN ('superseded', 'rolled_back') THEN
         RAISE EXCEPTION 'terminal release records are immutable'
             USING ERRCODE = '23514';
@@ -635,6 +674,135 @@ DROP TRIGGER IF EXISTS trg_protect_llm_release_record_history ON llm_release_rec
 CREATE TRIGGER trg_protect_llm_release_record_history
     BEFORE INSERT OR UPDATE OR DELETE ON llm_release_record
     FOR EACH ROW EXECUTE FUNCTION protect_llm_release_record_history();
+
+CREATE OR REPLACE FUNCTION validate_llm_release_version_consistency()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    affected_version_id uuid;
+    version_status text;
+    release_count integer;
+    matching_release_count integer;
+BEGIN
+    IF TG_TABLE_NAME = 'llm_config_version' THEN
+        IF TG_OP = 'DELETE' THEN
+            affected_version_id := OLD.id;
+        ELSE
+            affected_version_id := NEW.id;
+        END IF;
+    ELSE
+        IF TG_OP = 'DELETE' THEN
+            affected_version_id := OLD.config_version_id;
+        ELSE
+            affected_version_id := NEW.config_version_id;
+        END IF;
+    END IF;
+
+    PERFORM 1
+    FROM llm_config_version AS release_version
+    WHERE release_version.id = affected_version_id
+    ORDER BY release_version.id::text
+    FOR KEY SHARE;
+    PERFORM lock_llm_config_versions(affected_version_id);
+
+    SELECT status
+    INTO version_status
+    FROM llm_config_version
+    WHERE id = affected_version_id;
+
+    SELECT count(*)
+    INTO release_count
+    FROM llm_release_record
+    WHERE config_version_id = affected_version_id;
+
+    IF version_status IS NULL THEN
+        IF release_count <> 0 THEN
+            RAISE EXCEPTION 'release records require an existing config version'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NULL;
+    END IF;
+
+    IF version_status IN ('draft', 'validated') THEN
+        IF release_count <> 0 THEN
+            RAISE EXCEPTION 'draft and validated config versions must not have release records'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NULL;
+    END IF;
+
+    SELECT count(*)
+    INTO matching_release_count
+    FROM llm_release_record
+    WHERE config_version_id = affected_version_id
+      AND status = CASE
+          WHEN version_status = 'pending_publish' THEN 'pending'
+          ELSE version_status
+      END;
+
+    IF version_status = 'pending_publish' THEN
+        IF release_count <> 1 OR matching_release_count <> 1 THEN
+            RAISE EXCEPTION 'pending_publish config versions require exactly one pending release record'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NULL;
+    END IF;
+
+    IF release_count <> 1 OR matching_release_count <> 1 THEN
+        RAISE EXCEPTION 'terminal config version and release record statuses must match'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_llm_release_version_consistency ON llm_config_version;
+CREATE CONSTRAINT TRIGGER trg_llm_release_version_consistency
+    AFTER INSERT OR UPDATE OR DELETE ON llm_config_version
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION validate_llm_release_version_consistency();
+
+DROP TRIGGER IF EXISTS trg_llm_release_version_consistency ON llm_release_record;
+CREATE CONSTRAINT TRIGGER trg_llm_release_version_consistency
+    AFTER INSERT OR UPDATE OR DELETE ON llm_release_record
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION validate_llm_release_version_consistency();
+
+CREATE OR REPLACE FUNCTION protect_llm_connection_test_history()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    provider_revision_snapshot integer;
+BEGIN
+    IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION 'connection test history is immutable'
+            USING ERRCODE = '23514';
+    END IF;
+
+    SELECT revision
+    INTO provider_revision_snapshot
+    FROM llm_provider_config
+    WHERE id = NEW.provider_config_id
+    FOR KEY SHARE;
+
+    IF provider_revision_snapshot IS NULL THEN
+        RAISE EXCEPTION 'connection test provider does not exist'
+            USING ERRCODE = '23503';
+    END IF;
+    IF NEW.provider_revision <> provider_revision_snapshot THEN
+        RAISE EXCEPTION 'connection test provider revision must match the locked provider revision'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_protect_llm_connection_test_history ON llm_connection_test;
+CREATE TRIGGER trg_protect_llm_connection_test_history
+    BEFORE INSERT OR UPDATE OR DELETE ON llm_connection_test
+    FOR EACH ROW EXECUTE FUNCTION protect_llm_connection_test_history();
 
 CREATE OR REPLACE FUNCTION protect_llm_provider_endpoint()
 RETURNS trigger

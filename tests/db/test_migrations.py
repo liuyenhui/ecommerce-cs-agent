@@ -296,10 +296,12 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "create index if not exists idx_llm_connection_test_version_checked on llm_connection_test (config_version_id, checked_at desc)",
         ]),
         (release_sql, [
-            "evaluation_run_id varchar(128) not null",
+            "evaluation_run_id varchar(128) not null check (length(btrim(evaluation_run_id)) between 1 and 128)",
             "unique (config_version_id)",
             "foreign key (config_version_id, organization_id)",
             "check (status in ('pending', 'running', 'superseded', 'rolled_back'))",
+            "rollback_of_release_id is null and rollback_of_version_id is null",
+            "rollback_of_release_id is not null and rollback_of_version_id is not null",
             "create unique index if not exists idx_llm_release_record_one_running",
         ]),
         (invocation_sql, [
@@ -376,6 +378,22 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
     assert invocation_sql.count("perform lock_llm_config_versions") >= 3
     assert "create or replace function protect_llm_release_record_history()" in compact_sql
     assert "terminal release records are immutable" in compact_sql
+    assert "source.config_version_id = new.rollback_of_version_id" in compact_sql
+    assert "source.status in ('superseded', 'rolled_back')" in compact_sql
+    assert "perform lock_llm_config_versions(new.config_version_id)" in compact_sql
+    assert "perform lock_llm_config_versions(old.config_version_id)" in compact_sql
+    assert "create or replace function validate_llm_release_version_consistency()" in compact_sql
+    assert "draft and validated config versions must not have release records" in compact_sql
+    assert "pending_publish config versions require exactly one pending release record" in compact_sql
+    assert "terminal config version and release record statuses must match" in compact_sql
+    assert "create constraint trigger trg_llm_release_version_consistency" in compact_sql
+    assert "deferrable initially deferred" in compact_sql
+    assert compact_sql.count("create constraint trigger trg_llm_release_version_consistency") == 2
+    assert "create or replace function protect_llm_connection_test_history()" in compact_sql
+    assert "new.provider_revision <> provider_revision_snapshot" in compact_sql
+    assert "connection test history is immutable" in compact_sql
+    assert "create trigger trg_protect_llm_connection_test_history" in compact_sql
+    assert "before insert or update or delete on llm_connection_test" in compact_sql
     assert "create or replace function protect_llm_provider_endpoint()" in compact_sql
     assert "provider endpoint and secret reference are immutable" in compact_sql
 

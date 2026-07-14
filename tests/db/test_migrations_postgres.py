@@ -26,6 +26,20 @@ def assert_integrity_error(cursor: psycopg.Cursor[object], statement: str, param
     cursor.execute("RELEASE SAVEPOINT expected_integrity_error")
 
 
+def assert_deferred_integrity_error(
+    cursor: psycopg.Cursor[object],
+    statements: list[tuple[str, tuple[object, ...]]],
+) -> None:
+    cursor.execute("SAVEPOINT expected_deferred_integrity_error")
+    for statement, parameters in statements:
+        cursor.execute(statement, parameters)
+    with pytest.raises(psycopg.IntegrityError):
+        cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+    cursor.execute("ROLLBACK TO SAVEPOINT expected_deferred_integrity_error")
+    cursor.execute("RELEASE SAVEPOINT expected_deferred_integrity_error")
+    cursor.execute("SET CONSTRAINTS ALL DEFERRED")
+
+
 def set_test_search_path(cursor: psycopg.Cursor[object], schema_name: str) -> None:
     cursor.execute(sql.SQL("SET LOCAL search_path TO {}, public").format(sql.Identifier(schema_name)))
     cursor.execute("SET LOCAL lock_timeout = '5s'")
@@ -792,7 +806,297 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
         connection.close()
 
 
-def test_llm_version_lock_serializes_route_and_metric_writes() -> None:
+def test_llm_release_consistency_rollback_links_and_connection_history_are_enforced() -> None:
+    schema_name = f"migration_release_consistency_{uuid.uuid4().hex}"
+    connection = psycopg.connect(DATABASE_URL)
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema_name)))
+            set_test_search_path(cursor, schema_name)
+            for migration in load_migrations(Path("migrations")):
+                cursor.execute(migration.sql)
+            cursor.execute(
+                """
+                INSERT INTO system_admin_user (email, password_hash, display_name, role)
+                VALUES ('release-consistency@example.invalid', 'not-a-real-password-hash',
+                        'Release Consistency', 'super_admin')
+                RETURNING id
+                """
+            )
+            admin_id = cursor.fetchone()[0]
+            cursor.execute("INSERT INTO organization (name) VALUES ('Release Consistency') RETURNING id")
+            organization_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO llm_provider_config (
+                    name, provider_type, base_url, secret_namespace, secret_name, secret_key
+                ) VALUES ('release-consistency-provider', 'test', 'https://example.invalid',
+                          'test', 'llm', 'key')
+                RETURNING id, revision
+                """
+            )
+            provider_id, provider_revision = cursor.fetchone()
+
+            cursor.execute(
+                """
+                INSERT INTO llm_config_version (
+                    organization_id, version_number, configuration_hash,
+                    created_by_system_admin_user_id
+                ) VALUES (%s, 1, 'draft-without-release', %s)
+                RETURNING id
+                """,
+                (organization_id, admin_id),
+            )
+            draft_id = cursor.fetchone()[0]
+            assert_deferred_integrity_error(
+                cursor,
+                [(
+                    """
+                    INSERT INTO llm_release_record (
+                        organization_id, config_version_id, evaluation_run_id,
+                        submitted_by_system_admin_user_id
+                    ) VALUES (%s, %s, 'draft-release', %s)
+                    """,
+                    (organization_id, draft_id, admin_id),
+                )],
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    submitted_by_system_admin_user_id
+                ) VALUES (%s, %s, '   ', %s)
+                """,
+                (organization_id, draft_id, admin_id),
+            )
+
+            assert_deferred_integrity_error(
+                cursor,
+                [
+                    (
+                        """
+                        INSERT INTO llm_config_version (
+                            organization_id, version_number, configuration_hash,
+                            created_by_system_admin_user_id
+                        ) VALUES (%s, 2, 'running-with-pending-release', %s)
+                        """,
+                        (organization_id, admin_id),
+                    ),
+                    (
+                        "UPDATE llm_config_version SET status='validated', revision=revision+1 WHERE version_number=2 AND organization_id=%s",
+                        (organization_id,),
+                    ),
+                    (
+                        "UPDATE llm_config_version SET status='pending_publish', revision=revision+1 WHERE version_number=2 AND organization_id=%s",
+                        (organization_id,),
+                    ),
+                    (
+                        """
+                        INSERT INTO llm_release_record (
+                            organization_id, config_version_id, evaluation_run_id,
+                            submitted_by_system_admin_user_id
+                        ) SELECT organization_id, id, 'pending-only', %s
+                          FROM llm_config_version
+                         WHERE organization_id=%s AND version_number=2
+                        """,
+                        (admin_id, organization_id),
+                    ),
+                    (
+                        """
+                        UPDATE llm_config_version
+                           SET status='running', revision=revision+1,
+                               published_by_system_admin_user_id=%s, published_at=now()
+                         WHERE organization_id=%s AND version_number=2
+                        """,
+                        (admin_id, organization_id),
+                    ),
+                ],
+            )
+
+            terminal_pairs: list[tuple[object, object]] = []
+            for version_number in (10, 11):
+                cursor.execute(
+                    """
+                    INSERT INTO llm_config_version (
+                        organization_id, version_number, configuration_hash,
+                        created_by_system_admin_user_id
+                    ) VALUES (%s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (organization_id, version_number, f"terminal-{version_number}", admin_id),
+                )
+                version_id = cursor.fetchone()[0]
+                cursor.execute(
+                    "UPDATE llm_config_version SET status='validated', revision=revision+1 WHERE id=%s",
+                    (version_id,),
+                )
+                cursor.execute(
+                    "UPDATE llm_config_version SET status='pending_publish', revision=revision+1 WHERE id=%s",
+                    (version_id,),
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO llm_release_record (
+                        organization_id, config_version_id, evaluation_run_id,
+                        submitted_by_system_admin_user_id
+                    ) VALUES (%s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (organization_id, version_id, f"terminal-eval-{version_number}", admin_id),
+                )
+                release_id = cursor.fetchone()[0]
+                cursor.execute(
+                    """
+                    UPDATE llm_config_version
+                       SET status='running', revision=revision+1,
+                           published_by_system_admin_user_id=%s, published_at=now()
+                     WHERE id=%s
+                    """,
+                    (admin_id, version_id),
+                )
+                cursor.execute(
+                    """
+                    UPDATE llm_release_record
+                       SET status='running', revision=revision+1,
+                           published_by_system_admin_user_id=%s, published_at=now()
+                     WHERE id=%s
+                    """,
+                    (admin_id, release_id),
+                )
+                cursor.execute(
+                    "UPDATE llm_config_version SET status='superseded', revision=revision+1 WHERE id=%s",
+                    (version_id,),
+                )
+                cursor.execute(
+                    "UPDATE llm_release_record SET status='superseded', revision=revision+1 WHERE id=%s",
+                    (release_id,),
+                )
+                terminal_pairs.append((version_id, release_id))
+
+            first_version_id, first_release_id = terminal_pairs[0]
+            second_version_id, _second_release_id = terminal_pairs[1]
+            cursor.execute(
+                """
+                INSERT INTO llm_config_version (
+                    organization_id, version_number, configuration_hash,
+                    created_by_system_admin_user_id, rollback_of_version_id
+                ) VALUES (%s, 20, 'rollback-draft', %s, %s)
+                RETURNING id
+                """,
+                (organization_id, admin_id, first_version_id),
+            )
+            rollback_version_id = cursor.fetchone()[0]
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    submitted_by_system_admin_user_id, rollback_of_release_id
+                ) VALUES (%s, %s, 'partial-rollback', %s, %s)
+                """,
+                (organization_id, rollback_version_id, admin_id, first_release_id),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    submitted_by_system_admin_user_id, rollback_of_version_id
+                ) VALUES (%s, %s, 'partial-rollback-version', %s, %s)
+                """,
+                (organization_id, rollback_version_id, admin_id, first_version_id),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    submitted_by_system_admin_user_id,
+                    rollback_of_release_id, rollback_of_version_id
+                ) VALUES (%s, %s, 'mismatched-rollback', %s, %s, %s)
+                """,
+                (
+                    organization_id,
+                    rollback_version_id,
+                    admin_id,
+                    first_release_id,
+                    second_version_id,
+                ),
+            )
+            cursor.execute(
+                "UPDATE llm_config_version SET status='validated', revision=revision+1 WHERE id=%s",
+                (rollback_version_id,),
+            )
+            cursor.execute(
+                "UPDATE llm_config_version SET status='pending_publish', revision=revision+1 WHERE id=%s",
+                (rollback_version_id,),
+            )
+            cursor.execute(
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    submitted_by_system_admin_user_id,
+                    rollback_of_release_id, rollback_of_version_id
+                ) VALUES (%s, %s, 'valid-rollback', %s, %s, %s)
+                """,
+                (
+                    organization_id,
+                    rollback_version_id,
+                    admin_id,
+                    first_release_id,
+                    first_version_id,
+                ),
+            )
+            cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+            cursor.execute("SET CONSTRAINTS ALL DEFERRED")
+
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_connection_test (
+                    provider_config_id, provider_revision,
+                    checked_by_system_admin_user_id, status
+                ) VALUES (%s, %s, %s, 'passed')
+                """,
+                (provider_id, provider_revision + 1, admin_id),
+            )
+            cursor.execute(
+                """
+                INSERT INTO llm_connection_test (
+                    provider_config_id, provider_revision,
+                    checked_by_system_admin_user_id, status
+                ) VALUES (%s, %s, %s, 'passed')
+                RETURNING id
+                """,
+                (provider_id, provider_revision, admin_id),
+            )
+            connection_test_id = cursor.fetchone()[0]
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_connection_test SET latency_ms=1 WHERE id=%s",
+                (connection_test_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                "DELETE FROM llm_connection_test WHERE id=%s",
+                (connection_test_id,),
+            )
+        connection.commit()
+    finally:
+        connection.rollback()
+        connection.close()
+        cleanup_connection = psycopg.connect(DATABASE_URL)
+        try:
+            with cleanup_connection.cursor() as cursor:
+                cursor.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema_name)))
+            cleanup_connection.commit()
+        finally:
+            cleanup_connection.close()
+
+
+def test_llm_version_lock_serializes_route_metric_and_release_writes() -> None:
     schema_name = f"migration_concurrency_{uuid.uuid4().hex}"
     setup_connection = psycopg.connect(DATABASE_URL)
     transition_connection: psycopg.Connection[object] | None = None
@@ -901,6 +1205,17 @@ def test_llm_version_lock_serializes_route_and_metric_writes() -> None:
             )
             cursor.execute(
                 """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    submitted_by_system_admin_user_id
+                ) VALUES (%s, %s, 'metric-race-eval', %s)
+                RETURNING id
+                """,
+                (organization_id, metric_race_version_id, system_admin_user_id),
+            )
+            metric_race_release_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
                 UPDATE llm_config_version
                 SET status = 'running', revision = revision + 1,
                     published_by_system_admin_user_id = %s,
@@ -908,6 +1223,15 @@ def test_llm_version_lock_serializes_route_and_metric_writes() -> None:
                 WHERE id = %s
                 """,
                 (system_admin_user_id, metric_race_version_id),
+            )
+            cursor.execute(
+                """
+                UPDATE llm_release_record
+                   SET status='running', revision=revision+1,
+                       published_by_system_admin_user_id=%s, published_at=now()
+                 WHERE id=%s
+                """,
+                (system_admin_user_id, metric_race_release_id),
             )
         setup_connection.commit()
 
@@ -921,6 +1245,10 @@ def test_llm_version_lock_serializes_route_and_metric_writes() -> None:
                 WHERE id = %s
                 """,
                 (metric_race_version_id,),
+            )
+            cursor.execute(
+                "UPDATE llm_release_record SET status='superseded', revision=revision+1 WHERE id=%s",
+                (metric_race_release_id,),
             )
 
         metric_worker_name = f"migration-metric-lock-{uuid.uuid4().hex}"
@@ -939,6 +1267,49 @@ def test_llm_version_lock_serializes_route_and_metric_writes() -> None:
             wait_for_backend_lock(metric_worker_name)
             transition_connection.commit()
             assert metric_future.result(timeout=8) == "23514"
+        transition_connection.close()
+        transition_connection = None
+
+        with setup_connection.cursor() as cursor:
+            set_test_search_path(cursor, schema_name)
+            cursor.execute(
+                """
+                INSERT INTO llm_config_version (
+                    organization_id, version_number, configuration_hash,
+                    created_by_system_admin_user_id
+                ) VALUES (%s, 3, 'release-race', %s)
+                RETURNING id
+                """,
+                (organization_id, system_admin_user_id),
+            )
+            release_race_version_id = cursor.fetchone()[0]
+        setup_connection.commit()
+
+        transition_connection = psycopg.connect(DATABASE_URL)
+        with transition_connection.cursor() as cursor:
+            set_test_search_path(cursor, schema_name)
+            cursor.execute(
+                "UPDATE llm_config_version SET status='validated', revision=revision+1 WHERE id=%s",
+                (release_race_version_id,),
+            )
+
+        release_worker_name = f"migration-release-lock-{uuid.uuid4().hex}"
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            release_future = executor.submit(
+                execute_concurrent_statement,
+                schema_name,
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    submitted_by_system_admin_user_id
+                ) VALUES (%s, %s, 'concurrent-release', %s)
+                """,
+                (organization_id, release_race_version_id, system_admin_user_id),
+                release_worker_name,
+            )
+            wait_for_backend_lock(release_worker_name)
+            transition_connection.commit()
+            assert release_future.result(timeout=8) == "23514"
     finally:
         if transition_connection is not None:
             transition_connection.rollback()

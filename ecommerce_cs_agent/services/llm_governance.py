@@ -643,6 +643,8 @@ class PostgresLlmGovernanceRepository:
                 raise api_error(409, "governance_conflict", "LLM governance record conflicts with existing state") from None
             if sqlstate == "23503":
                 raise api_error(422, "invalid_governance_reference", "referenced governance resource does not exist") from None
+            if sqlstate in {"22P02", "22001"}:
+                raise api_error(422, "invalid_governance_input", "governance identifier or text input is invalid") from None
             if sqlstate == "23514":
                 raise api_error(409, "invalid_governance_state", "LLM governance state transition was rejected") from None
             raise
