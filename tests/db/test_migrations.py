@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -221,39 +222,105 @@ def test_decision_idempotency_scope_migration_replaces_organization_only_uniquen
 
 def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
     sql = Path("migrations/012_system_admin_llm_governance.sql").read_text(encoding="utf-8").lower()
+    compact_sql = " ".join(sql.split())
 
-    for snippet in [
+    def section(start: str, end: str | None = None) -> str:
+        scoped_sql = compact_sql.split(start, maxsplit=1)[1]
+        return scoped_sql if end is None else scoped_sql.split(end, maxsplit=1)[0]
+
+    provider_sql = section(
         "create table if not exists llm_provider_config",
-        "secret_namespace",
-        "secret_name",
-        "secret_key",
         "create table if not exists llm_config_version",
-        "create unique index if not exists idx_llm_config_version_one_running",
-        "where status = 'running'",
+    )
+    version_sql = section(
+        "create table if not exists llm_config_version",
+        "create table if not exists llm_scenario_route",
+    )
+    route_sql = section(
         "create table if not exists llm_scenario_route",
         "create table if not exists llm_connection_test",
+    )
+    connection_test_sql = section(
+        "create table if not exists llm_connection_test",
         "create table if not exists llm_invocation_metric",
-        "estimated_cost_minor",
-        "idx_llm_scenario_route_primary_provider_model",
-        "idx_llm_scenario_route_scenario",
-        "idx_llm_invocation_metric_provider_model_occurred",
-        "idx_llm_invocation_metric_scenario_occurred",
-        "idx_llm_invocation_metric_organization_store_occurred",
-        "check (status in",
-        "check (revision > 0)",
-    ]:
-        assert snippet in sql
+    )
+    invocation_sql = section("create table if not exists llm_invocation_metric")
 
-    for forbidden_storage in [
-        "secret_value",
-        "prompt text",
-        "prompt_body",
-        "request_body",
-        "response_body",
-        "customer_message",
-        "model_response",
-    ]:
-        assert forbidden_storage not in sql
+    required_by_section = [
+        (provider_sql, [
+            "secret_namespace text not null",
+            "secret_name text not null",
+            "secret_key text not null",
+        ]),
+        (version_sql, [
+            "check (status in ('draft', 'validated', 'pending_publish', 'running', 'superseded', 'rolled_back'))",
+            "revision integer not null default 1 check (revision > 0)",
+            "created_by_system_admin_user_id uuid not null references system_admin_user(id) on delete restrict",
+            "created_at timestamptz not null default now()",
+            "published_by_system_admin_user_id uuid references system_admin_user(id) on delete restrict",
+            "published_at timestamptz",
+            "rollback_of_version_id uuid references llm_config_version(id) on delete restrict",
+            "create unique index if not exists idx_llm_config_version_one_running on llm_config_version (status) where status = 'running'",
+        ]),
+        (route_sql, [
+            "unique (config_version_id, scenario)",
+            "check (temperature >= 0 and temperature <= 2)",
+            "max_output_tokens integer not null default 1024 check (max_output_tokens > 0)",
+            "timeout_seconds integer not null default 30 check (timeout_seconds > 0)",
+            "max_retries integer not null default 1 check (max_retries >= 0)",
+            "circuit_breaker_threshold integer not null default 5 check (circuit_breaker_threshold > 0)",
+            "recovery_probe_seconds integer not null default 60 check (recovery_probe_seconds > 0)",
+            "create index if not exists idx_llm_scenario_route_primary_provider_model on llm_scenario_route (primary_provider_config_id, primary_model)",
+            "create index if not exists idx_llm_scenario_route_scenario on llm_scenario_route (scenario, config_version_id)",
+        ]),
+        (connection_test_sql, [
+            "provider_config_id uuid not null references llm_provider_config(id) on delete restrict",
+            "config_version_id uuid references llm_config_version(id) on delete restrict",
+            "checked_by_system_admin_user_id uuid not null references system_admin_user(id) on delete restrict",
+            "status text not null check (status in ('passed', 'failed'))",
+            "latency_ms integer check (latency_ms is null or latency_ms >= 0)",
+            "checked_at timestamptz not null default now()",
+            "error_code text",
+            "redacted_error_message text",
+        ]),
+        (invocation_sql, [
+            "input_tokens integer not null default 0 check (input_tokens >= 0)",
+            "output_tokens integer not null default 0 check (output_tokens >= 0)",
+            "latency_ms integer not null check (latency_ms >= 0)",
+            "status text not null check (status in ('succeeded', 'failed', 'timed_out', 'rejected'))",
+            "error_code text",
+            "estimated_cost_minor bigint not null default 0 check (estimated_cost_minor >= 0)",
+            "currency char(3) not null default 'usd' check (currency = upper(currency))",
+            "create index if not exists idx_llm_invocation_metric_provider_model_occurred on llm_invocation_metric (provider_config_id, model, occurred_at desc)",
+            "create index if not exists idx_llm_invocation_metric_scenario_occurred on llm_invocation_metric (scenario, occurred_at desc)",
+            "create index if not exists idx_llm_invocation_metric_organization_store_occurred on llm_invocation_metric (organization_id, store_id, occurred_at desc)",
+            "create index if not exists idx_llm_invocation_metric_occurred on llm_invocation_metric (occurred_at desc)",
+        ]),
+    ]
+    for scoped_sql, required_snippets in required_by_section:
+        for snippet in required_snippets:
+            assert snippet in scoped_sql
+
+    column_names = {
+        match.group(1)
+        for line in sql.splitlines()
+        if (match := re.match(
+            r"\s*([a-z_][a-z0-9_]*)\s+(?:uuid|text|varchar|jsonb|bytea|boolean|integer|bigint|numeric|timestamptz|char)\b",
+            line,
+        ))
+    }
+    forbidden_column_patterns = [
+        r"(^|_)secret_value($|_)",
+        r"(^|_)prompt($|_)",
+        r"(^|_)customer_message($|_)",
+        r"(^|_)model_(?:response|output)($|_)",
+        r"^(?:request|response)$",
+        r"(^|_)(?:request|response)_(?:body|payload|content|text|data|raw)($|_)",
+        r"(^|_)raw_payload($|_)",
+        r"^(?:content|body)$",
+    ]
+    for column_name in column_names:
+        assert not any(re.search(pattern, column_name) for pattern in forbidden_column_patterns), column_name
 
 
 def test_legacy_runtime_defaults_migration_contains_not_null_defaults() -> None:

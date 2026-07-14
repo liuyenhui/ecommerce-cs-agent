@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS llm_config_version (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     version_number bigint NOT NULL UNIQUE CHECK (version_number > 0),
     status text NOT NULL DEFAULT 'draft'
-        CHECK (status IN ('draft', 'validated', 'running', 'superseded', 'rolled_back')),
+        CHECK (status IN ('draft', 'validated', 'pending_publish', 'running', 'superseded', 'rolled_back')),
     revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
     description text,
     configuration_hash text NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS llm_config_version (
     CHECK (
         (status IN ('running', 'superseded', 'rolled_back') AND published_at IS NOT NULL
             AND published_by_system_admin_user_id IS NOT NULL)
-        OR status IN ('draft', 'validated')
+        OR status IN ('draft', 'validated', 'pending_publish')
     )
 );
 
@@ -73,12 +73,12 @@ CREATE TABLE IF NOT EXISTS llm_scenario_route (
         CHECK (temperature >= 0 AND temperature <= 2),
     max_output_tokens integer NOT NULL DEFAULT 1024
         CHECK (max_output_tokens > 0),
-    timeout_ms integer NOT NULL DEFAULT 30000 CHECK (timeout_ms > 0),
+    timeout_seconds integer NOT NULL DEFAULT 30 CHECK (timeout_seconds > 0),
     max_retries integer NOT NULL DEFAULT 1 CHECK (max_retries >= 0),
-    circuit_breaker_failure_threshold integer NOT NULL DEFAULT 5
-        CHECK (circuit_breaker_failure_threshold > 0),
-    circuit_breaker_recovery_seconds integer NOT NULL DEFAULT 60
-        CHECK (circuit_breaker_recovery_seconds > 0),
+    circuit_breaker_threshold integer NOT NULL DEFAULT 5
+        CHECK (circuit_breaker_threshold > 0),
+    recovery_probe_seconds integer NOT NULL DEFAULT 60
+        CHECK (recovery_probe_seconds > 0),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
