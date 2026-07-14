@@ -38,6 +38,8 @@ tags:
     description: 商品资料、素材、Markdown 审稿稿件、知识候选审核和价格快照维护。
   - name: System Admin
     description: 系统后台字段级契约，覆盖租户、店铺、readiness、排障、任务、审计和健康；使用系统后台独立 session。
+  - name: System Admin LLM Governance
+    description: 系统后台 LLM Provider、草稿路由、验证发布、回滚和真实调用成本统计；只保存 Kubernetes Secret 引用。
 
 paths:
   /v1/integrations/open-erp/provision:
@@ -2081,6 +2083,558 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/system-admin/llm/providers:
+    get:
+      tags: [System Admin LLM Governance]
+      operationId: listSystemAdminLlmProviders
+      summary: 查询 Provider 配置
+      description: super_admin、release_admin、technical_support 和 security_auditor 可读；仅返回 Secret 引用，不返回密钥内容。
+      security:
+        - SystemAdminSession: []
+      responses:
+        "200":
+          description: Provider 列表；无配置时 items 为空数组。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmProviderListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      tags: [System Admin LLM Governance]
+      operationId: createSystemAdminLlmProvider
+      summary: 创建 Provider 配置
+      description: 仅 super_admin 或 release_admin 可创建；Secret 只能以 Kubernetes namespace、name、key 引用。
+      security:
+        - SystemAdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LlmProviderCreateRequest"
+            example:
+              name: primary
+              provider_type: openai_compatible
+              base_url: https://provider.example/v1
+              secret_ref: {namespace: runtime, name: llm-provider, key: api-key}
+              enabled: true
+              reason: configure primary provider
+              idempotency_key: provider-create-001
+      responses:
+        "201":
+          description: Provider 已创建。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmProvider"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/system-admin/llm/providers/{provider_id}:
+    patch:
+      tags: [System Admin LLM Governance]
+      operationId: updateSystemAdminLlmProvider
+      summary: 更新 Provider 名称或启用状态
+      description: 仅 super_admin 或 release_admin 可更新；expected_revision 防止覆盖并发修改，端点和 Secret 引用不可原地替换。
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - name: provider_id
+          in: path
+          required: true
+          schema: {type: string, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LlmProviderUpdateRequest"
+      responses:
+        "200":
+          description: Provider 已更新。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmProvider"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system-admin/llm/providers/{provider_id}/connection-tests:
+    post:
+      tags: [System Admin LLM Governance]
+      operationId: testSystemAdminLlmProviderConnection
+      summary: 对草稿执行 Provider 连接测试
+      description: super_admin、release_admin 或 technical_support 可执行。config_version_id 必须指向草稿；只记录状态、耗时和脱敏错误码，不记录请求或响应正文。
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - name: provider_id
+          in: path
+          required: true
+          schema: {type: string, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LlmConnectionTestRequest"
+      responses:
+        "202":
+          description: 连接测试已完成并记录脱敏结果。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmConnectionTest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system-admin/llm/config-versions:
+    get:
+      tags: [System Admin LLM Governance]
+      operationId: listSystemAdminLlmConfigVersions
+      summary: 按组织查询 LLM 配置版本
+      description: 返回不可变版本历史及其 release_record 和 evaluation 摘要，不伪造不存在的发布记录。
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - name: organization_id
+          in: query
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 128}
+      responses:
+        "200":
+          description: 版本列表。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmConfigVersionListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system-admin/llm/config-versions/drafts:
+    post:
+      tags: [System Admin LLM Governance]
+      operationId: createSystemAdminLlmConfigDraft
+      summary: 创建组织级配置草稿
+      description: super_admin 或 release_admin 创建新草稿；所有写操作携带审计原因和幂等键。
+      security:
+        - SystemAdminSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LlmConfigDraftCreateRequest"
+      responses:
+        "201":
+          description: 草稿已创建。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmConfigVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system-admin/llm/config-versions/{version_id}:
+    get:
+      tags: [System Admin LLM Governance]
+      operationId: getSystemAdminLlmConfigVersion
+      summary: 查询单个配置版本
+      description: 返回路由、运行参数、发布记录和评测引用；不返回 Prompt、消息正文或密钥内容。
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - $ref: "#/components/parameters/LlmVersionId"
+      responses:
+        "200":
+          description: 配置版本。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmConfigVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/system-admin/llm/config-versions/{version_id}/routes:
+    put:
+      tags: [System Admin LLM Governance]
+      operationId: replaceSystemAdminLlmRoutes
+      summary: 完整替换草稿场景路由
+      description: 仅草稿可改；expected_revision 防止并发覆盖，必须提供各场景主模型、可选降级模型及完整运行参数。
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - $ref: "#/components/parameters/LlmVersionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LlmRoutesReplaceRequest"
+      responses:
+        "200":
+          description: 路由已替换。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmConfigVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    patch:
+      tags: [System Admin LLM Governance]
+      operationId: patchSystemAdminLlmRoutes
+      summary: 以完整集合更新草稿场景路由
+      description: 与 PUT 使用同一完整替换语义；不支持对已验证或已发布版本原地修改。
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - $ref: "#/components/parameters/LlmVersionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LlmRoutesReplaceRequest"
+      responses:
+        "200":
+          description: 路由已替换。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmConfigVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system-admin/llm/config-versions/{version_id}/validate:
+    post:
+      tags: [System Admin LLM Governance]
+      operationId: validateSystemAdminLlmConfig
+      summary: 验证配置草稿
+      description: 执行 draft 到 validated；要求场景完整且每个 Provider 对当前草稿有通过的连接测试。
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - $ref: "#/components/parameters/LlmVersionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LlmRevisionWriteRequest"
+      responses:
+        "200":
+          description: 草稿已验证。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmConfigVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system-admin/llm/config-versions/{version_id}/submit-publish:
+    post:
+      tags: [System Admin LLM Governance]
+      operationId: submitSystemAdminLlmConfigPublish
+      summary: 提交已验证配置发布
+      description: 执行 validated 到 pending_publish；只有真实 evaluation_run_id 通过 release gate 后才创建 release_record。
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - $ref: "#/components/parameters/LlmVersionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LlmSubmitPublishRequest"
+      responses:
+        "200":
+          description: 配置已进入待发布。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmConfigVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system-admin/llm/config-versions/{version_id}/publish:
+    post:
+      tags: [System Admin LLM Governance]
+      operationId: publishSystemAdminLlmConfig
+      summary: 发布待发布配置
+      description: 仅 super_admin 或 release_admin 可执行 pending_publish 到 running；失败时原运行版本不切换，expected_revision 防止并发覆盖。
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - $ref: "#/components/parameters/LlmVersionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LlmRevisionWriteRequest"
+      responses:
+        "200":
+          description: 配置已成为运行版本。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmConfigVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system-admin/llm/config-versions/{version_id}/rollback:
+    post:
+      tags: [System Admin LLM Governance]
+      operationId: rollbackSystemAdminLlmConfig
+      summary: 从发布历史创建受审计回滚版本
+      description: super_admin 或 release_admin 从运行中或终态历史复制新版本并发布；不删除、不改写原版本和原 release_record。
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - $ref: "#/components/parameters/LlmVersionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LlmRollbackRequest"
+      responses:
+        "200":
+          description: 新回滚版本已成为运行版本。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmConfigVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system-admin/llm/usage/summary:
+    get:
+      tags: [System Admin LLM Governance]
+      operationId: getSystemAdminLlmUsageSummary
+      summary: 查询调用与成本汇总
+      description: 基于真实调用元数据聚合；混合币种时 estimated_cost_micros 为 null，并使用 cost_by_currency 分币种返回。
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - {name: start_at, in: query, schema: {type: string, format: date-time}}
+        - {name: end_at, in: query, schema: {type: string, format: date-time}}
+        - {name: provider_config_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: model, in: query, schema: {type: string, maxLength: 128}}
+        - {name: scenario, in: query, schema: {type: string, maxLength: 64}}
+        - {name: organization_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: store_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: currency, in: query, schema: {type: string, enum: [CNY, USD]}}
+        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timeout]}}
+        - {name: route_role, in: query, schema: {type: string, enum: [primary, fallback]}}
+      responses:
+        "200":
+          description: 汇总指标；无调用时 calls 和 Token 为 0，比率为 null。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmUsageSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system-admin/llm/usage/timeseries:
+    get:
+      tags: [System Admin LLM Governance]
+      operationId: getSystemAdminLlmUsageTimeseries
+      summary: 查询按小时调用时间序列
+      description: 每个时间桶按币种分行；无真实调用时 items 为空，不生成示例曲线。
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - {name: start_at, in: query, schema: {type: string, format: date-time}}
+        - {name: end_at, in: query, schema: {type: string, format: date-time}}
+        - {name: provider_config_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: model, in: query, schema: {type: string, maxLength: 128}}
+        - {name: scenario, in: query, schema: {type: string, maxLength: 64}}
+        - {name: organization_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: store_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: currency, in: query, schema: {type: string, enum: [CNY, USD]}}
+        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timeout]}}
+        - {name: route_role, in: query, schema: {type: string, enum: [primary, fallback]}}
+      responses:
+        "200":
+          description: 时间序列。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmUsageTimeseriesResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system-admin/llm/usage/breakdown:
+    get:
+      tags: [System Admin LLM Governance]
+      operationId: getSystemAdminLlmUsageBreakdown
+      summary: 查询调用成本维度分布
+      description: 按 Provider、模型、场景、组织、店铺、状态或安全错误码分组，每组继续按币种拆分。
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - {name: start_at, in: query, schema: {type: string, format: date-time}}
+        - {name: end_at, in: query, schema: {type: string, format: date-time}}
+        - {name: provider_config_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: model, in: query, schema: {type: string, maxLength: 128}}
+        - {name: scenario, in: query, schema: {type: string, maxLength: 64}}
+        - {name: organization_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: store_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: currency, in: query, schema: {type: string, enum: [CNY, USD]}}
+        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timeout]}}
+        - {name: route_role, in: query, schema: {type: string, enum: [primary, fallback]}}
+        - name: group_by
+          in: query
+          required: true
+          schema: {type: string, enum: [provider, model, scenario, organization, store, status, error_code]}
+      responses:
+        "200":
+          description: 分布列表。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmUsageBreakdownResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /v1/system-admin/llm/usage/invocations:
+    get:
+      tags: [System Admin LLM Governance]
+      operationId: listSystemAdminLlmInvocations
+      summary: 查询脱敏调用明细
+      description: 仅返回调用 ID、模型维度、Token、耗时、状态和估算成本，不返回 Prompt、客户消息或模型回复。
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - {name: start_at, in: query, schema: {type: string, format: date-time}}
+        - {name: end_at, in: query, schema: {type: string, format: date-time}}
+        - {name: provider_config_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: model, in: query, schema: {type: string, maxLength: 128}}
+        - {name: scenario, in: query, schema: {type: string, maxLength: 64}}
+        - {name: organization_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: store_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: currency, in: query, schema: {type: string, enum: [CNY, USD]}}
+        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timeout]}}
+        - {name: route_role, in: query, schema: {type: string, enum: [primary, fallback]}}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+      responses:
+        "200":
+          description: 脱敏调用明细。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmInvocationListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
 components:
   securitySchemes:
     AgentApiAuth:
@@ -2184,6 +2738,15 @@ components:
         type: string
         format: date-time
       description: 创建时间终点，闭区间。
+    LlmVersionId:
+      name: version_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+      description: LLM 配置版本 ID。
     Page:
       name: page
       in: query
@@ -2279,6 +2842,336 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
 
   schemas:
+    LlmSecretReference:
+      type: object
+      additionalProperties: false
+      required: [namespace, name, key]
+      description: Kubernetes Secret 定位引用；接口、数据库和审计均不得读取或返回对应值。
+      properties:
+        namespace: {type: string, minLength: 1, maxLength: 253, pattern: "^[A-Za-z0-9._-]+$"}
+        name: {type: string, minLength: 1, maxLength: 253, pattern: "^[A-Za-z0-9._-]+$"}
+        key: {type: string, minLength: 1, maxLength: 253, pattern: "^[A-Za-z0-9._-]+$"}
+
+    LlmProviderCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, provider_type, base_url, secret_ref, reason, idempotency_key]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+        provider_type: {type: string, enum: [openai, openai_compatible, anthropic, azure_openai]}
+        base_url: {type: string, format: uri, minLength: 1, maxLength: 2048, pattern: "^https://"}
+        secret_ref: {$ref: "#/components/schemas/LlmSecretReference"}
+        enabled: {type: boolean, default: true}
+        reason: {type: string, minLength: 1, maxLength: 512}
+        idempotency_key: {type: string, minLength: 1, maxLength: 128}
+
+    LlmProviderUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, reason, idempotency_key]
+      anyOf:
+        - required: [name]
+        - required: [enabled]
+      properties:
+        expected_revision: {type: integer, minimum: 1, maximum: 2147483647}
+        name: {type: string, minLength: 1, maxLength: 128}
+        enabled: {type: boolean}
+        reason: {type: string, minLength: 1, maxLength: 512}
+        idempotency_key: {type: string, minLength: 1, maxLength: 128}
+
+    LlmProvider:
+      type: object
+      additionalProperties: false
+      required: [provider_id, name, provider_type, base_url, secret_ref, enabled, status, revision, created_at, updated_at]
+      properties:
+        provider_id: {type: string}
+        name: {type: string}
+        provider_type: {type: string, enum: [openai, openai_compatible, anthropic, azure_openai]}
+        base_url: {type: string, format: uri}
+        secret_ref: {$ref: "#/components/schemas/LlmSecretReference"}
+        enabled: {type: boolean}
+        status: {type: string, enum: [active, disabled, unhealthy]}
+        last_connection_test_status: {type: [string, "null"], enum: [passed, failed, null]}
+        last_connection_test_latency_ms: {type: [integer, "null"], minimum: 0}
+        last_connection_test_error_code: {type: [string, "null"]}
+        last_connection_tested_at: {type: [string, "null"], format: date-time}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        revision: {type: integer, minimum: 1}
+
+    LlmProviderListResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/LlmProvider"}
+
+    LlmConnectionTestRequest:
+      type: object
+      additionalProperties: false
+      required: [config_version_id, reason, idempotency_key]
+      properties:
+        config_version_id: {type: string, minLength: 1, maxLength: 128}
+        timeout_seconds: {type: integer, minimum: 1, maximum: 20, default: 20}
+        max_tokens: {type: integer, minimum: 1, maximum: 256, default: 256}
+        reason: {type: string, minLength: 1, maxLength: 512}
+        idempotency_key: {type: string, minLength: 1, maxLength: 128}
+
+    LlmConnectionTest:
+      type: object
+      additionalProperties: false
+      required: [connection_test_id, provider_config_id, config_version_id, provider_revision, status, latency_ms, checked_at]
+      properties:
+        connection_test_id: {type: string}
+        provider_config_id: {type: string}
+        config_version_id: {type: string}
+        provider_revision: {type: integer, minimum: 1}
+        status: {type: string, enum: [passed, failed]}
+        latency_ms: {type: integer, minimum: 0}
+        checked_at: {type: string, format: date-time}
+        error_code: {type: [string, "null"]}
+        redacted_error_message: {type: [string, "null"]}
+
+    LlmConfigDraftCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [organization_id, reason, idempotency_key]
+      properties:
+        organization_id: {type: string, minLength: 1, maxLength: 128}
+        description: {type: [string, "null"], maxLength: 512}
+        reason: {type: string, minLength: 1, maxLength: 512}
+        idempotency_key: {type: string, minLength: 1, maxLength: 128}
+
+    LlmScenarioRoute:
+      type: object
+      additionalProperties: false
+      required: [scenario, primary_provider_config_id, primary_model, enabled, temperature, max_output_tokens, timeout_seconds, max_retries, circuit_breaker_threshold, recovery_probe_seconds]
+      properties:
+        scenario: {type: string, minLength: 1, maxLength: 64}
+        primary_provider_config_id: {type: string, minLength: 1, maxLength: 128}
+        primary_model: {type: string, minLength: 1, maxLength: 128}
+        fallback_provider_config_id: {type: [string, "null"], minLength: 1, maxLength: 128}
+        fallback_model: {type: [string, "null"], minLength: 1, maxLength: 128}
+        enabled: {type: boolean}
+        temperature: {type: number, minimum: 0, maximum: 2}
+        max_output_tokens: {type: integer, minimum: 1, maximum: 1000000}
+        timeout_seconds: {type: integer, minimum: 1, maximum: 300}
+        max_retries: {type: integer, minimum: 0, maximum: 20}
+        circuit_breaker_threshold: {type: integer, minimum: 1, maximum: 10000}
+        recovery_probe_seconds: {type: integer, minimum: 1, maximum: 86400}
+
+    LlmScenarioRouteView:
+      type: object
+      additionalProperties: false
+      required: [scenario, primary_provider_config_id, primary_model, enabled, temperature, max_output_tokens, timeout_seconds, max_retries, circuit_breaker_threshold, recovery_probe_seconds]
+      properties:
+        route_id: {type: string}
+        scenario: {type: string}
+        primary_provider_config_id: {type: string}
+        primary_model: {type: string}
+        fallback_provider_config_id: {type: [string, "null"]}
+        fallback_model: {type: [string, "null"]}
+        enabled: {type: boolean}
+        temperature: {type: number, minimum: 0, maximum: 2}
+        max_output_tokens: {type: integer, minimum: 1}
+        timeout_seconds: {type: integer, minimum: 1}
+        max_retries: {type: integer, minimum: 0}
+        circuit_breaker_threshold: {type: integer, minimum: 1}
+        recovery_probe_seconds: {type: integer, minimum: 1}
+        revision: {type: integer, minimum: 1}
+
+    LlmRoutesReplaceRequest:
+      type: object
+      additionalProperties: false
+      required: [routes, expected_revision, reason, idempotency_key]
+      properties:
+        routes:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items: {$ref: "#/components/schemas/LlmScenarioRoute"}
+        expected_revision: {type: integer, minimum: 1, maximum: 2147483647}
+        reason: {type: string, minLength: 1, maxLength: 512}
+        idempotency_key: {type: string, minLength: 1, maxLength: 128}
+
+    LlmRevisionWriteRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, reason, idempotency_key]
+      properties:
+        expected_revision: {type: integer, minimum: 1, maximum: 2147483647}
+        reason: {type: string, minLength: 1, maxLength: 512}
+        idempotency_key: {type: string, minLength: 1, maxLength: 128}
+
+    LlmSubmitPublishRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, evaluation_run_id, reason, idempotency_key]
+      properties:
+        expected_revision: {type: integer, minimum: 1, maximum: 2147483647}
+        evaluation_run_id: {type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9_:-]+$"}
+        reason: {type: string, minLength: 1, maxLength: 512}
+        idempotency_key: {type: string, minLength: 1, maxLength: 128}
+
+    LlmRollbackRequest:
+      type: object
+      additionalProperties: false
+      required: [reason, idempotency_key]
+      properties:
+        reason: {type: string, minLength: 1, maxLength: 512}
+        idempotency_key: {type: string, minLength: 1, maxLength: 128}
+
+    LlmReleaseRecordSummary:
+      type: object
+      additionalProperties: false
+      required: [release_record_id]
+      properties:
+        release_record_id: {type: string}
+        status: {type: [string, "null"], enum: [pending, running, superseded, rolled_back, null]}
+        rollback_of_version_id: {type: [string, "null"]}
+
+    LlmEvaluationSummary:
+      type: object
+      additionalProperties: false
+      required: [evaluation_run_id]
+      properties:
+        evaluation_run_id: {type: string}
+
+    LlmConfigVersion:
+      type: object
+      additionalProperties: false
+      required: [version_id, organization_id, version_number, status, revision, configuration_hash, created_by_system_admin_user_id, created_at, routes, release_record, evaluation]
+      properties:
+        version_id: {type: string}
+        organization_id: {type: string}
+        version_number: {type: integer, minimum: 1}
+        status: {type: string, enum: [draft, validated, pending_publish, running, superseded, rolled_back]}
+        revision: {type: integer, minimum: 1}
+        description: {type: [string, "null"]}
+        configuration_hash: {type: string}
+        created_by_system_admin_user_id: {type: string}
+        created_at: {type: string, format: date-time}
+        published_by_system_admin_user_id: {type: [string, "null"]}
+        published_at: {type: [string, "null"], format: date-time}
+        rollback_of_version_id: {type: [string, "null"]}
+        release_record_id: {type: [string, "null"]}
+        release_status: {type: [string, "null"]}
+        evaluation_run_id: {type: [string, "null"]}
+        routes:
+          type: array
+          items: {$ref: "#/components/schemas/LlmScenarioRouteView"}
+        release_record:
+          oneOf:
+            - {$ref: "#/components/schemas/LlmReleaseRecordSummary"}
+            - {type: "null"}
+        evaluation:
+          oneOf:
+            - {$ref: "#/components/schemas/LlmEvaluationSummary"}
+            - {type: "null"}
+
+    LlmConfigVersionListResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/LlmConfigVersion"}
+
+    LlmUsageSummary:
+      type: object
+      additionalProperties: false
+      required: [calls, input_tokens, output_tokens, total_tokens, estimated_cost_micros, cost_by_currency, p95_latency_ms, error_rate, fallback_rate]
+      properties:
+        calls: {type: integer, minimum: 0}
+        input_tokens: {type: integer, minimum: 0}
+        output_tokens: {type: integer, minimum: 0}
+        total_tokens: {type: integer, minimum: 0}
+        estimated_cost_micros: {type: [integer, "null"], minimum: 0, description: 单币种总额；混币时为 null。}
+        cost_by_currency:
+          type: object
+          additionalProperties: {type: integer, minimum: 0}
+          description: ISO 币种到微单位金额；当前支持 CNY 和 USD。
+        p95_latency_ms: {type: [number, "null"], minimum: 0}
+        error_rate: {type: [number, "null"], minimum: 0, maximum: 1}
+        fallback_rate: {type: [number, "null"], minimum: 0, maximum: 1}
+
+    LlmUsageTimeseriesPoint:
+      type: object
+      additionalProperties: false
+      required: [bucket, currency, calls, input_tokens, output_tokens, estimated_cost_micros, errors]
+      properties:
+        bucket: {type: string, format: date-time}
+        currency: {type: string, enum: [CNY, USD]}
+        calls: {type: integer, minimum: 0}
+        input_tokens: {type: integer, minimum: 0}
+        output_tokens: {type: integer, minimum: 0}
+        estimated_cost_micros: {type: integer, minimum: 0}
+        errors: {type: integer, minimum: 0}
+
+    LlmUsageTimeseriesResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/LlmUsageTimeseriesPoint"}
+
+    LlmUsageBreakdownItem:
+      type: object
+      additionalProperties: false
+      required: [key, currency, calls, total_tokens, estimated_cost_micros]
+      properties:
+        key: {type: string}
+        currency: {type: string, enum: [CNY, USD]}
+        calls: {type: integer, minimum: 0}
+        total_tokens: {type: integer, minimum: 0}
+        estimated_cost_micros: {type: integer, minimum: 0}
+
+    LlmUsageBreakdownResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/LlmUsageBreakdownItem"}
+
+    LlmInvocation:
+      type: object
+      additionalProperties: false
+      required: [invocation_id, occurred_at, provider_config_id, provider_name, model, scenario, organization_id, store_id, route_role, input_tokens, output_tokens, latency_ms, status, estimated_cost_micros, currency]
+      properties:
+        invocation_id: {type: string}
+        occurred_at: {type: string, format: date-time}
+        provider_config_id: {type: string}
+        provider_name: {type: string}
+        model: {type: string}
+        scenario: {type: string}
+        organization_id: {type: string}
+        store_id: {type: [string, "null"]}
+        route_role: {type: string, enum: [primary, fallback]}
+        input_tokens: {type: integer, minimum: 0}
+        output_tokens: {type: integer, minimum: 0}
+        latency_ms: {type: integer, minimum: 0}
+        status: {type: string, enum: [succeeded, failed, timeout]}
+        error_code: {type: [string, "null"]}
+        estimated_cost_micros: {type: integer, minimum: 0}
+        currency: {type: string, enum: [CNY, USD]}
+
+    LlmInvocationListResponse:
+      type: object
+      additionalProperties: false
+      required: [items, limit]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/LlmInvocation"}
+        limit: {type: integer, minimum: 1, maximum: 500}
+
     OpenErpProvisionRequest:
       type: object
       required: [platform, external_store_id, platform_account_ref]

@@ -23,6 +23,7 @@ from ecommerce_cs_agent.api.error_codes import (
     ECS_OE_003,
 )
 from ecommerce_cs_agent.api.errors import api_error
+from ecommerce_cs_agent.api.system_admin_llm import register_system_admin_llm_routes
 from ecommerce_cs_agent.core.config import Settings, load_settings
 from ecommerce_cs_agent.core.passwords import password_matches
 from ecommerce_cs_agent.services import oidc as oidc_service
@@ -33,9 +34,20 @@ from ecommerce_cs_agent.services.object_storage import ObjectStorageUnavailable,
 from ecommerce_cs_agent.services.open_erp_integration import BillingLeaseError, OpenErpIntegrationService
 from ecommerce_cs_agent.services.product_analysis import product_document_analyzer_for
 from ecommerce_cs_agent.services.system_admin import system_admin_repository_for
+from ecommerce_cs_agent.services.llm_governance import (
+    InMemoryLlmGovernanceRepository,
+    LlmGovernanceRepository,
+    PostgresLlmGovernanceRepository,
+)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    llm_governance_repository: LlmGovernanceRepository | None = None,
+    llm_connection_tester: Callable[[dict[str, Any], dict[str, int]], dict[str, Any]] | None = None,
+    llm_release_gate_checker: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
+) -> FastAPI:
     settings = settings or load_settings()
     app = FastAPI(title="ecommerce-cs-agent", version="0.1.0")
     decisions = DecisionService(settings)
@@ -44,11 +56,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     admin_auth = admin_auth_service_for(settings)
     system_admin_auth = system_admin_auth_service_for(settings)
     system_admin_data = system_admin_repository_for(settings)
+    if llm_governance_repository is not None and settings.environment.lower() != "test":
+        raise RuntimeError("LLM governance repository injection is test-only outside production wiring")
+    if llm_governance_repository is not None:
+        llm_governance = llm_governance_repository
+    elif settings.environment.lower() == "test":
+        llm_governance = InMemoryLlmGovernanceRepository(
+            connection_tester=llm_connection_tester or (
+                lambda _provider, _request: {
+                    "status": "failed", "latency_ms": 0, "error_code": "tester_unavailable"
+                }
+            ),
+            release_gate_checker=llm_release_gate_checker or (
+                lambda _version, _run_id: {"status": "failed", "error_code": "release_gate_unavailable"}
+            ),
+        )
+    else:
+        if not settings.database_url:
+            raise RuntimeError("DATABASE_URL is required for System Admin LLM governance outside test")
+        llm_governance = PostgresLlmGovernanceRepository(
+            settings.database_url,
+            connection_tester=llm_connection_tester,
+            release_gate_checker=llm_release_gate_checker,
+        )
     open_erp = OpenErpIntegrationService(settings)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
-        return _error_response(422, "validation_error", "request validation failed", {"details": exc.errors()})
+        details = [
+            {"type": item.get("type"), "loc": list(item.get("loc", ())), "msg": item.get("msg")}
+            for item in exc.errors()
+        ]
+        return _error_response(422, "validation_error", "request validation failed", {"details": details})
 
     @app.exception_handler(HTTPException)
     async def http_error_handler(_request: Request, exc: HTTPException) -> JSONResponse:
@@ -656,6 +695,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/v1/system-admin/audit-logs")
     def list_system_audit_logs(request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
         return system_admin_data.list_audit_logs(session, _query_filters(request))
+
+    register_system_admin_llm_routes(app, llm_governance, system_session)
 
     for method, path in [
         ("POST", "/v1/events/messages"),

@@ -38,6 +38,21 @@ REQUIRED_PATHS = {
     "/v1/system-admin/message-traces",
     "/v1/system-admin/audit-logs",
     "/v1/system-admin/health",
+    "/v1/system-admin/llm/providers",
+    "/v1/system-admin/llm/providers/{provider_id}",
+    "/v1/system-admin/llm/providers/{provider_id}/connection-tests",
+    "/v1/system-admin/llm/config-versions",
+    "/v1/system-admin/llm/config-versions/drafts",
+    "/v1/system-admin/llm/config-versions/{version_id}",
+    "/v1/system-admin/llm/config-versions/{version_id}/routes",
+    "/v1/system-admin/llm/config-versions/{version_id}/validate",
+    "/v1/system-admin/llm/config-versions/{version_id}/submit-publish",
+    "/v1/system-admin/llm/config-versions/{version_id}/publish",
+    "/v1/system-admin/llm/config-versions/{version_id}/rollback",
+    "/v1/system-admin/llm/usage/summary",
+    "/v1/system-admin/llm/usage/timeseries",
+    "/v1/system-admin/llm/usage/breakdown",
+    "/v1/system-admin/llm/usage/invocations",
 }
 
 CORE_JSON_REQUESTS = {
@@ -58,6 +73,16 @@ CORE_JSON_REQUESTS = {
     ("post", "/v1/product-content/price-snapshots"): "#/components/schemas/ProductPriceSnapshotRequest",
     ("post", "/v1/system-admin/auth/login"): "#/components/schemas/SystemAdminLoginRequest",
     ("post", "/v1/system-admin/tasks/{task_id}/retry"): "#/components/schemas/TaskRetryRequest",
+    ("post", "/v1/system-admin/llm/providers"): "#/components/schemas/LlmProviderCreateRequest",
+    ("patch", "/v1/system-admin/llm/providers/{provider_id}"): "#/components/schemas/LlmProviderUpdateRequest",
+    ("post", "/v1/system-admin/llm/providers/{provider_id}/connection-tests"): "#/components/schemas/LlmConnectionTestRequest",
+    ("post", "/v1/system-admin/llm/config-versions/drafts"): "#/components/schemas/LlmConfigDraftCreateRequest",
+    ("put", "/v1/system-admin/llm/config-versions/{version_id}/routes"): "#/components/schemas/LlmRoutesReplaceRequest",
+    ("patch", "/v1/system-admin/llm/config-versions/{version_id}/routes"): "#/components/schemas/LlmRoutesReplaceRequest",
+    ("post", "/v1/system-admin/llm/config-versions/{version_id}/validate"): "#/components/schemas/LlmRevisionWriteRequest",
+    ("post", "/v1/system-admin/llm/config-versions/{version_id}/submit-publish"): "#/components/schemas/LlmSubmitPublishRequest",
+    ("post", "/v1/system-admin/llm/config-versions/{version_id}/publish"): "#/components/schemas/LlmRevisionWriteRequest",
+    ("post", "/v1/system-admin/llm/config-versions/{version_id}/rollback"): "#/components/schemas/LlmRollbackRequest",
 }
 
 CORE_JSON_RESPONSES = {
@@ -87,6 +112,23 @@ CORE_JSON_RESPONSES = {
     ("post", "/v1/system-admin/tasks/{task_id}/retry", "202"): "#/components/schemas/TaskRetryResponse",
     ("get", "/v1/system-admin/audit-logs", "200"): "#/components/schemas/AuditLogListResponse",
     ("get", "/v1/system-admin/health", "200"): "#/components/schemas/SystemHealthResponse",
+    ("get", "/v1/system-admin/llm/providers", "200"): "#/components/schemas/LlmProviderListResponse",
+    ("post", "/v1/system-admin/llm/providers", "201"): "#/components/schemas/LlmProvider",
+    ("patch", "/v1/system-admin/llm/providers/{provider_id}", "200"): "#/components/schemas/LlmProvider",
+    ("post", "/v1/system-admin/llm/providers/{provider_id}/connection-tests", "202"): "#/components/schemas/LlmConnectionTest",
+    ("get", "/v1/system-admin/llm/config-versions", "200"): "#/components/schemas/LlmConfigVersionListResponse",
+    ("post", "/v1/system-admin/llm/config-versions/drafts", "201"): "#/components/schemas/LlmConfigVersion",
+    ("get", "/v1/system-admin/llm/config-versions/{version_id}", "200"): "#/components/schemas/LlmConfigVersion",
+    ("put", "/v1/system-admin/llm/config-versions/{version_id}/routes", "200"): "#/components/schemas/LlmConfigVersion",
+    ("patch", "/v1/system-admin/llm/config-versions/{version_id}/routes", "200"): "#/components/schemas/LlmConfigVersion",
+    ("post", "/v1/system-admin/llm/config-versions/{version_id}/validate", "200"): "#/components/schemas/LlmConfigVersion",
+    ("post", "/v1/system-admin/llm/config-versions/{version_id}/submit-publish", "200"): "#/components/schemas/LlmConfigVersion",
+    ("post", "/v1/system-admin/llm/config-versions/{version_id}/publish", "200"): "#/components/schemas/LlmConfigVersion",
+    ("post", "/v1/system-admin/llm/config-versions/{version_id}/rollback", "200"): "#/components/schemas/LlmConfigVersion",
+    ("get", "/v1/system-admin/llm/usage/summary", "200"): "#/components/schemas/LlmUsageSummary",
+    ("get", "/v1/system-admin/llm/usage/timeseries", "200"): "#/components/schemas/LlmUsageTimeseriesResponse",
+    ("get", "/v1/system-admin/llm/usage/breakdown", "200"): "#/components/schemas/LlmUsageBreakdownResponse",
+    ("get", "/v1/system-admin/llm/usage/invocations", "200"): "#/components/schemas/LlmInvocationListResponse",
 }
 
 PAGINATED_SCHEMAS = {
@@ -366,6 +408,52 @@ class OpenApiContractTest(unittest.TestCase):
         self.assertIn("external_store_id", properties)
         self.assertIn("platform_account_ref", properties)
         self.assertIn("external_sku_id", properties)
+
+    def test_llm_governance_contract_uses_only_system_session_and_never_models_secrets(self):
+        document_text = json.dumps(self.document).lower()
+        self.assertNotIn("secret_value", document_text)
+        self.assertNotIn("authorization", json.dumps(self.document["components"]["schemas"].get("LlmProviderCreateRequest", {})).lower())
+
+        for path, path_item in self.document["paths"].items():
+            if not path.startswith("/v1/system-admin/llm/"):
+                continue
+            for method, operation in path_item.items():
+                if method in {"get", "post", "put", "patch", "delete"}:
+                    self.assertEqual(operation["security"], [{"SystemAdminSession": []}], f"{method} {path}")
+
+        secret_ref = self.document["components"]["schemas"]["LlmSecretReference"]
+        self.assertEqual(set(secret_ref["required"]), {"namespace", "name", "key"})
+        self.assertEqual(set(secret_ref["properties"]), {"namespace", "name", "key"})
+
+    def test_llm_governance_contract_documents_roles_lifecycle_filters_and_mixed_currency(self):
+        paths = self.document["paths"]
+        connection = paths["/v1/system-admin/llm/providers/{provider_id}/connection-tests"]["post"]
+        self.assertIn("technical_support", connection["description"])
+        self.assertEqual(connection["responses"]["202"]["content"]["application/json"]["schema"]["$ref"], "#/components/schemas/LlmConnectionTest")
+
+        publish = paths["/v1/system-admin/llm/config-versions/{version_id}/publish"]["post"]
+        self.assertIn("pending_publish", publish["description"])
+        self.assertIn("release_admin", publish["description"])
+        self.assertIn("409", publish["responses"])
+
+        summary_parameters = {item["name"] for item in paths["/v1/system-admin/llm/usage/summary"]["get"]["parameters"]}
+        self.assertEqual(
+            summary_parameters,
+            {"start_at", "end_at", "provider_config_id", "model", "scenario", "organization_id", "store_id", "currency", "status", "route_role"},
+        )
+        summary = self.document["components"]["schemas"]["LlmUsageSummary"]
+        self.assertIn("cost_by_currency", summary["properties"])
+        self.assertIn("null", summary["properties"]["estimated_cost_micros"]["type"])
+
+        version = self.document["components"]["schemas"]["LlmConfigVersion"]
+        self.assertIn("release_record", version["properties"])
+        self.assertIn("evaluation", version["properties"])
+        request_route = self.document["components"]["schemas"]["LlmScenarioRoute"]
+        self.assertNotIn("route_id", request_route["properties"])
+        self.assertEqual(
+            version["properties"]["routes"]["items"]["$ref"],
+            "#/components/schemas/LlmScenarioRouteView",
+        )
 
 
 if __name__ == "__main__":
