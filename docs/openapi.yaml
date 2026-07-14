@@ -197,7 +197,7 @@ paths:
       tags: [Reply Decisions]
       operationId: refillProductContexts
       summary: 回填商品上下文
-      description: 按 `context_requests[type=products]` 回填商品快照或商品引用。服务端用 `decision_id + context_request_id + idempotency_key` 聚合和去重，并恢复同一 LangGraph thread。
+      description: 按 `context_requests[type=products]` 回填商品快照或商品引用。服务端用 `decision_id + context_request_id + idempotency_key` 聚合和去重，从持久化 DecisionState 重构同一 thread_id 的输入后重算；Connector Token scope 必须与原决策租户和店铺一致。
       security:
         - AgentApiAuth: []
       parameters:
@@ -215,6 +215,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -245,6 +247,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -275,6 +279,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -305,6 +311,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -317,7 +325,7 @@ paths:
       tags: [Reply Decisions]
       operationId: submitActionResult
       summary: 回传外部动作执行结果
-      description: 外部系统执行自己的真实业务 API 后回传结果。没有成功结果前，Agent 不能向买家确认动作已完成；失败或超时时必须降级为候选或转人工。
+      description: 外部系统执行自己的真实业务 API 后回传结果。Connector Token scope 必须与原决策租户和店铺一致，action_id 和 action_type 必须匹配已规划动作；没有成功结果前，Agent 不能向买家确认动作已完成。
       security:
         - AgentApiAuth: []
       parameters:
@@ -339,6 +347,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -393,7 +403,7 @@ paths:
       tags: [Feedback]
       operationId: submitHumanReplyFeedback
       summary: 提交人工回复反馈
-      description: 记录人工最终回复、是否采用候选、修改幅度、处理结果和后续学习信号。人工回复不会自动进入向量库，必须经过知识候选和审核流程。
+      description: 记录人工最终回复、是否采用候选、修改幅度、处理结果和后续学习信号。Connector Token scope 必须与原决策租户和店铺一致；人工回复不会自动进入向量库，必须经过知识候选和审核流程。
       security:
         - AgentApiAuth: []
       requestBody:
@@ -403,7 +413,7 @@ paths:
             schema:
               $ref: "#/components/schemas/HumanReplyFeedbackRequest"
       responses:
-        "201":
+        "200":
           description: 人工反馈已记录。
           content:
             application/json:
@@ -413,6 +423,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "422":

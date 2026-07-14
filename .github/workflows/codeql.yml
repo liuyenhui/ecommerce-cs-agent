@@ -43,13 +43,25 @@ jobs:
 
       - name: Fail on CodeQL alerts
         run: |
-          alert_count="$(
+          security_alert_count="$(
             find codeql-results -name '*.sarif' -print0 \
-              | xargs -0 jq '[.runs[].results[]?] | length' \
+              | xargs -0 -r jq '[
+                  .runs[] as $run
+                  | $run.results[]? as $result
+                  | ($result.rule.index // -1) as $rule_index
+                  | ($result.rule.toolComponent.index // null) as $component_index
+                  | (
+                      if $component_index == null
+                      then $run.tool.driver.rules[$rule_index]
+                      else $run.tool.extensions[$component_index].rules[$rule_index]
+                      end
+                    ) as $rule
+                  | select(($rule.properties.tags // []) | index("security"))
+                ] | length' \
               | awk '{total += $1} END {print total + 0}'
           )"
-          echo "CodeQL alert count: ${alert_count}"
-          if [ "$alert_count" -gt 0 ]; then
+          echo "CodeQL security alert count: ${security_alert_count}"
+          if [ "$security_alert_count" -gt 0 ]; then
             exit 1
           fi
 

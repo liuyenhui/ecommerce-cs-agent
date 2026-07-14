@@ -1,6 +1,6 @@
 # 测试说明
 
-本文集中说明当前仓库可直接运行的测试入口、后续测试分层、目录规划、OpenAPI 契约测试口径和评测门禁。它不是新的架构来源，只把 [Development Readiness](development-readiness.md)、[Automated Blind Testing Design](superpowers/specs/2026-06-14-automated-blind-testing-design.md)、[OpenAPI Contract](openapi.yaml) 和 [Deployment](deployment.md) 中的测试要求收敛成执行说明。
+本文集中说明当前仓库可直接运行的测试入口、后续测试分层、目录规划、OpenAPI 契约测试口径和评测门禁。第一版需求到正向、拒绝、自动化与线上证据的逐项入口见 [第一版需求测试矩阵](requirements-test-matrix.md)。它不是新的架构来源，只把 [Development Readiness](development-readiness.md)、[Automated Blind Testing Design](superpowers/specs/2026-06-14-automated-blind-testing-design.md)、[OpenAPI Contract](openapi.yaml) 和 [Deployment](deployment.md) 中的测试要求收敛成执行说明。
 
 ## 1. 当前可运行测试
 

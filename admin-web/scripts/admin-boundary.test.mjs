@@ -96,6 +96,63 @@ test("customer admin launch exchange submits each one-time token only once in de
   assert.match(launchExchange, /\/v1\/admin\/auth\/launch\/exchange/);
 });
 
+test("customer admin launch exchange pending state does not render an action button", () => {
+  const customerApp = readRelative("customer-admin/src/App.tsx");
+  const launchExchange = sliceBetween(customerApp, "function LaunchExchange", "function MessageHistory");
+  const pendingBranch = sliceBetween(launchExchange, ") : (", ")}\n      </section>");
+
+  assert.match(pendingBranch, /正在校验一次性启动票据/);
+  assert.doesNotMatch(pendingBranch, /<button\b/);
+  assert.doesNotMatch(pendingBranch, /微信扫码登录/);
+  assert.doesNotMatch(pendingBranch, /登录\/注册/);
+});
+
+test("login secondary action is hidden while the login form is processing", () => {
+  const sharedComponents = readRelative("shared/components.tsx");
+  const loginPanel = sliceBetween(sharedComponents, "export function LoginPanelBase", "function loginFailureMessage");
+
+  assert.match(loginPanel, /loading \? \(/);
+  assert.match(loginPanel, /正在处理/);
+  assert.match(loginPanel, /\{secondaryAction && !loading \? \(/);
+});
+
+test("customer message history reuses the simulation composer for existing and empty conversations", () => {
+  const customerApp = readRelative("customer-admin/src/App.tsx");
+  const composer = readRelative("customer-admin/src/SimulationComposer.tsx");
+  const messageHistory = sliceBetween(customerApp, "function MessageHistory", "function ChatBubble");
+
+  assert.match(customerApp, /import \{ SimulationComposer \}/);
+  assert.equal((messageHistory.match(/<SimulationComposer/g) || []).length, 2);
+  assert.match(composer, /还没有会话，先模拟一次客户咨询/);
+  assert.match(composer, /模拟咨询不会发送给真实买家/);
+  assert.match(composer, /role="alert"/);
+  assert.match(composer, /请输入模拟客户问题/);
+  assert.match(composer, /disabled=\{loading\}/);
+  assert.match(composer, /textarea[\s\S]*disabled=\{loading\}/);
+  assert.match(messageHistory, /setSearchText\(""\)/);
+  assert.match(messageHistory, /const createdTrace = await requireReloadedSimulation\(/);
+  assert.match(messageHistory, /reportError: false, throwOnError: true/);
+  assert.doesNotMatch(messageHistory, /setRows\(\(current\) => \[newTrace, \.\.\.current\]\)/);
+  assert.match(messageHistory, /generationRef/);
+  assert.match(messageHistory, /currentStoreRef/);
+  assert.match(messageHistory, /mountedRef/);
+  assert.match(messageHistory, /return \(\) => \{[\s\S]*mountedRef\.current = false/);
+  assert.match(messageHistory, /isCurrentOperation/);
+  assert.match(messageHistory, /setSelectedTrace\(buildCanonicalSimulationTrace\(createdTrace, content\)\)/);
+  assert.match(messageHistory, /SectionHeader[\s\S]*disabled=\{simulationLoading\}[\s\S]*刷新/);
+});
+
+test("decision metrics preserve raw values as accessible titles", () => {
+  const customerApp = readRelative("customer-admin/src/App.tsx");
+  const sharedComponents = readRelative("shared/components.tsx");
+  const metric = sliceBetween(sharedComponents, "export function Metric", "export function DataTable");
+
+  assert.match(customerApp, /value=\{presentation\.actionLabel\}/);
+  assert.match(customerApp, /title=\{String\(trace\.action/);
+  assert.match(metric, /title\?: string/);
+  assert.match(metric, /title=\{title\}/);
+});
+
 test("system admin source stays inside system auth boundary", () => {
   const source = collectSource("system-admin/src");
 

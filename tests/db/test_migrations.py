@@ -210,6 +210,15 @@ def test_canonical_runtime_alignment_migration_contains_external_mapping_and_ind
         assert snippet in sql
 
 
+def test_decision_idempotency_scope_migration_replaces_organization_only_uniqueness() -> None:
+    sql = Path("migrations/011_decision_idempotency_store_scope.sql").read_text(encoding="utf-8").lower()
+
+    assert "drop constraint if exists decision_record_organization_id_request_id_key" in sql
+    assert "drop index if exists idx_decision_record_organization_request_id" in sql
+    assert "create unique index if not exists idx_decision_record_organization_store_request_id" in sql
+    assert "on decision_record (organization_id, store_id, request_id)" in sql
+
+
 def test_legacy_runtime_defaults_migration_contains_not_null_defaults() -> None:
     sql = Path("migrations/005_legacy_runtime_defaults.sql").read_text(encoding="utf-8").lower()
 
