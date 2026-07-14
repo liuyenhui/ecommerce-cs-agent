@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import threading
+import time
 from typing import Any
 
 import pytest
@@ -224,6 +228,55 @@ def test_in_memory_system_admin_tasks_return_persisted_retryable_flag() -> None:
 
     with pytest.raises(Exception, match="not retryable"):
         repository.retry_task(_system_session(), "unsafe", {"idempotency_key": "unsafe-retry", "reason": "manual"})
+
+
+def test_in_memory_task_retry_replays_only_for_same_task_and_actor() -> None:
+    repository = InMemorySystemAdminRepository()
+    repository.tasks = {
+        "task-1": {"task_id": "task-1", "task_type": "embedding", "status": "failed", "retryable": True},
+        "task-2": {"task_id": "task-2", "task_type": "embedding", "status": "failed", "retryable": True},
+    }
+    session = _system_session()
+    payload = {"idempotency_key": "retry-shared", "reason": "manual"}
+
+    first = repository.retry_task(session, "task-1", payload)
+    second = repository.retry_task(session, "task-1", payload)
+
+    assert second == first
+    assert repository.tasks["task-1"]["retry_count"] == 1
+    with pytest.raises(Exception, match="different task or system admin"):
+        repository.retry_task(session, "task-2", payload)
+    with pytest.raises(Exception, match="different task or system admin"):
+        repository.retry_task(replace(session, user_id="other-system-admin"), "task-1", payload)
+
+
+def test_in_memory_task_retry_same_key_is_concurrently_replayed_once() -> None:
+    class SlowTask(dict[str, Any]):
+        def __getitem__(self, key: str) -> Any:
+            value = super().__getitem__(key)
+            if key == "status":
+                time.sleep(0.03)
+            return value
+
+    repository = InMemorySystemAdminRepository()
+    repository.tasks = {
+        "task-1": SlowTask(task_id="task-1", task_type="embedding", status="failed", retryable=True),
+    }
+    session = _system_session()
+    payload = {"idempotency_key": "retry-concurrent", "reason": "manual"}
+    start = threading.Barrier(2)
+
+    def retry() -> dict[str, Any]:
+        start.wait(timeout=3)
+        return repository.retry_task(session, "task-1", payload)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(retry) for _ in range(2)]
+        results = [future.result(timeout=5) for future in futures]
+
+    assert results[0] == results[1]
+    assert repository.tasks["task-1"]["retry_count"] == 1
+    assert sum(item["action"] == "system_admin.task.retry" for item in repository.audit_logs) == 1
 
 
 def test_in_memory_system_admin_audit_filters_actor_scope_action_sensitive_and_half_open_time() -> None:

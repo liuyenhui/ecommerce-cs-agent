@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -543,13 +545,14 @@ def test_postgres_system_admin_repository_lists_tasks_and_retries_failed_task() 
     assert retry["status"] == "queued"
     assert retry["audit_log_id"]
     assert "FROM background_task task" in executed_sql
+    assert "pg_advisory_xact_lock" in executed_sql
     assert "FOR UPDATE" in executed_sql
     assert "UPDATE background_task" in executed_sql
     assert "retry-001" in str(connection.executed)
 
 
 def test_postgres_system_admin_repository_replays_task_retry_idempotently() -> None:
-    connection = _FakeConnection(fetch_rows=[None, ("failed", True, "org-001", "store-001"), ("audit-001", "task-001")])
+    connection = _FakeConnection(fetch_rows=[None, ("failed", True, "org-001", "store-001"), ("audit-001", "task-001", "sysadmin-uuid")])
     repository = PostgresSystemAdminRepository("postgresql://example")
     repository._connect = lambda _url: connection
     payload = {"idempotency_key": "retry-001", "reason": "manual retry"}
@@ -561,6 +564,152 @@ def test_postgres_system_admin_repository_replays_task_retry_idempotently() -> N
     assert first["status"] == "queued"
     assert second == {"task_id": "task-001", "status": "queued", "audit_log_id": "audit-001"}
     assert executed_sql.count("UPDATE background_task") == 1
+
+
+def test_postgres_task_retry_replays_same_key_after_controlled_lock_interleaving() -> None:
+    connection = _FakeConnection(fetch_rows=[
+        None,
+        ("queued", True, "org-001", "store-001"),
+        ("audit-001", "task-001", "sysadmin-uuid"),
+    ])
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    replay = repository.retry_task(
+        _system_session(),
+        "task-001",
+        {"idempotency_key": "retry-race", "reason": "concurrent retry"},
+    )
+
+    assert replay == {"task_id": "task-001", "status": "queued", "audit_log_id": "audit-001"}
+    assert "UPDATE background_task" not in "\n".join(sql for sql, _params in connection.executed)
+
+
+def test_postgres_task_retry_same_key_is_concurrently_replayed_once() -> None:
+    class SharedState:
+        def __init__(self) -> None:
+            self.initial_reads = threading.Barrier(2)
+            self.idempotency_lock = threading.Lock()
+            self.task_lock = threading.Lock()
+            self.status = "failed"
+            self.audit: tuple[str, str, str] | None = None
+            self.update_count = 0
+
+    state = SharedState()
+
+    class Connection:
+        def __init__(self) -> None:
+            self.owns_task_lock = False
+            self.owns_idempotency_lock = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            if self.owns_task_lock:
+                self.task_lock_release()
+            if self.owns_idempotency_lock:
+                self.owns_idempotency_lock = False
+                state.idempotency_lock.release()
+
+        def task_lock_release(self) -> None:
+            self.owns_task_lock = False
+            state.task_lock.release()
+
+        def cursor(self):
+            return Cursor(self)
+
+    class Cursor:
+        def __init__(self, connection: Connection) -> None:
+            self.connection = connection
+            self.last_query = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+            if "pg_advisory_xact_lock" in sql:
+                state.idempotency_lock.acquire()
+                self.connection.owns_idempotency_lock = True
+                self.last_query = "advisory"
+            elif "FROM system_admin_audit_log" in sql:
+                self.last_query = "idempotency"
+            elif "FOR UPDATE OF task" in sql:
+                state.task_lock.acquire()
+                self.connection.owns_task_lock = True
+                self.last_query = "task"
+            elif "UPDATE background_task" in sql:
+                state.status = "queued"
+                state.update_count += 1
+                self.last_query = "update"
+            elif "INSERT INTO system_admin_audit_log" in sql:
+                state.audit = (str(params[0]), str(params[7]), str(params[1]))
+                self.last_query = "audit"
+
+        def fetchone(self):
+            if self.last_query == "idempotency":
+                if state.audit is not None:
+                    return state.audit
+                if not self.connection.owns_idempotency_lock:
+                    state.initial_reads.wait(timeout=3)
+                return None
+            if self.last_query == "task":
+                return (state.status, True, "org-001", "store-001")
+            return None
+
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    repository._connect = lambda _url: Connection()
+    payload = {"idempotency_key": "retry-concurrent", "reason": "concurrent retry"}
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(repository.retry_task, _system_session(), "task-001", payload) for _ in range(2)]
+        results = [future.result(timeout=5) for future in futures]
+
+    assert results[0] == results[1]
+    assert results[0]["status"] == "queued"
+    assert state.update_count == 1
+
+
+@pytest.mark.parametrize(
+    "replay_row",
+    [
+        ("audit-other-task", "task-other", "sysadmin-uuid"),
+        ("audit-other-actor", "task-001", "other-sysadmin"),
+    ],
+)
+def test_postgres_task_retry_rejects_cross_task_or_cross_actor_key_replay(replay_row: tuple[str, str, str]) -> None:
+    connection = _FakeConnection(fetch_rows=[replay_row])
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    with pytest.raises(HTTPException) as exc_info:
+        repository.retry_task(
+            _system_session(),
+            "task-001",
+            {"idempotency_key": "retry-shared", "reason": "manual retry"},
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "UPDATE background_task" not in "\n".join(sql for sql, _params in connection.executed)
+
+
+def test_postgres_task_retry_with_different_key_conflicts_after_another_retry_wins_lock() -> None:
+    connection = _FakeConnection(fetch_rows=[None, ("queued", True, "org-001", "store-001"), None])
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    with pytest.raises(HTTPException) as exc_info:
+        repository.retry_task(
+            _system_session(),
+            "task-001",
+            {"idempotency_key": "retry-different", "reason": "concurrent retry"},
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "UPDATE background_task" not in "\n".join(sql for sql, _params in connection.executed)
 
 
 def test_postgres_system_admin_repository_readiness_reads_db_and_returns_all_checks() -> None:

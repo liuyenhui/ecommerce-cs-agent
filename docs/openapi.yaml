@@ -1760,36 +1760,34 @@ paths:
         "422":
           $ref: "#/components/responses/ValidationError"
 
-  /v1/system-admin/tenants:
+  /v1/system-admin/organizations:
     get:
       tags: [System Admin]
-      operationId: listSystemTenants
-      summary: 查询租户
-      description: 跨租户查询必须带分页，可按状态、时间和关键词筛选；读取跨租户数据写入访问审计。
+      operationId: listSystemOrganizations
+      summary: 查询组织
+      description: 跨组织查询必须带分页，可按状态筛选；读取跨组织数据写入访问审计。
       security:
         - SystemAdminSession: []
       parameters:
         - $ref: "#/components/parameters/StatusQuery"
-        - $ref: "#/components/parameters/TimeFrom"
-        - $ref: "#/components/parameters/TimeTo"
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
       responses:
         "200":
-          description: 租户分页列表。
+          description: 组织分页列表。
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SystemTenantListResponse"
+                $ref: "#/components/schemas/SystemOrganizationListResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
     post:
       tags: [System Admin]
-      operationId: createSystemTenant
-      summary: 创建租户
-      description: 平台运营或更高权限创建租户；必须记录开通原因和审计。
+      operationId: createSystemOrganization
+      summary: 创建组织
+      description: 平台运营或更高权限创建组织；必须记录开通原因和审计。
       security:
         - SystemAdminSession: []
       requestBody:
@@ -1797,14 +1795,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SystemTenantCreateRequest"
+              $ref: "#/components/schemas/SystemOrganizationCreateRequest"
       responses:
         "201":
-          description: 租户已创建。
+          description: 组织已创建。
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SystemTenantResponse"
+                $ref: "#/components/schemas/SystemOrganizationResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1818,16 +1816,14 @@ paths:
     get:
       tags: [System Admin]
       operationId: listSystemStores
-      summary: 查询跨租户店铺
-      description: 系统后台按租户、店铺、平台、状态和时间查询店铺；跨租户访问写入审计。
+      summary: 查询跨组织店铺
+      description: 系统后台按组织、店铺和状态查询店铺；跨组织访问写入审计。
       security:
         - SystemAdminSession: []
       parameters:
-        - $ref: "#/components/parameters/TenantIdQuery"
+        - $ref: "#/components/parameters/SystemOrganizationIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
         - $ref: "#/components/parameters/StatusQuery"
-        - $ref: "#/components/parameters/TimeFrom"
-        - $ref: "#/components/parameters/TimeTo"
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
       responses:
@@ -1845,7 +1841,7 @@ paths:
       tags: [System Admin]
       operationId: createSystemStore
       summary: 创建店铺
-      description: 为指定租户创建店铺、平台类型和外部引用；必须写入系统审计。
+      description: 为指定组织创建店铺、平台类型和外部引用；必须写入系统审计。
       security:
         - SystemAdminSession: []
       requestBody:
@@ -1875,11 +1871,11 @@ paths:
       tags: [System Admin]
       operationId: listSystemStoreReadiness
       summary: 查询店铺上线完成度
-      description: 跨租户查看资料、知识、规则、动作能力和 API 接入检查项；默认返回摘要，不返回客户业务敏感 payload。
+      description: 跨组织查看资料、知识、规则、动作能力和 API 接入检查项；默认返回摘要，不返回客户业务敏感 payload。
       security:
         - SystemAdminSession: []
       parameters:
-        - $ref: "#/components/parameters/TenantIdQuery"
+        - $ref: "#/components/parameters/SystemOrganizationIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
         - $ref: "#/components/parameters/StatusQuery"
         - $ref: "#/components/parameters/Page"
@@ -1900,12 +1896,12 @@ paths:
     get:
       tags: [System Admin]
       operationId: listSystemMessageTraces
-      summary: 跨租户查询消息决策追踪
-      description: 技术支持按 `decision_id`、请求 ID、外部消息 ID、租户、店铺、平台和时间查询摘要。请求 raw payload 必须带 `reason`，并可能返回 `RAW_PAYLOAD_ACCESS_DENIED`。
+      summary: 跨组织查询消息决策追踪
+      description: 技术支持按 `decision_id`、请求 ID、外部消息 ID、组织、店铺、平台和时间查询摘要。请求 raw payload 必须带 `reason`，并可能返回 `RAW_PAYLOAD_ACCESS_DENIED`。
       security:
         - SystemAdminSession: []
       parameters:
-        - $ref: "#/components/parameters/TenantIdQuery"
+        - $ref: "#/components/parameters/SystemOrganizationIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
         - name: decision_id
           in: query
@@ -1935,7 +1931,7 @@ paths:
           required: false
           schema:
             type: string
-          description: 跨租户排障、敏感字段查看或 raw payload 访问原因。
+          description: 跨组织排障、敏感字段查看或 raw payload 访问原因。
         - $ref: "#/components/parameters/TimeFrom"
         - $ref: "#/components/parameters/TimeTo"
         - $ref: "#/components/parameters/Page"
@@ -1959,7 +1955,7 @@ paths:
       tags: [System Admin]
       operationId: getSystemMessageTrace
       summary: 查询系统后台消息决策详情
-      description: 系统后台查看单条消息决策详情。跨租户访问、敏感字段查看和 raw payload 访问必须写系统审计。
+      description: 系统后台查看单条消息决策详情。跨组织访问、敏感字段查看和 raw payload 访问必须写系统审计。
       security:
         - SystemAdminSession: []
       parameters:
@@ -2000,7 +1996,7 @@ paths:
       security:
         - SystemAdminSession: []
       parameters:
-        - $ref: "#/components/parameters/TenantIdQuery"
+        - $ref: "#/components/parameters/SystemOrganizationIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
         - name: task_type
           in: query
@@ -2008,8 +2004,6 @@ paths:
           schema:
             type: string
         - $ref: "#/components/parameters/StatusQuery"
-        - $ref: "#/components/parameters/TimeFrom"
-        - $ref: "#/components/parameters/TimeTo"
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
       responses:
@@ -2029,7 +2023,7 @@ paths:
       tags: [System Admin]
       operationId: retrySystemTask
       summary: 重试幂等安全任务
-      description: 仅允许重试幂等安全任务；必须提供 `reason` 和 `idempotency_key`，并写入系统审计。
+      description: 仅允许重试服务端标记为幂等安全的失败任务；必须提供 `reason` 和 `idempotency_key`，并写入系统审计。同一 System Admin、同一任务和同一幂等键的并发或后续请求重放首次成功响应且不重复入队；同键跨操作者或跨任务、以及不同键竞争同一任务时返回 409。
       security:
         - SystemAdminSession: []
       parameters:
@@ -2068,7 +2062,7 @@ paths:
       tags: [System Admin]
       operationId: listSystemAuditLogs
       summary: 查询系统后台审计日志
-      description: 查询系统后台登录、权限变更、跨租户访问、代运营修改、敏感数据查看和高风险变更。时间范围采用 `[time_from, time_to)` 半开区间；起止时间必须含时区且起点早于终点。
+      description: 查询系统后台登录、权限变更、跨组织访问、代运营修改、敏感数据查看和高风险变更。时间范围采用 `[time_from, time_to)` 半开区间；起止时间必须含时区且起点早于终点。
       security:
         - SystemAdminSession: []
       parameters:
@@ -2947,6 +2941,14 @@ components:
       schema:
         type: string
       description: 租户 ID。客户 Admin 查询时必须属于当前 session 可访问范围；系统 Admin 跨租户查询会写访问审计。
+    SystemOrganizationIdQuery:
+      name: organization_id
+      in: query
+      required: false
+      schema:
+        type: string
+        maxLength: 256
+      description: Agent 组织外部 ID；System Admin 跨组织查询会写访问审计。
     StoreIdQuery:
       name: store_id
       in: query
@@ -4849,18 +4851,18 @@ components:
         audit_log_id:
           type: string
 
-    SystemTenantListResponse:
+    SystemOrganizationListResponse:
       type: object
       required: [items, page_info]
       properties:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/SystemTenant"
+            $ref: "#/components/schemas/SystemOrganization"
         page_info:
           $ref: "#/components/schemas/PageInfo"
 
-    SystemTenantCreateRequest:
+    SystemOrganizationCreateRequest:
       type: object
       required: [name, status, reason]
       properties:
@@ -4878,12 +4880,12 @@ components:
         idempotency_key:
           type: string
 
-    SystemTenantResponse:
+    SystemOrganizationResponse:
       type: object
-      required: [tenant, audit_log_id]
+      required: [organization, audit_log_id]
       properties:
-        tenant:
-          $ref: "#/components/schemas/SystemTenant"
+        organization:
+          $ref: "#/components/schemas/SystemOrganization"
         audit_log_id:
           type: string
 
@@ -4900,9 +4902,9 @@ components:
 
     SystemStoreCreateRequest:
       type: object
-      required: [tenant_id, name, platform, status, reason]
+      required: [organization_id, name, platform, status, reason]
       properties:
-        tenant_id:
+        organization_id:
           type: string
         name:
           type: string
@@ -4934,7 +4936,7 @@ components:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/ReadinessSummary"
+            $ref: "#/components/schemas/SystemStoreReadinessSummary"
         page_info:
           $ref: "#/components/schemas/PageInfo"
 
@@ -5033,8 +5035,12 @@ components:
       properties:
         idempotency_key:
           type: string
+          minLength: 1
+          maxLength: 128
+          description: 在同一 System Admin 与任务范围内标识一次重试；相同键安全重放首次成功响应。
         reason:
           type: string
+          minLength: 1
 
     TaskRetryResponse:
       type: object
@@ -5990,43 +5996,62 @@ components:
           type: string
           format: date-time
 
-    SystemTenant:
-      allOf:
-        - $ref: "#/components/schemas/Tenant"
-        - type: object
-          required: [created_at]
-          properties:
-            external_ref:
-              type:
-                - string
-                - "null"
-            contact:
-              $ref: "#/components/schemas/Metadata"
-            created_at:
-              type: string
-              format: date-time
+    SystemOrganization:
+      type: object
+      required: [id, organization_id, name, status, metadata, external_ref, contact, created_at]
+      properties:
+        id:
+          type: string
+        organization_id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum: [active, suspended, onboarding, frozen]
+        metadata:
+          $ref: "#/components/schemas/Metadata"
+        external_ref:
+          type: string
+        contact:
+          $ref: "#/components/schemas/Metadata"
+        created_at:
+          type: string
+          format: date-time
 
     SystemStore:
-      allOf:
-        - $ref: "#/components/schemas/Store"
-        - type: object
-          properties:
-            external_store_id:
-              type:
-                - string
-                - "null"
-            readiness_status:
-              type: string
-              enum: [ready, warning, blocked, unknown]
-            created_at:
-              type: string
-              format: date-time
-
-    ReadinessSummary:
       type: object
-      required: [tenant_id, store_id, status, checks, updated_at]
+      required: [id, store_id, organization_id, name, platform, status, metadata, external_store_id, readiness_status, created_at]
       properties:
-        tenant_id:
+        id:
+          type: string
+        store_id:
+          type: string
+        organization_id:
+          type: string
+        name:
+          type: string
+        platform:
+          $ref: "#/components/schemas/Platform"
+        status:
+          type: string
+          enum: [active, inactive, onboarding, frozen]
+        metadata:
+          $ref: "#/components/schemas/Metadata"
+        external_store_id:
+          type: string
+        readiness_status:
+          type: string
+          enum: [ready, warning, blocked, unknown]
+        created_at:
+          type: string
+          format: date-time
+
+    SystemStoreReadinessSummary:
+      type: object
+      required: [organization_id, store_id, status, checks, updated_at]
+      properties:
+        organization_id:
           type: string
         store_id:
           type: string
@@ -6056,25 +6081,26 @@ components:
 
     SystemMessageTraceSummary:
       type: object
-      required: [decision_id, tenant_id, store_id, action, risk_level, created_at]
+      required: [decision_id, organization_id, store_id, action, risk_level, created_at]
       properties:
         decision_id:
           type: string
-        tenant_id:
+        organization_id:
           type: string
         store_id:
           type: string
         request_id:
           type: string
         external_message_id:
-          type: string
+          type:
+            - string
+            - "null"
         action:
           $ref: "#/components/schemas/DecisionAction"
         risk_level:
           $ref: "#/components/schemas/RiskLevel"
         status:
-          type: string
-          enum: [candidate, context_request, action_request, completed, waiting_context, waiting_action, handoff, failed]
+          $ref: "#/components/schemas/DecisionStatus"
         sensitive_access:
           type: boolean
           default: false

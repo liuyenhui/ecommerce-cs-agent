@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
+from threading import RLock
 from typing import Any, Protocol
 
 from psycopg.types.json import Jsonb
@@ -99,6 +100,7 @@ class InMemorySystemAdminRepository:
         self.tasks: dict[str, dict[str, Any]] = {}
         self.releases: dict[str, dict[str, Any]] = {}
         self.audit_logs: list[dict[str, Any]] = []
+        self._mutation_lock = RLock()
 
     def dashboard_summary(self, session: SystemAdminSession) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
@@ -280,18 +282,19 @@ class InMemorySystemAdminRepository:
 
     def retry_task(self, session: SystemAdminSession, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_any_role(session, {"super_admin", "technical_support", "platform_operator"})
-        task = self.tasks.get(task_id)
-        if not task:
-            raise api_error(404, "not_found", f"task {task_id} not found")
-        if task["status"] != "failed" or task.get("retryable") is not True:
+        with self._mutation_lock:
+            task = self.tasks.get(task_id)
+            if not task:
+                raise api_error(404, "not_found", f"task {task_id} not found")
             replay = self._idempotency_replay("system_admin.task.retry", payload)
-            if replay and replay["object_id"] == task_id:
-                return {"task_id": task_id, "status": "queued", "audit_log_id": replay["audit_log_id"]}
-            raise api_error(409, "idempotency_conflict", f"task {task_id} is not retryable from status {task['status']}")
-        task["status"] = "queued"
-        task["retry_count"] = int(task.get("retry_count", 0)) + 1
-        audit_id = self._audit(session, "system_admin.task.retry", "background_task", task_id, payload)
-        return {"task_id": task_id, "status": "queued", "audit_log_id": audit_id}
+            if replay:
+                return _task_retry_replay_response(replay, session, task_id)
+            if task["status"] != "failed" or task.get("retryable") is not True:
+                raise api_error(409, "idempotency_conflict", f"task {task_id} is not retryable from status {task['status']}")
+            task["status"] = "queued"
+            task["retry_count"] = int(task.get("retry_count", 0)) + 1
+            audit_id = self._audit(session, "system_admin.task.retry", "background_task", task_id, payload)
+            return {"task_id": task_id, "status": "queued", "audit_log_id": audit_id}
 
     def list_audit_logs(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         filters = _normalize_audit_filters(filters)
@@ -1074,9 +1077,10 @@ class PostgresSystemAdminRepository:
         self._require_any_role(session, {"super_admin", "technical_support", "platform_operator"})
         with self._connect(self._database_url) as conn:
             with conn.cursor() as cur:
+                self._lock_idempotency_key(cur, "system_admin.task.retry", payload.get("idempotency_key"))
                 replay = self._find_idempotency(cur, "system_admin.task.retry", payload.get("idempotency_key"))
-                if replay and replay["object_id"] == task_id:
-                    return {"task_id": task_id, "status": "queued", "audit_log_id": replay["audit_log_id"]}
+                if replay:
+                    return _task_retry_replay_response(replay, session, task_id)
                 cur.execute(
                     """
                     SELECT task.status, task.retryable, org.external_organization_id, st.external_store_id
@@ -1092,6 +1096,9 @@ class PostgresSystemAdminRepository:
                 if not row:
                     raise api_error(404, "not_found", f"task {task_id} not found")
                 if str(row[0]) != "failed" or not bool(row[1]):
+                    replay = self._find_idempotency(cur, "system_admin.task.retry", payload.get("idempotency_key"))
+                    if replay:
+                        return _task_retry_replay_response(replay, session, task_id)
                     raise api_error(409, "idempotency_conflict", f"task {task_id} is not retryable from status {row[0]}")
                 cur.execute(
                     """
@@ -1108,6 +1115,14 @@ class PostgresSystemAdminRepository:
                 )
                 audit_id = self._audit(cur, session, row[2], row[3], "system_admin.task.retry", "background_task", task_id, payload)
                 return {"task_id": task_id, "status": "queued", "audit_log_id": audit_id}
+
+    def _lock_idempotency_key(self, cur: Any, action: str, idempotency_key: Any) -> None:
+        if not idempotency_key:
+            return
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"{action}:{idempotency_key}",),
+        )
 
     def list_audit_logs(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         filters = _normalize_audit_filters(filters)
@@ -1220,7 +1235,7 @@ class PostgresSystemAdminRepository:
             return None
         cur.execute(
             """
-            SELECT id::text, object_id
+            SELECT id::text, object_id, system_admin_user_id::text
             FROM system_admin_audit_log
             WHERE action = %s AND idempotency_key = %s
             ORDER BY created_at ASC
@@ -1231,7 +1246,11 @@ class PostgresSystemAdminRepository:
         row = cur.fetchone()
         if not row:
             return None
-        return {"audit_log_id": str(row[0]), "object_id": str(row[1])}
+        return {
+            "audit_log_id": str(row[0]),
+            "object_id": str(row[1]),
+            "actor_user_id": str(row[2]) if len(row) > 2 and row[2] is not None else "",
+        }
 
     def _require_any_role(self, session: SystemAdminSession, roles: set[str]) -> None:
         if session.role not in roles:
@@ -1617,6 +1636,22 @@ def _readiness_status(has_product: bool, has_price: bool, has_knowledge: bool, h
     if has_product:
         return "warning"
     return "blocked"
+
+
+def _task_retry_replay_response(
+    replay: dict[str, Any],
+    session: SystemAdminSession,
+    task_id: str,
+) -> dict[str, str]:
+    actor_user_id = str(
+        replay.get("actor_user_id")
+        or replay.get("actor_system_user_id")
+        or replay.get("actor_id")
+        or ""
+    )
+    if str(replay.get("object_id") or "") != task_id or actor_user_id != session.user_id:
+        raise api_error(409, "idempotency_conflict", "idempotency key belongs to a different task or system admin")
+    return {"task_id": task_id, "status": "queued", "audit_log_id": str(replay["audit_log_id"])}
 
 
 def _parse_filter_datetime(value: Any, field: str) -> datetime:

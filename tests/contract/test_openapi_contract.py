@@ -10,6 +10,7 @@ from referencing.jsonschema import DRAFT202012
 
 from ecommerce_cs_agent.api.app import create_app
 from ecommerce_cs_agent.core.config import Settings
+from ecommerce_cs_agent.services.system_admin import _message_trace_summary_from_row
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -44,7 +45,12 @@ REQUIRED_PATHS = {
     "/v1/system-admin/auth/logout",
     "/v1/system-admin/auth/me",
     "/v1/system-admin/dashboard-summary",
+    "/v1/system-admin/organizations",
+    "/v1/system-admin/stores",
+    "/v1/system-admin/readiness/stores",
     "/v1/system-admin/message-traces",
+    "/v1/system-admin/tasks",
+    "/v1/system-admin/tasks/{task_id}/retry",
     "/v1/system-admin/audit-logs",
     "/v1/system-admin/health",
     "/v1/system-admin/llm/providers",
@@ -81,6 +87,8 @@ CORE_JSON_REQUESTS = {
     ("post", "/v1/product-content/assets"): "#/components/schemas/ProductAssetCreateRequest",
     ("post", "/v1/product-content/price-snapshots"): "#/components/schemas/ProductPriceSnapshotRequest",
     ("post", "/v1/system-admin/auth/login"): "#/components/schemas/SystemAdminLoginRequest",
+    ("post", "/v1/system-admin/organizations"): "#/components/schemas/SystemOrganizationCreateRequest",
+    ("post", "/v1/system-admin/stores"): "#/components/schemas/SystemStoreCreateRequest",
     ("post", "/v1/system-admin/tasks/{task_id}/retry"): "#/components/schemas/TaskRetryRequest",
     ("post", "/v1/system-admin/llm/providers"): "#/components/schemas/LlmProviderCreateRequest",
     ("patch", "/v1/system-admin/llm/providers/{provider_id}"): "#/components/schemas/LlmProviderUpdateRequest",
@@ -117,6 +125,11 @@ CORE_JSON_RESPONSES = {
     ("post", "/v1/product-content/price-snapshots", "201"): "#/components/schemas/ProductPriceSnapshotResponse",
     ("get", "/v1/system-admin/auth/me", "200"): "#/components/schemas/SystemAdminMeResponse",
     ("get", "/v1/system-admin/dashboard-summary", "200"): "#/components/schemas/SystemDashboardSummary",
+    ("get", "/v1/system-admin/organizations", "200"): "#/components/schemas/SystemOrganizationListResponse",
+    ("post", "/v1/system-admin/organizations", "201"): "#/components/schemas/SystemOrganizationResponse",
+    ("get", "/v1/system-admin/stores", "200"): "#/components/schemas/SystemStoreListResponse",
+    ("post", "/v1/system-admin/stores", "201"): "#/components/schemas/SystemStoreResponse",
+    ("get", "/v1/system-admin/readiness/stores", "200"): "#/components/schemas/ReadinessListResponse",
     ("get", "/v1/system-admin/message-traces", "200"): "#/components/schemas/SystemMessageTraceListResponse",
     ("get", "/v1/system-admin/tasks", "200"): "#/components/schemas/TaskListResponse",
     ("post", "/v1/system-admin/tasks/{task_id}/retry", "202"): "#/components/schemas/TaskRetryResponse",
@@ -147,6 +160,9 @@ PAGINATED_SCHEMAS = {
     "ProductListResponse",
     "CustomerMessageTraceListResponse",
     "SystemMessageTraceListResponse",
+    "SystemOrganizationListResponse",
+    "SystemStoreListResponse",
+    "ReadinessListResponse",
     "TaskListResponse",
 }
 
@@ -310,6 +326,98 @@ class OpenApiContractTest(unittest.TestCase):
         self.assertIn("recent_releases", schema["required"])
         release_ref = schema["properties"]["recent_releases"]["items"]["$ref"]
         self.assertEqual(release_ref, "#/components/schemas/SystemRecentRelease")
+
+    def test_actual_system_admin_organization_store_readiness_and_trace_shapes_validate(self):
+        self.assertNotIn("/v1/system-admin/tenants", self.document["paths"])
+        for stale_schema in ("SystemTenant", "SystemTenantListResponse", "SystemTenantCreateRequest", "SystemTenantResponse"):
+            self.assertNotIn(stale_schema, self.document["components"]["schemas"])
+        for schema_name in (
+            "SystemOrganization",
+            "SystemStore",
+            "SystemStoreCreateRequest",
+            "SystemStoreReadinessSummary",
+            "SystemMessageTraceSummary",
+        ):
+            self.assertNotIn("tenant_id", json.dumps(self.document["components"]["schemas"][schema_name]))
+        for path in (
+            "/v1/system-admin/stores",
+            "/v1/system-admin/readiness/stores",
+            "/v1/system-admin/message-traces",
+            "/v1/system-admin/tasks",
+        ):
+            parameter_names = [
+                resolve_pointer(self.document, item["$ref"])["name"] if "$ref" in item else item["name"]
+                for item in self.document["paths"][path]["get"]["parameters"]
+            ]
+            self.assertIn("organization_id", parameter_names, path)
+            self.assertNotIn("tenant_id", parameter_names, path)
+
+        client = TestClient(create_app(Settings(environment="test", database_url=None)))
+        headers = {"Cookie": "agent_system_admin_session=test-system-session"}
+        organization_response = client.post(
+            "/v1/system-admin/organizations",
+            headers=headers,
+            json={
+                "name": "Contract Organization",
+                "status": "active",
+                "external_ref": "org-contract",
+                "reason": "contract validation",
+                "idempotency_key": "org-contract-create",
+            },
+        )
+        store_response = client.post(
+            "/v1/system-admin/stores",
+            headers=headers,
+            json={
+                "organization_id": "org-contract",
+                "name": "Contract Store",
+                "platform": "pdd",
+                "external_store_id": "store-contract",
+                "status": "active",
+                "reason": "contract validation",
+                "idempotency_key": "store-contract-create",
+            },
+        )
+        organization_update_response = client.post(
+            "/v1/system-admin/organizations",
+            headers=headers,
+            json={
+                "name": "Contract Organization Updated",
+                "status": "suspended",
+                "external_ref": "org-contract",
+                "reason": "contract update validation",
+                "idempotency_key": "org-contract-update",
+            },
+        )
+        actual = [
+            (organization_response, "SystemOrganizationResponse"),
+            (organization_update_response, "SystemOrganizationResponse"),
+            (client.get("/v1/system-admin/organizations", headers=headers), "SystemOrganizationListResponse"),
+            (store_response, "SystemStoreResponse"),
+            (client.get("/v1/system-admin/stores?organization_id=org-contract", headers=headers), "SystemStoreListResponse"),
+            (client.get("/v1/system-admin/readiness/stores?organization_id=org-contract", headers=headers), "ReadinessListResponse"),
+        ]
+        for response, schema_name in actual:
+            self.assertLess(response.status_code, 300, schema_name)
+            assert_schema_valid(response.json(), self.document["components"]["schemas"][schema_name], self.document)
+
+        for status in self.document["components"]["schemas"]["DecisionStatus"]["enum"]:
+            trace_summary = _message_trace_summary_from_row((
+                f"decision-{status}",
+                "org-contract",
+                "store-contract",
+                "request-contract",
+                None,
+                "candidate",
+                "low",
+                status,
+                "2026-07-15T08:00:00Z",
+            ))
+            assert_schema_valid(
+                {"items": [trace_summary], "page_info": {"page": 1, "page_size": 20, "total": 1}},
+                self.document["components"]["schemas"]["SystemMessageTraceListResponse"],
+                self.document,
+            )
 
     def test_usage_endpoints_share_component_query_parameters(self):
         paths = [
