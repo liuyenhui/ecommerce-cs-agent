@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
+
+os.environ["APP_ENV"] = "test"
 
 from ecommerce_cs_agent.api.app import create_app
 from ecommerce_cs_agent.core.config import Settings, load_settings
