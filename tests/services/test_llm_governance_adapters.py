@@ -7,9 +7,12 @@ from urllib.error import HTTPError
 
 import pytest
 
+from ecommerce_cs_agent.services import llm_governance_adapters as adapter_module
 from ecommerce_cs_agent.services.llm_governance_adapters import (
     KubernetesSecretProviderConnectionTester,
     PostgresEvaluationReleaseGateChecker,
+    _KubernetesApiTransport,
+    _PinnedProviderTransport,
 )
 
 
@@ -47,8 +50,12 @@ def test_kubernetes_secret_tester_resolves_secret_and_probes_openai_without_leak
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
         allowed_namespace="runtime",
-        allowed_secret_refs={("ecommerce-cs-agent-llm-provider", "api-key")},
-        transport=transport,
+        allowed_secret_origins={
+            ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
+        },
+        kubernetes_transport=transport,
+        provider_transport=lambda request, timeout, _ip, _host: transport(request, timeout, None),
+        resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
         monotonic=lambda: 1.0,
     )
     result = tester(_provider(), {"timeout_seconds": 20, "max_tokens": 1})
@@ -85,8 +92,12 @@ def test_kubernetes_secret_tester_uses_provider_specific_auth_headers(
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
         allowed_namespace="runtime",
-        allowed_secret_refs={("ecommerce-cs-agent-llm-provider", "api-key")},
-        transport=transport,
+        allowed_secret_origins={
+            ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
+        },
+        kubernetes_transport=transport,
+        provider_transport=lambda request, timeout, _ip, _host: transport(request, timeout, None),
+        resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
     )
     assert tester(_provider(provider_type), {"timeout_seconds": 3})["status"] == "passed"
 
@@ -108,8 +119,12 @@ def test_kubernetes_secret_tester_redacts_transport_failures(tmp_path: Path) -> 
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
         allowed_namespace="runtime",
-        allowed_secret_refs={("ecommerce-cs-agent-llm-provider", "api-key")},
-        transport=transport,
+        allowed_secret_origins={
+            ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
+        },
+        kubernetes_transport=transport,
+        provider_transport=lambda request, timeout, _ip, _host: transport(request, timeout, None),
+        resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
     )
     result = tester(_provider(), {"timeout_seconds": 3})
     assert result == {"status": "failed", "latency_ms": pytest.approx(0, abs=100), "error_code": "auth_failed"}
@@ -154,8 +169,12 @@ def test_kubernetes_secret_tester_rejects_secret_outside_allowlist_before_transp
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
         allowed_namespace="runtime",
-        allowed_secret_refs={("ecommerce-cs-agent-llm-provider", "api-key")},
-        transport=transport,
+        allowed_secret_origins={
+            ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
+        },
+        kubernetes_transport=transport,
+        provider_transport=lambda request, timeout, _ip, _host: transport(request, timeout, None),
+        resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
     )
     provider = _provider()
     provider["secret_ref"] = secret_ref
@@ -190,8 +209,17 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
         "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
         "KUBERNETES_SERVICE_PORT_HTTPS": "443",
         "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": json.dumps(
-            [{"name": "ecommerce-cs-agent-llm-provider", "keys": ["api-key"]}]
+            [
+                {
+                    "name": "ecommerce-cs-agent-llm-provider",
+                    "keys": [{"key": "api-key", "allowedOrigins": []}],
+                }
+            ]
         ),
+        "LLM_GOVERNANCE_RUNTIME_LLM_SECRET_REF": json.dumps(
+            {"name": "ecommerce-cs-agent-llm-provider", "key": "api-key"}
+        ),
+        "LLM_BASE_URL": "https://models.example.test/v1",
     }
     if downward_namespace:
         environment["LLM_GOVERNANCE_SECRET_NAMESPACE"] = downward_namespace
@@ -200,7 +228,9 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
         token_file=str(token_file),
         ca_file=str(ca_file),
         namespace_file=str(namespace_file),
-        transport=transport,
+        kubernetes_transport=transport,
+        provider_transport=lambda request, timeout, _ip, _host: transport(request, timeout, None),
+        resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
     )
 
     assert tester(_provider(), {"timeout_seconds": 3})["status"] == "passed"
@@ -216,7 +246,14 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
             "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
             "KUBERNETES_SERVICE_PORT_HTTPS": "443",
             "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": json.dumps(
-                [{"name": "ecommerce-cs-agent-llm-provider", "keys": ["api-key"]}]
+                [
+                    {
+                        "name": "ecommerce-cs-agent-llm-provider",
+                        "keys": [
+                            {"key": "api-key", "allowedOrigins": ["https://models.example.test"]}
+                        ],
+                    }
+                ]
             ),
         },
         {
@@ -243,7 +280,12 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
             "KUBERNETES_SERVICE_PORT_HTTPS": "443",
             "LLM_GOVERNANCE_SECRET_NAMESPACE": "runtime",
             "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": json.dumps(
-                [{"name": "ecommerce-cs-agent-llm-provider", "keys": ["bad/key"]}]
+                [
+                    {
+                        "name": "ecommerce-cs-agent-llm-provider",
+                        "keys": [{"key": "bad/key", "allowedOrigins": []}],
+                    }
+                ]
             ),
         },
     ],
@@ -285,8 +327,12 @@ def test_kubernetes_secret_tester_uses_standard_azure_models_url(
         if "/api/v1/namespaces/" in request.full_url:
             return 200, json.dumps({"data": {"api-key": base64.b64encode(b"secret").decode()}}).encode()
         assert request.full_url == expected_url
-        assert request.headers == {"Accept": "application/json", "Api-key": "secret"}
-        assert timeout == 3.0
+        assert request.headers == {
+            "Accept": "application/json",
+            "Host": "azure.example.test",
+            "Api-key": "secret",
+        }
+        assert 0 < timeout <= 3.0
         assert "secret" not in request.full_url
         assert "?" not in request.full_url
         return 200, b"{}"
@@ -297,13 +343,456 @@ def test_kubernetes_secret_tester_uses_standard_azure_models_url(
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
         allowed_namespace="runtime",
-        allowed_secret_refs={("ecommerce-cs-agent-llm-provider", "api-key")},
-        transport=transport,
+        allowed_secret_origins={
+            ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://azure.example.test"}
+        },
+        kubernetes_transport=transport,
+        provider_transport=lambda request, timeout, _ip, _host: transport(request, timeout, None),
+        resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
     )
     provider = _provider("azure_openai")
     provider["base_url"] = base_url
 
     assert tester(provider, {"timeout_seconds": 3})["status"] == "passed"
+
+
+@pytest.mark.parametrize(
+    ("base_url", "resolved_ips"),
+    [
+        ("https://attacker.example/v1", ["93.184.216.34"]),
+        ("https://models.example.test/v1", ["127.0.0.1"]),
+        ("https://models.example.test/v1", ["93.184.216.34", "10.0.0.8"]),
+        ("https://kubernetes.default.svc/v1", ["93.184.216.34"]),
+        ("http://models.example.test/v1", ["93.184.216.34"]),
+        ("https://user@models.example.test/v1", ["93.184.216.34"]),
+        ("https://models.example.test/v1?debug=1", ["93.184.216.34"]),
+        ("https://models.example.test/v1#fragment", ["93.184.216.34"]),
+        ("https://models.example.test/v1\nheader", ["93.184.216.34"]),
+    ],
+)
+def test_provider_origin_and_public_dns_are_checked_before_kubernetes_secret_access(
+    tmp_path: Path, base_url: str, resolved_ips: list[str]
+) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("sa", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+    kubernetes_calls: list[object] = []
+    provider_calls: list[object] = []
+
+    tester = KubernetesSecretProviderConnectionTester(
+        kubernetes_host="kubernetes.default.svc",
+        kubernetes_port=443,
+        service_account_token_file=str(token_file),
+        kubernetes_ca_file=str(ca_file),
+        allowed_namespace="runtime",
+        allowed_secret_origins={
+            ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
+        },
+        kubernetes_transport=lambda request, timeout, ca: (
+            kubernetes_calls.append((request, timeout, ca)) or (500, b"{}")
+        ),
+        provider_transport=lambda request, timeout, ip, host: (
+            provider_calls.append((request, timeout, ip, host)) or (500, b"{}")
+        ),
+        resolver=lambda _host, _port, _timeout: resolved_ips,
+    )
+    provider = _provider()
+    provider["base_url"] = base_url
+
+    result = tester(provider, {"timeout_seconds": 20})
+
+    assert result["status"] == "failed"
+    assert result["error_code"] == "invalid_response"
+    assert kubernetes_calls == []
+    assert provider_calls == []
+    assert all(value not in repr(result) for value in (base_url, *resolved_ips))
+
+
+@pytest.mark.parametrize("resolved_ip", ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"])
+def test_provider_transport_uses_the_initial_pinned_public_ip_without_second_dns_lookup(
+    tmp_path: Path, resolved_ip: str
+) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("sa", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+    resolver_calls: list[str] = []
+    provider_calls: list[tuple[str, str]] = []
+
+    def resolver(host: str, _port: int, _timeout: float) -> list[str]:
+        resolver_calls.append(host)
+        return [resolved_ip] if len(resolver_calls) == 1 else ["10.0.0.8"]
+
+    def kubernetes_transport(_request: object, _timeout: float, _ca: str | None) -> tuple[int, bytes]:
+        return 200, json.dumps({"data": {"api-key": base64.b64encode(b"secret").decode()}}).encode()
+
+    def provider_transport(request: object, _timeout: float, ip: str, server_hostname: str) -> tuple[int, bytes]:
+        provider_calls.append((ip, server_hostname))
+        assert request.headers["Host"] == "models.example.test"
+        return 200, b"{}"
+
+    tester = KubernetesSecretProviderConnectionTester(
+        kubernetes_host="10.96.0.1",
+        kubernetes_port=443,
+        service_account_token_file=str(token_file),
+        kubernetes_ca_file=str(ca_file),
+        allowed_namespace="runtime",
+        allowed_secret_origins={
+            ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
+        },
+        kubernetes_transport=kubernetes_transport,
+        provider_transport=provider_transport,
+        resolver=resolver,
+    )
+
+    assert tester(_provider(), {"timeout_seconds": 20})["status"] == "passed"
+    assert resolver_calls == ["models.example.test"]
+    assert provider_calls == [(resolved_ip, "models.example.test")]
+
+
+def test_provider_redirect_is_not_followed_and_authorization_is_not_sent_to_location(tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("sa", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+    provider_requests: list[object] = []
+
+    def kubernetes_transport(_request: object, _timeout: float, _ca: str | None) -> tuple[int, bytes]:
+        return 200, json.dumps({"data": {"api-key": base64.b64encode(b"secret").decode()}}).encode()
+
+    def provider_transport(request: object, _timeout: float, _ip: str, _host: str) -> tuple[int, bytes]:
+        provider_requests.append(request)
+        return 302, b'{"location":"https://attacker.example/steal"}'
+
+    tester = KubernetesSecretProviderConnectionTester(
+        kubernetes_host="10.96.0.1",
+        kubernetes_port=443,
+        service_account_token_file=str(token_file),
+        kubernetes_ca_file=str(ca_file),
+        allowed_namespace="runtime",
+        allowed_secret_origins={
+            ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
+        },
+        kubernetes_transport=kubernetes_transport,
+        provider_transport=provider_transport,
+        resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
+    )
+
+    result = tester(_provider(), {"timeout_seconds": 20})
+
+    assert result == {"status": "failed", "latency_ms": pytest.approx(0, abs=100), "error_code": "invalid_response"}
+    assert len(provider_requests) == 1
+    assert provider_requests[0].headers["Authorization"] == "Bearer secret"
+    assert "attacker.example" not in repr(result)
+
+
+def test_single_deadline_passes_only_remaining_time_to_provider(tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("sa", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+    clock = [0.0]
+    provider_timeouts: list[float] = []
+
+    def kubernetes_transport(_request: object, timeout: float, _ca: str | None) -> tuple[int, bytes]:
+        assert timeout == pytest.approx(20.0)
+        clock[0] = 12.0
+        return 200, json.dumps({"data": {"api-key": base64.b64encode(b"secret").decode()}}).encode()
+
+    def provider_transport(_request: object, timeout: float, _ip: str, _host: str) -> tuple[int, bytes]:
+        provider_timeouts.append(timeout)
+        return 200, b"{}"
+
+    tester = KubernetesSecretProviderConnectionTester(
+        kubernetes_host="10.96.0.1",
+        kubernetes_port=443,
+        service_account_token_file=str(token_file),
+        kubernetes_ca_file=str(ca_file),
+        allowed_namespace="runtime",
+        allowed_secret_origins={
+            ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
+        },
+        kubernetes_transport=kubernetes_transport,
+        provider_transport=provider_transport,
+        resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
+        monotonic=lambda: clock[0],
+    )
+
+    assert tester(_provider(), {"timeout_seconds": 20})["status"] == "passed"
+    assert provider_timeouts == [pytest.approx(8.0)]
+
+
+def test_exhausted_deadline_after_secret_resolution_does_not_call_provider(tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("sa", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+    clock = [0.0]
+    provider_calls: list[object] = []
+
+    def kubernetes_transport(_request: object, _timeout: float, _ca: str | None) -> tuple[int, bytes]:
+        clock[0] = 21.0
+        return 200, json.dumps({"data": {"api-key": base64.b64encode(b"secret").decode()}}).encode()
+
+    tester = KubernetesSecretProviderConnectionTester(
+        kubernetes_host="10.96.0.1",
+        kubernetes_port=443,
+        service_account_token_file=str(token_file),
+        kubernetes_ca_file=str(ca_file),
+        allowed_namespace="runtime",
+        allowed_secret_origins={
+            ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
+        },
+        kubernetes_transport=kubernetes_transport,
+        provider_transport=lambda *args: provider_calls.append(args) or (200, b"{}"),
+        resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
+        monotonic=lambda: clock[0],
+    )
+
+    result = tester(_provider(), {"timeout_seconds": 20})
+
+    assert result["error_code"] == "timeout"
+    assert provider_calls == []
+
+
+def test_default_kubernetes_transport_ignores_https_proxy_and_targets_only_cluster_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class Response:
+        status = 200
+
+        def read(self, _limit: int) -> bytes:
+            return b"{}"
+
+    class Connection:
+        def __init__(self, host: str, port: int, **kwargs: object) -> None:
+            calls.update(host=host, port=port, kwargs=kwargs)
+
+        def request(self, method: str, path: str, headers: dict[str, str]) -> None:
+            calls.update(method=method, path=path, headers=headers)
+
+        def getresponse(self) -> Response:
+            return Response()
+
+        def close(self) -> None:
+            calls["closed"] = True
+
+    monkeypatch.setenv("HTTPS_PROXY", "https://attacker.invalid:8443")
+    monkeypatch.setattr(adapter_module.http.client, "HTTPSConnection", Connection)
+    monkeypatch.setattr(adapter_module.ssl, "create_default_context", lambda **_kwargs: object())
+
+    status, body = _KubernetesApiTransport()(
+        adapter_module.Request(
+            "https://10.96.0.1:443/api/v1/namespaces/runtime/secrets/llm",
+            headers={"Authorization": "Bearer token"},
+        ),
+        5.0,
+        "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+    )
+
+    assert (status, body) == (200, b"{}")
+    assert calls["host"] == "10.96.0.1"
+    assert calls["port"] == 443
+    assert calls["path"] == "/api/v1/namespaces/runtime/secrets/llm"
+    assert "attacker.invalid" not in repr(calls)
+
+
+def test_kubernetes_redirect_is_rejected_without_reusing_service_account_token(tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("sa-token", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+    kubernetes_requests: list[object] = []
+    provider_calls: list[object] = []
+
+    def kubernetes_transport(request: object, _timeout: float, _ca: str | None) -> tuple[int, bytes]:
+        kubernetes_requests.append(request)
+        return 302, b"{}"
+
+    tester = KubernetesSecretProviderConnectionTester(
+        kubernetes_host="10.96.0.1",
+        kubernetes_port=443,
+        service_account_token_file=str(token_file),
+        kubernetes_ca_file=str(ca_file),
+        allowed_namespace="runtime",
+        allowed_secret_origins={
+            ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
+        },
+        kubernetes_transport=kubernetes_transport,
+        provider_transport=lambda *args: provider_calls.append(args) or (200, b"{}"),
+        resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
+    )
+
+    result = tester(_provider(), {"timeout_seconds": 20})
+
+    assert result["error_code"] == "invalid_response"
+    assert len(kubernetes_requests) == 1
+    assert kubernetes_requests[0].headers["Authorization"] == "Bearer sa-token"
+    assert provider_calls == []
+
+
+def test_default_provider_transport_connects_to_pinned_ip_with_original_tls_sni(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+    raw_socket = object()
+
+    class Context:
+        def wrap_socket(self, sock: object, *, server_hostname: str) -> object:
+            calls.update(wrapped_socket=sock, server_hostname=server_hostname)
+            return sock
+
+    class Response:
+        status = 200
+
+        def read(self, _limit: int) -> bytes:
+            return b"{}"
+
+    class Connection:
+        def __init__(self, host: str, port: int, timeout: float) -> None:
+            calls.update(http_host=host, http_port=port, timeout=timeout)
+            self.sock: object | None = None
+
+        def request(self, method: str, path: str, headers: dict[str, str]) -> None:
+            calls.update(method=method, path=path, headers=headers)
+
+        def getresponse(self) -> Response:
+            return Response()
+
+        def close(self) -> None:
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        adapter_module.socket,
+        "create_connection",
+        lambda address, timeout: calls.update(socket_address=address, socket_timeout=timeout) or raw_socket,
+    )
+    monkeypatch.setattr(adapter_module.ssl, "create_default_context", lambda: Context())
+    monkeypatch.setattr(adapter_module.http.client, "HTTPConnection", Connection)
+
+    status, _body = _PinnedProviderTransport()(
+        adapter_module.Request(
+            "https://models.example.test/models",
+            headers={"Host": "models.example.test", "Authorization": "Bearer secret"},
+        ),
+        5.0,
+        "93.184.216.34",
+        "models.example.test",
+    )
+
+    assert status == 200
+    assert calls["socket_address"] == ("93.184.216.34", 443)
+    assert calls["server_hostname"] == "models.example.test"
+    assert calls["headers"] == {"Host": "models.example.test", "Authorization": "Bearer secret"}
+
+
+@pytest.mark.parametrize(
+    "proxy_url",
+    [
+        "https://proxy.example:8443",
+        "socks5://proxy.example:1080",
+        "http://user:password@proxy.example:8080",
+        "http://proxy.example:8080/tunnel",
+        "http://proxy.example:8080?mode=tunnel",
+    ],
+)
+def test_provider_transport_fails_closed_for_unsupported_proxy_urls(
+    monkeypatch: pytest.MonkeyPatch,
+    proxy_url: str,
+) -> None:
+    socket_calls: list[object] = []
+    monkeypatch.setattr(
+        adapter_module.socket,
+        "create_connection",
+        lambda *args, **kwargs: socket_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(ValueError, match="unsupported_proxy"):
+        _PinnedProviderTransport(proxy_url)(
+            adapter_module.Request("https://models.example.test/models"),
+            5.0,
+            "93.184.216.34",
+            "models.example.test",
+        )
+
+    assert socket_calls == []
+
+
+def test_http_proxy_uses_connect_to_pinned_ip_before_tls_and_never_receives_provider_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class ProxySocket:
+        def __init__(self) -> None:
+            self.sent = b""
+            self.responses = [b"HTTP/1.1 200 Connection established\r\n\r\n"]
+
+        def sendall(self, value: bytes) -> None:
+            self.sent += value
+
+        def recv(self, _size: int) -> bytes:
+            return self.responses.pop(0) if self.responses else b""
+
+        def close(self) -> None:
+            calls["proxy_closed"] = True
+
+    proxy_socket = ProxySocket()
+
+    class Context:
+        def wrap_socket(self, sock: object, *, server_hostname: str) -> object:
+            calls.update(server_hostname=server_hostname)
+            return sock
+
+    class Response:
+        status = 200
+
+        def read(self, _limit: int) -> bytes:
+            return b"{}"
+
+    class Connection:
+        def __init__(self, _host: str, _port: int, timeout: float) -> None:
+            self.sock: object | None = None
+
+        def request(self, _method: str, _path: str, headers: dict[str, str]) -> None:
+            calls["provider_headers"] = headers
+
+        def getresponse(self) -> Response:
+            return Response()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        adapter_module.socket,
+        "create_connection",
+        lambda address, timeout: calls.update(proxy_address=address, proxy_timeout=timeout) or proxy_socket,
+    )
+    monkeypatch.setattr(adapter_module.ssl, "create_default_context", lambda: Context())
+    monkeypatch.setattr(adapter_module.http.client, "HTTPConnection", Connection)
+
+    status, _body = _PinnedProviderTransport("http://proxy.example:8080")(
+        adapter_module.Request(
+            "https://models.example.test/models",
+            headers={"Host": "models.example.test", "Authorization": "Bearer secret"},
+        ),
+        5.0,
+        "93.184.216.34",
+        "models.example.test",
+    )
+
+    assert status == 200
+    assert calls["proxy_address"] == ("proxy.example", 8080)
+    assert b"CONNECT 93.184.216.34:443" in proxy_socket.sent
+    assert b"secret" not in proxy_socket.sent
+    assert calls["server_hostname"] == "models.example.test"
+    assert calls["provider_headers"] == {
+        "Host": "models.example.test",
+        "Authorization": "Bearer secret",
+    }
 
 
 def test_postgres_evaluation_gate_requires_same_completed_passing_run() -> None:

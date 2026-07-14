@@ -129,9 +129,12 @@ KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent
 
 - runtime 中的 `LLM_BASE_URL`、`LLM_MODEL` 未注入，或专用 `ecommerce-cs-agent-llm-provider` Secret 的 `api-key` 未通过 `secretKeyRef` 注入为 `LLM_API_KEY`。
 - Helm `api.runtimeLlmSecretRef` 与 `api.secretAccess.allowedSecretRefs` 的 `(name, key)` 不一致，或错误复用了 `api.envFromSecret`。
+- 额外 Secret tuple 未配置精确的公网 HTTPS `allowedOrigins`，或请求 origin 与该 tuple 的绑定不一致；runtime tuple 会自动绑定当前 `LLM_BASE_URL`。
 - API ServiceAccount 的 namespaced Role 未对专用模型 Secret 授予精确的 `secrets/get/resourceNames` 权限。
 - API Pod 代理配置错误。
 - `NO_PROXY` 未包含 `.svc`、`.cluster.local`、PostgreSQL 或 MinIO 内网域名。
+- Provider DNS 包含私网、回环、链路本地或 Kubernetes 地址，或同一主机名混合返回公网与非公网地址。
+- Provider 返回重定向，或代理不是受支持的无认证 HTTP CONNECT 代理。
 - LLM provider 超时或返回非 2xx。
 
 检查：
@@ -142,6 +145,8 @@ KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent
 ```
 
 检查 Deployment 的 `LLM_API_KEY.valueFrom.secretKeyRef` 是否指向专用 Secret，并检查 Role 的 `resourceNames` 是否包含相同 Secret 名。不要要求或恢复 `ecommerce-cs-agent-runtime` 中的 `LLM_API_KEY`，也不要输出 Secret 数据、环境变量值或解码结果。
+
+检查 `allowedOrigins` 时只核对 origin 和 Secret/key 名称，不要读取凭据值。Provider 连接测试要求所有 DNS 结果均为公网地址，并在一次请求内固定已验证 IP；内部 Provider、重定向和 DNS 混合解析属于预期拒绝。Kubernetes Secret 读取不使用业务 Pod 的 Provider 代理。DNS、Secret 读取和 Provider 请求共享 20 秒总截止时间，任一阶段耗尽后不会继续下一阶段。
 
 日志中如包含 provider 请求头、key、prompt 原文或客户 payload，先脱敏再分享。
 

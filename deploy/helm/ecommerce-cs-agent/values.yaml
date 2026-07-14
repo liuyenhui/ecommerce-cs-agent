@@ -21,7 +21,8 @@ api:
     allowedSecretRefs:
       - name: ecommerce-cs-agent-llm-provider
         keys:
-          - api-key
+          - key: api-key
+            allowedOrigins: []
   image:
     repository: ghcr.io/liuyenhui/ecommerce-cs-agent-api
     tag: dev

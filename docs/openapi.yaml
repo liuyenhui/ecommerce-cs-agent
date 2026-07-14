@@ -2621,16 +2621,16 @@ paths:
       security:
         - SystemAdminSession: []
       parameters:
-        - {name: start_at, in: query, schema: {type: string, format: date-time}}
-        - {name: end_at, in: query, schema: {type: string, format: date-time}}
-        - {name: provider_config_id, in: query, schema: {type: string, format: uuid}}
-        - {name: model, in: query, schema: {type: string, maxLength: 128}}
-        - {name: scenario, in: query, schema: {type: string, maxLength: 64}}
-        - {name: organization_id, in: query, schema: {type: string, format: uuid}}
-        - {name: store_id, in: query, schema: {type: string, format: uuid}}
-        - {name: currency, in: query, schema: {type: string, enum: [CNY, USD]}}
-        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timed_out, rejected]}}
-        - {name: route_role, in: query, schema: {type: string, enum: [primary, fallback]}}
+        - $ref: "#/components/parameters/LlmUsageStartAt"
+        - $ref: "#/components/parameters/LlmUsageEndAt"
+        - $ref: "#/components/parameters/LlmUsageProviderConfigId"
+        - $ref: "#/components/parameters/LlmUsageModel"
+        - $ref: "#/components/parameters/LlmUsageScenario"
+        - $ref: "#/components/parameters/LlmUsageOrganizationId"
+        - $ref: "#/components/parameters/LlmUsageStoreId"
+        - $ref: "#/components/parameters/LlmUsageCurrency"
+        - $ref: "#/components/parameters/LlmUsageStatus"
+        - $ref: "#/components/parameters/LlmUsageRouteRole"
       responses:
         "200":
           description: 汇总指标；无调用时 calls 和 Token 为 0，比率为 null。
@@ -2657,16 +2657,16 @@ paths:
       security:
         - SystemAdminSession: []
       parameters:
-        - {name: start_at, in: query, schema: {type: string, format: date-time}}
-        - {name: end_at, in: query, schema: {type: string, format: date-time}}
-        - {name: provider_config_id, in: query, schema: {type: string, format: uuid}}
-        - {name: model, in: query, schema: {type: string, maxLength: 128}}
-        - {name: scenario, in: query, schema: {type: string, maxLength: 64}}
-        - {name: organization_id, in: query, schema: {type: string, format: uuid}}
-        - {name: store_id, in: query, schema: {type: string, format: uuid}}
-        - {name: currency, in: query, schema: {type: string, enum: [CNY, USD]}}
-        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timed_out, rejected]}}
-        - {name: route_role, in: query, schema: {type: string, enum: [primary, fallback]}}
+        - $ref: "#/components/parameters/LlmUsageStartAt"
+        - $ref: "#/components/parameters/LlmUsageEndAt"
+        - $ref: "#/components/parameters/LlmUsageProviderConfigId"
+        - $ref: "#/components/parameters/LlmUsageModel"
+        - $ref: "#/components/parameters/LlmUsageScenario"
+        - $ref: "#/components/parameters/LlmUsageOrganizationId"
+        - $ref: "#/components/parameters/LlmUsageStoreId"
+        - $ref: "#/components/parameters/LlmUsageCurrency"
+        - $ref: "#/components/parameters/LlmUsageStatus"
+        - $ref: "#/components/parameters/LlmUsageRouteRole"
       responses:
         "200":
           description: 时间序列。
@@ -2693,16 +2693,16 @@ paths:
       security:
         - SystemAdminSession: []
       parameters:
-        - {name: start_at, in: query, schema: {type: string, format: date-time}}
-        - {name: end_at, in: query, schema: {type: string, format: date-time}}
-        - {name: provider_config_id, in: query, schema: {type: string, format: uuid}}
-        - {name: model, in: query, schema: {type: string, maxLength: 128}}
-        - {name: scenario, in: query, schema: {type: string, maxLength: 64}}
-        - {name: organization_id, in: query, schema: {type: string, format: uuid}}
-        - {name: store_id, in: query, schema: {type: string, format: uuid}}
-        - {name: currency, in: query, schema: {type: string, enum: [CNY, USD]}}
-        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timed_out, rejected]}}
-        - {name: route_role, in: query, schema: {type: string, enum: [primary, fallback]}}
+        - $ref: "#/components/parameters/LlmUsageStartAt"
+        - $ref: "#/components/parameters/LlmUsageEndAt"
+        - $ref: "#/components/parameters/LlmUsageProviderConfigId"
+        - $ref: "#/components/parameters/LlmUsageModel"
+        - $ref: "#/components/parameters/LlmUsageScenario"
+        - $ref: "#/components/parameters/LlmUsageOrganizationId"
+        - $ref: "#/components/parameters/LlmUsageStoreId"
+        - $ref: "#/components/parameters/LlmUsageCurrency"
+        - $ref: "#/components/parameters/LlmUsageStatus"
+        - $ref: "#/components/parameters/LlmUsageRouteRole"
         - name: group_by
           in: query
           required: true
@@ -2733,16 +2733,16 @@ paths:
       security:
         - SystemAdminSession: []
       parameters:
-        - {name: start_at, in: query, schema: {type: string, format: date-time}}
-        - {name: end_at, in: query, schema: {type: string, format: date-time}}
-        - {name: provider_config_id, in: query, schema: {type: string, format: uuid}}
-        - {name: model, in: query, schema: {type: string, maxLength: 128}}
-        - {name: scenario, in: query, schema: {type: string, maxLength: 64}}
-        - {name: organization_id, in: query, schema: {type: string, format: uuid}}
-        - {name: store_id, in: query, schema: {type: string, format: uuid}}
-        - {name: currency, in: query, schema: {type: string, enum: [CNY, USD]}}
-        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timed_out, rejected]}}
-        - {name: route_role, in: query, schema: {type: string, enum: [primary, fallback]}}
+        - $ref: "#/components/parameters/LlmUsageStartAt"
+        - $ref: "#/components/parameters/LlmUsageEndAt"
+        - $ref: "#/components/parameters/LlmUsageProviderConfigId"
+        - $ref: "#/components/parameters/LlmUsageModel"
+        - $ref: "#/components/parameters/LlmUsageScenario"
+        - $ref: "#/components/parameters/LlmUsageOrganizationId"
+        - $ref: "#/components/parameters/LlmUsageStoreId"
+        - $ref: "#/components/parameters/LlmUsageCurrency"
+        - $ref: "#/components/parameters/LlmUsageStatus"
+        - $ref: "#/components/parameters/LlmUsageRouteRole"
         - name: limit
           in: query
           schema: {type: integer, minimum: 1, maximum: 500, default: 100}
@@ -2789,6 +2789,46 @@ components:
       description: 系统 Admin HttpOnly session cookie。不能用于客户 Admin 或外部系统 API。
 
   parameters:
+    LlmUsageStartAt:
+      name: start_at
+      in: query
+      schema: {type: string, format: date-time}
+    LlmUsageEndAt:
+      name: end_at
+      in: query
+      schema: {type: string, format: date-time}
+    LlmUsageProviderConfigId:
+      name: provider_config_id
+      in: query
+      schema: {type: string, format: uuid}
+    LlmUsageModel:
+      name: model
+      in: query
+      schema: {type: string, maxLength: 128}
+    LlmUsageScenario:
+      name: scenario
+      in: query
+      schema: {type: string, maxLength: 64}
+    LlmUsageOrganizationId:
+      name: organization_id
+      in: query
+      schema: {type: string, format: uuid}
+    LlmUsageStoreId:
+      name: store_id
+      in: query
+      schema: {type: string, format: uuid}
+    LlmUsageCurrency:
+      name: currency
+      in: query
+      schema: {type: string, enum: [CNY, USD]}
+    LlmUsageStatus:
+      name: status
+      in: query
+      schema: {type: string, enum: [succeeded, failed, timed_out, rejected]}
+    LlmUsageRouteRole:
+      name: route_role
+      in: query
+      schema: {type: string, enum: [primary, fallback]}
     DecisionId:
       name: decision_id
       in: path

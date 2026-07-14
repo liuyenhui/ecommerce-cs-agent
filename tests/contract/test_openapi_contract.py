@@ -246,6 +246,38 @@ class OpenApiContractTest(unittest.TestCase):
         self.assertIsInstance(self.document["paths"], dict)
         self.assertIsInstance(self.document["components"], dict)
 
+    def test_usage_endpoints_share_component_query_parameters(self):
+        paths = [
+            "/v1/system-admin/llm/usage/summary",
+            "/v1/system-admin/llm/usage/timeseries",
+            "/v1/system-admin/llm/usage/breakdown",
+            "/v1/system-admin/llm/usage/invocations",
+        ]
+        expected_refs = [
+            f"#/components/parameters/{name}"
+            for name in (
+                "LlmUsageStartAt",
+                "LlmUsageEndAt",
+                "LlmUsageProviderConfigId",
+                "LlmUsageModel",
+                "LlmUsageScenario",
+                "LlmUsageOrganizationId",
+                "LlmUsageStoreId",
+                "LlmUsageCurrency",
+                "LlmUsageStatus",
+                "LlmUsageRouteRole",
+            )
+        ]
+        resolved_sets = []
+        for path in paths:
+            parameters = self.document["paths"][path]["get"]["parameters"]
+            refs = [parameter["$ref"] for parameter in parameters if "$ref" in parameter]
+            self.assertEqual(refs[: len(expected_refs)], expected_refs)
+            resolved_sets.append(
+                [resolve_pointer(self.document, ref) for ref in refs[: len(expected_refs)]]
+            )
+        self.assertTrue(all(value == resolved_sets[0] for value in resolved_sets[1:]))
+
     def test_schema_validator_rejects_formats_enums_bounds_patterns_and_one_of(self):
         schemas = self.document["components"]["schemas"]
         connection_test = {
@@ -537,7 +569,13 @@ class OpenApiContractTest(unittest.TestCase):
         self.assertIn("release_admin", publish["description"])
         self.assertIn("409", publish["responses"])
 
-        summary_parameters = {item["name"] for item in paths["/v1/system-admin/llm/usage/summary"]["get"]["parameters"]}
+        component_parameters = self.document["components"]["parameters"]
+        summary_parameters = {
+            component_parameters[item["$ref"].rsplit("/", 1)[-1]]["name"]
+            if "$ref" in item
+            else item["name"]
+            for item in paths["/v1/system-admin/llm/usage/summary"]["get"]["parameters"]
+        }
         self.assertEqual(
             summary_parameters,
             {"start_at", "end_at", "provider_config_id", "model", "scenario", "organization_id", "store_id", "currency", "status", "route_role"},

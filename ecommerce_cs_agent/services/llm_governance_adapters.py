@@ -2,31 +2,195 @@ from __future__ import annotations
 
 import base64
 import binascii
+import http.client
+import ipaddress
 import json
 import os
+import queue
 import re
 import socket
 import ssl
+import threading
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
-from urllib.request import Request, urlopen
+from urllib.parse import quote, urlsplit
+from urllib.request import Request
 
 import psycopg
 
 
-Transport = Callable[[Request, float, str | None], tuple[int, bytes]]
+KubernetesTransport = Callable[[Request, float, str | None], tuple[int, bytes]]
+ProviderTransport = Callable[[Request, float, str, str], tuple[int, bytes]]
+Resolver = Callable[[str, int, float], list[str]]
 _SECRET_REF = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?$")
 _SECRET_KEY = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
+_MAX_RESPONSE_BYTES = 1024 * 1024
 
 
-def _default_transport(request: Request, timeout: float, ca_file: str | None) -> tuple[int, bytes]:
-    context = ssl.create_default_context(cafile=ca_file) if ca_file else ssl.create_default_context()
-    with urlopen(request, timeout=timeout, context=context) as response:  # noqa: S310 - validated HTTPS URLs only
-        return int(response.status), response.read(1024 * 1024)
+class _SecurityPolicyError(ValueError):
+    pass
+
+
+def _contains_control(value: str) -> bool:
+    return any(ord(character) < 32 or ord(character) == 127 for character in value)
+
+
+def _canonical_origin(value: str, *, require_origin_only: bool) -> str:
+    if not isinstance(value, str) or not value or _contains_control(value):
+        raise _SecurityPolicyError("invalid_origin")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port or 443
+    except ValueError:
+        raise _SecurityPolicyError("invalid_origin") from None
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or not 1 <= port <= 65535
+        or (require_origin_only and parsed.path not in {"", "/"})
+    ):
+        raise _SecurityPolicyError("invalid_origin")
+    try:
+        host = parsed.hostname.encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        raise _SecurityPolicyError("invalid_origin") from None
+    authority = f"[{host}]" if ":" in host else host
+    if port != 443:
+        authority = f"{authority}:{port}"
+    return f"https://{authority}"
+
+
+def _bounded_resolver(host: str, port: int, timeout: float) -> list[str]:
+    if timeout <= 0:
+        raise TimeoutError
+    results: queue.Queue[object] = queue.Queue(maxsize=1)
+
+    def resolve() -> None:
+        try:
+            addresses = {
+                item[4][0]
+                for item in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            }
+            results.put(list(addresses))
+        except Exception as exc:
+            results.put(exc)
+
+    threading.Thread(target=resolve, daemon=True).start()
+    try:
+        outcome = results.get(timeout=timeout)
+    except queue.Empty:
+        raise TimeoutError from None
+    if isinstance(outcome, Exception):
+        raise socket.gaierror from None
+    return outcome
+
+
+def _read_bounded(response: http.client.HTTPResponse) -> bytes:
+    body = response.read(_MAX_RESPONSE_BYTES + 1)
+    if len(body) > _MAX_RESPONSE_BYTES:
+        raise _SecurityPolicyError("response_too_large")
+    return body
+
+
+class _KubernetesApiTransport:
+    """In-cluster HTTPS only; intentionally has no proxy or redirect support."""
+
+    def __call__(self, request: Request, timeout: float, ca_file: str | None) -> tuple[int, bytes]:
+        parsed = urlsplit(request.full_url)
+        if parsed.scheme != "https" or not parsed.hostname or not ca_file or timeout <= 0:
+            raise _SecurityPolicyError("invalid_kubernetes_request")
+        context = ssl.create_default_context(cafile=ca_file)
+        connection = http.client.HTTPSConnection(
+            parsed.hostname,
+            parsed.port or 443,
+            timeout=timeout,
+            context=context,
+        )
+        path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+        try:
+            connection.request("GET", path, headers=dict(request.header_items()))
+            response = connection.getresponse()
+            return int(response.status), _read_bounded(response)
+        finally:
+            connection.close()
+
+
+def _proxy_tunnel_socket(proxy_url: str, pinned_ip: str, port: int, timeout: float) -> socket.socket:
+    try:
+        proxy = urlsplit(proxy_url)
+        proxy_port = proxy.port or 80
+    except ValueError:
+        raise _SecurityPolicyError("unsupported_proxy") from None
+    if (
+        timeout <= 0
+        or _contains_control(proxy_url)
+        or proxy.scheme.lower() != "http"
+        or not proxy.hostname
+        or proxy.username is not None
+        or proxy.password is not None
+        or proxy.path not in {"", "/"}
+        or proxy.query
+        or proxy.fragment
+        or not 1 <= proxy_port <= 65535
+    ):
+        raise _SecurityPolicyError("unsupported_proxy")
+    sock = socket.create_connection((proxy.hostname, proxy_port), timeout=timeout)
+    authority = f"[{pinned_ip}]:{port}" if ":" in pinned_ip else f"{pinned_ip}:{port}"
+    request = f"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n"
+    sock.sendall(request.encode("ascii"))
+    response = bytearray()
+    while b"\r\n\r\n" not in response and len(response) <= 16 * 1024:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        response.extend(chunk)
+    status_line = bytes(response).split(b"\r\n", 1)[0]
+    if not status_line.startswith(b"HTTP/") or b" 200 " not in status_line:
+        sock.close()
+        raise _SecurityPolicyError("proxy_connect_failed")
+    return sock
+
+
+class _PinnedProviderTransport:
+    """HTTPS transport pinned to a prevalidated IP with original-host TLS SNI."""
+
+    def __init__(self, proxy_url: str | None = None) -> None:
+        self._proxy_url = proxy_url.strip() if proxy_url else None
+
+    def __call__(
+        self,
+        request: Request,
+        timeout: float,
+        pinned_ip: str,
+        server_hostname: str,
+    ) -> tuple[int, bytes]:
+        parsed = urlsplit(request.full_url)
+        port = parsed.port or 443
+        if parsed.scheme != "https" or timeout <= 0:
+            raise _SecurityPolicyError("invalid_provider_request")
+        raw_socket = (
+            _proxy_tunnel_socket(self._proxy_url, pinned_ip, port, timeout)
+            if self._proxy_url
+            else socket.create_connection((pinned_ip, port), timeout=timeout)
+        )
+        context = ssl.create_default_context()
+        tls_socket = context.wrap_socket(raw_socket, server_hostname=server_hostname)
+        connection = http.client.HTTPConnection(pinned_ip, port, timeout=timeout)
+        connection.sock = tls_socket
+        path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+        try:
+            connection.request("GET", path, headers=dict(request.header_items()))
+            response = connection.getresponse()
+            return int(response.status), _read_bounded(response)
+        finally:
+            connection.close()
 
 
 class KubernetesSecretProviderConnectionTester:
@@ -40,31 +204,43 @@ class KubernetesSecretProviderConnectionTester:
         service_account_token_file: str,
         kubernetes_ca_file: str,
         allowed_namespace: str,
-        allowed_secret_refs: set[tuple[str, str]] | frozenset[tuple[str, str]],
-        transport: Transport | None = None,
+        allowed_secret_origins: Mapping[tuple[str, str], set[str] | frozenset[str]],
+        kubernetes_transport: KubernetesTransport | None = None,
+        provider_transport: ProviderTransport | None = None,
+        resolver: Resolver = _bounded_resolver,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if not kubernetes_host or not 1 <= int(kubernetes_port) <= 65535:
             raise RuntimeError("Kubernetes in-cluster host and port are required")
         if not Path(service_account_token_file).is_file() or not Path(kubernetes_ca_file).is_file():
             raise RuntimeError("Kubernetes in-cluster token and CA files are required")
-        if not self._valid_ref(allowed_namespace) or not allowed_secret_refs:
+        if not self._valid_ref(allowed_namespace) or not allowed_secret_origins:
             raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
-        if not all(
-            isinstance(ref, tuple)
-            and len(ref) == 2
-            and self._valid_ref(ref[0])
-            and self._valid_secret_key(ref[1])
-            for ref in allowed_secret_refs
-        ):
-            raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
+        canonical_bindings: dict[tuple[str, str], frozenset[str]] = {}
+        try:
+            for ref, origins in allowed_secret_origins.items():
+                if (
+                    not isinstance(ref, tuple)
+                    or len(ref) != 2
+                    or not self._valid_ref(ref[0])
+                    or not self._valid_secret_key(ref[1])
+                    or not origins
+                ):
+                    raise RuntimeError
+                canonical_bindings[ref] = frozenset(
+                    _canonical_origin(origin, require_origin_only=True) for origin in origins
+                )
+        except (RuntimeError, _SecurityPolicyError, TypeError):
+            raise RuntimeError("Kubernetes Secret origin bindings are required") from None
         self._host = kubernetes_host
         self._port = int(kubernetes_port)
         self._token_file = service_account_token_file
         self._ca_file = kubernetes_ca_file
         self._allowed_namespace = allowed_namespace
-        self._allowed_secret_refs = frozenset(allowed_secret_refs)
-        self._transport = transport or _default_transport
+        self._allowed_secret_origins = canonical_bindings
+        self._kubernetes_transport = kubernetes_transport or _KubernetesApiTransport()
+        self._provider_transport = provider_transport or _PinnedProviderTransport()
+        self._resolver = resolver
         self._monotonic = monotonic
 
     @classmethod
@@ -75,7 +251,9 @@ class KubernetesSecretProviderConnectionTester:
         token_file: str = "/var/run/secrets/kubernetes.io/serviceaccount/token",
         ca_file: str = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
         namespace_file: str = "/var/run/secrets/kubernetes.io/serviceaccount/namespace",
-        transport: Transport | None = None,
+        kubernetes_transport: KubernetesTransport | None = None,
+        provider_transport: ProviderTransport | None = None,
+        resolver: Resolver = _bounded_resolver,
     ) -> "KubernetesSecretProviderConnectionTester":
         env = os.environ if environ is None else environ
         host = env.get("KUBERNETES_SERVICE_HOST", "")
@@ -87,17 +265,28 @@ class KubernetesSecretProviderConnectionTester:
         namespace = env.get("LLM_GOVERNANCE_SECRET_NAMESPACE", "").strip()
         if not namespace and Path(namespace_file).is_file():
             namespace = Path(namespace_file).read_text(encoding="utf-8").strip()
-        allowed_secret_refs = cls._parse_allowed_secret_refs(
+        allowed_secret_origins = cls._parse_allowed_secret_refs(
             env.get("LLM_GOVERNANCE_ALLOWED_SECRET_REFS", "")
         )
+        runtime_ref = cls._parse_runtime_secret_ref(
+            env.get("LLM_GOVERNANCE_RUNTIME_LLM_SECRET_REF", "")
+        )
+        runtime_base_url = env.get("LLM_BASE_URL", "").strip()
+        if runtime_ref and runtime_ref in allowed_secret_origins and runtime_base_url:
+            allowed_secret_origins[runtime_ref].add(
+                _canonical_origin(runtime_base_url, require_origin_only=False)
+            )
+        proxy_url = env.get("HTTPS_PROXY") or env.get("https_proxy")
         return cls(
             kubernetes_host=host,
             kubernetes_port=parsed_port,
             service_account_token_file=token_file,
             kubernetes_ca_file=ca_file,
             allowed_namespace=namespace,
-            allowed_secret_refs=allowed_secret_refs,
-            transport=transport,
+            allowed_secret_origins=allowed_secret_origins,
+            kubernetes_transport=kubernetes_transport,
+            provider_transport=provider_transport or _PinnedProviderTransport(proxy_url),
+            resolver=resolver,
         )
 
     @staticmethod
@@ -109,9 +298,9 @@ class KubernetesSecretProviderConnectionTester:
         return isinstance(value, str) and bool(_SECRET_KEY.fullmatch(value))
 
     @classmethod
-    def _parse_allowed_secret_refs(cls, raw_value: str) -> set[tuple[str, str]]:
+    def _parse_allowed_secret_refs(cls, raw_value: str) -> dict[tuple[str, str], set[str]]:
         if not raw_value.strip():
-            return set()
+            return {}
         try:
             entries = json.loads(raw_value)
         except (json.JSONDecodeError, TypeError):
@@ -119,19 +308,40 @@ class KubernetesSecretProviderConnectionTester:
         if not isinstance(entries, list):
             raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
         if not entries:
-            return set()
+            return {}
 
-        refs: set[tuple[str, str]] = set()
+        refs: dict[tuple[str, str], set[str]] = {}
         for entry in entries:
             if not isinstance(entry, dict) or set(entry) != {"name", "keys"}:
                 raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
             name, keys = entry["name"], entry["keys"]
             if not cls._valid_ref(name) or not isinstance(keys, list) or not keys:
                 raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
-            if not all(cls._valid_secret_key(key) for key in keys):
-                raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
-            refs.update((name, key) for key in keys)
+            for key_entry in keys:
+                if not isinstance(key_entry, dict) or set(key_entry) != {"key", "allowedOrigins"}:
+                    raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
+                key, origins = key_entry["key"], key_entry["allowedOrigins"]
+                if not cls._valid_secret_key(key) or not isinstance(origins, list):
+                    raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
+                refs[(name, key)] = set(origins)
         return refs
+
+    @classmethod
+    def _parse_runtime_secret_ref(cls, raw_value: str) -> tuple[str, str] | None:
+        if not raw_value.strip():
+            return None
+        try:
+            value = json.loads(raw_value)
+        except (json.JSONDecodeError, TypeError):
+            raise RuntimeError("Kubernetes runtime LLM Secret reference is invalid") from None
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"name", "key"}
+            or not cls._valid_ref(value["name"])
+            or not cls._valid_secret_key(value["key"])
+        ):
+            raise RuntimeError("Kubernetes runtime LLM Secret reference is invalid")
+        return value["name"], value["key"]
 
     def _resolve_secret(self, reference: Mapping[str, Any], timeout: float) -> str:
         namespace, name, key = (reference.get(field) for field in ("namespace", "name", "key"))
@@ -141,7 +351,7 @@ class KubernetesSecretProviderConnectionTester:
             or not self._valid_secret_key(key)
         ):
             raise ValueError("invalid_secret_ref")
-        if namespace != self._allowed_namespace or (name, key) not in self._allowed_secret_refs:
+        if namespace != self._allowed_namespace or (name, key) not in self._allowed_secret_origins:
             raise ValueError("secret_access_denied")
         token = Path(self._token_file).read_text(encoding="utf-8").strip()
         if not token:
@@ -151,7 +361,9 @@ class KubernetesSecretProviderConnectionTester:
             f"{quote(namespace, safe='')}/secrets/{quote(name, safe='')}"
         )
         request = Request(url, method="GET", headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
-        status, body = self._transport(request, timeout, self._ca_file)
+        status, body = self._kubernetes_transport(request, timeout, self._ca_file)
+        if 300 <= status < 400:
+            raise _SecurityPolicyError("kubernetes_redirect_forbidden")
         if status != 200:
             raise RuntimeError("secret_resolution_failed")
         payload = json.loads(body)
@@ -162,12 +374,14 @@ class KubernetesSecretProviderConnectionTester:
             secret = base64.b64decode(encoded, validate=True).decode("utf-8")
         except (binascii.Error, UnicodeDecodeError):
             raise RuntimeError("secret_resolution_failed") from None
-        if not secret or len(secret) > 64 * 1024:
+        if not secret or len(secret) > 64 * 1024 or _contains_control(secret):
             raise RuntimeError("secret_resolution_failed")
         return secret
 
     @staticmethod
     def _error_code(exc: Exception) -> str:
+        if isinstance(exc, _SecurityPolicyError):
+            return "invalid_response"
         if isinstance(exc, HTTPError):
             if exc.code in {401, 403}:
                 return "auth_failed"
@@ -188,31 +402,94 @@ class KubernetesSecretProviderConnectionTester:
             return "invalid_response"
         return "connection_failed"
 
+    def _provider_endpoint(self, provider: Mapping[str, Any]) -> tuple[str, str, int, str, str]:
+        base_url = str(provider.get("base_url") or "").rstrip("/")
+        origin = _canonical_origin(base_url, require_origin_only=False)
+        parsed = urlsplit(base_url)
+        host = parsed.hostname.encode("idna").decode("ascii").lower() if parsed.hostname else ""
+        port = parsed.port or 443
+        if host == self._host.lower():
+            raise _SecurityPolicyError("kubernetes_origin_forbidden")
+        authority = f"[{host}]" if ":" in host else host
+        if port != 443:
+            authority = f"{authority}:{port}"
+        canonical_base = f"https://{authority}{parsed.path}"
+        provider_type = str(provider.get("provider_type") or "")
+        if provider_type in {"openai", "openai_compatible", "anthropic"}:
+            probe_url = f"{canonical_base}/models"
+        elif provider_type == "azure_openai":
+            if not canonical_base.endswith("/openai/v1"):
+                canonical_base += "/openai/v1"
+            probe_url = f"{canonical_base}/models"
+        else:
+            raise _SecurityPolicyError("invalid_provider_type")
+        host_header = authority
+        return origin, host, port, host_header, probe_url
+
+    def _resolve_public_provider_ip(self, host: str, port: int, timeout: float) -> str:
+        if timeout <= 0:
+            raise TimeoutError
+        addresses = self._resolver(host, port, timeout)
+        if not addresses:
+            raise _SecurityPolicyError("public_address_required")
+        parsed_addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+        try:
+            parsed_addresses = [ipaddress.ip_address(address) for address in addresses]
+        except ValueError:
+            raise _SecurityPolicyError("public_address_required") from None
+        try:
+            kubernetes_ip = ipaddress.ip_address(self._host)
+        except ValueError:
+            kubernetes_ip = None
+        if any(not address.is_global or address == kubernetes_ip for address in parsed_addresses):
+            raise _SecurityPolicyError("public_address_required")
+        return str(parsed_addresses[0])
+
     def __call__(self, provider: dict[str, Any], request_options: dict[str, int]) -> dict[str, Any]:
         started = self._monotonic()
         timeout = float(min(20, max(1, int(request_options.get("timeout_seconds", 20)))))
+        deadline = started + timeout
+
+        def remaining() -> float:
+            value = deadline - self._monotonic()
+            if value <= 0:
+                raise TimeoutError
+            return value
+
         try:
-            secret = self._resolve_secret(provider.get("secret_ref") or {}, timeout)
+            reference = provider.get("secret_ref") or {}
+            namespace, name, key = (reference.get(field) for field in ("namespace", "name", "key"))
+            if (
+                not self._valid_ref(namespace)
+                or not self._valid_ref(name)
+                or not self._valid_secret_key(key)
+                or namespace != self._allowed_namespace
+            ):
+                raise _SecurityPolicyError("secret_reference_forbidden")
+            origin, host, port, host_header, probe_url = self._provider_endpoint(provider)
+            allowed_origins = self._allowed_secret_origins.get((name, key), frozenset())
+            if origin not in allowed_origins:
+                raise _SecurityPolicyError("origin_binding_mismatch")
+            pinned_ip = self._resolve_public_provider_ip(host, port, remaining())
+            secret = self._resolve_secret(reference, remaining())
             provider_type = str(provider.get("provider_type") or "")
-            base_url = str(provider.get("base_url") or "").rstrip("/")
-            if not base_url.startswith("https://"):
-                raise ValueError("invalid_provider_url")
-            headers = {"Accept": "application/json"}
-            probe_url = base_url
+            headers = {"Accept": "application/json", "Host": host_header}
             if provider_type in {"openai", "openai_compatible"}:
                 headers["Authorization"] = f"Bearer {secret}"
-                probe_url += "/models"
             elif provider_type == "anthropic":
                 headers.update({"x-api-key": secret, "anthropic-version": "2023-06-01"})
-                probe_url += "/models"
             elif provider_type == "azure_openai":
                 headers["api-key"] = secret
-                if not probe_url.endswith("/openai/v1"):
-                    probe_url += "/openai/v1"
-                probe_url += "/models"
             else:
-                raise ValueError("invalid_provider_type")
-            status, _body = self._transport(Request(probe_url, method="GET", headers=headers), timeout, None)
+                raise _SecurityPolicyError("invalid_provider_type")
+            status, _body = self._provider_transport(
+                Request(probe_url, method="GET", headers=headers),
+                remaining(),
+                pinned_ip,
+                host,
+            )
+            if 300 <= status < 400:
+                raise _SecurityPolicyError("provider_redirect_forbidden")
             if not 200 <= status < 300:
                 raise HTTPError(probe_url, status, "provider probe failed", {}, None)
             result_status, error_code = "passed", None

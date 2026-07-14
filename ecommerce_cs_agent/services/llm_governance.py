@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import copy
 import base64
 import binascii
+import copy
 import hashlib
 import json
 import math
@@ -83,19 +83,64 @@ def _encode_cursor(payload: dict[str, Any]) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def _decode_cursor(value: str | None, *, kind: str) -> dict[str, Any] | None:
+def _cursor_scope_hash(kind: str, scope: dict[str, Any]) -> str:
+    payload = {"kind": kind, "scope": scope}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _cursor_scope_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise api_error(422, "invalid_cursor_scope", "cursor scope datetimes must include a UTC offset")
+        return value.astimezone(timezone.utc).isoformat()
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    return value
+
+
+def _invocation_cursor_scope(filters: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "start_at",
+        "end_at",
+        "provider_config_id",
+        "model",
+        "scenario",
+        "organization_id",
+        "store_id",
+        "currency",
+        "status",
+        "route_role",
+    )
+    return {
+        "filters": {key: _cursor_scope_value(filters.get(key)) for key in keys},
+        "sort": ["occurred_at:desc", "invocation_id:desc"],
+    }
+
+
+def _decode_cursor(value: str | None, *, kind: str, scope_hash: str) -> dict[str, Any] | None:
     if value is None:
         return None
     try:
         padded = value + "=" * (-len(value) % 4)
         data = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
-        if not isinstance(data, dict) or data.get("kind") != kind:
+        if (
+            not isinstance(data, dict)
+            or data.get("version") != 1
+            or data.get("kind") != kind
+            or data.get("scope_hash") != scope_hash
+        ):
             raise ValueError
         if kind == "config_versions":
             if not isinstance(data.get("version_number"), int) or data["version_number"] <= 0:
                 raise ValueError
         elif kind == "invocations":
-            datetime.fromisoformat(str(data.get("occurred_at", "")).replace("Z", "+00:00"))
+            occurred_at = datetime.fromisoformat(
+                str(data.get("occurred_at", "")).replace("Z", "+00:00")
+            )
+            if occurred_at.tzinfo is None or occurred_at.utcoffset() != timezone.utc.utcoffset(occurred_at):
+                raise ValueError
             uuid.UUID(str(data.get("id")))
         return data
     except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError, binascii.Error):
@@ -411,7 +456,11 @@ class InMemoryLlmGovernanceRepository:
     def list_versions_page(self, session: SystemAdminSession, organization_id: str, *, limit: int = 50, cursor: str | None = None) -> dict[str, Any]:
         _require_role(session, _READ_ROLES)
         limit = min(max(int(limit), 1), 100)
-        decoded = _decode_cursor(cursor, kind="config_versions")
+        scope_hash = _cursor_scope_hash(
+            "config_versions",
+            {"organization_id": organization_id, "sort": ["version_number:desc"]},
+        )
+        decoded = _decode_cursor(cursor, kind="config_versions", scope_hash=scope_hash)
         before = int(decoded["version_number"]) if decoded else None
         candidates = [
             item for item in sorted(self.versions.values(), key=lambda value: int(value["version_number"]), reverse=True)
@@ -421,7 +470,7 @@ class InMemoryLlmGovernanceRepository:
         selected = candidates[: limit + 1]
         has_more = len(selected) > limit
         items = selected[:limit]
-        next_cursor = _encode_cursor({"kind": "config_versions", "version_number": items[-1]["version_number"]}) if has_more else None
+        next_cursor = _encode_cursor({"version": 1, "kind": "config_versions", "scope_hash": scope_hash, "version_number": items[-1]["version_number"]}) if has_more else None
         return {"items": [copy.deepcopy(item) for item in items], "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
 
     def get_version(self, session: SystemAdminSession, version_id: str) -> dict[str, Any]:
@@ -645,7 +694,8 @@ class InMemoryLlmGovernanceRepository:
 
     def list_invocations_page(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         limit = min(max(int(filters.get("limit", 100)), 1), 500)
-        decoded = _decode_cursor(filters.get("cursor"), kind="invocations")
+        scope_hash = _cursor_scope_hash("invocations", _invocation_cursor_scope(filters))
+        decoded = _decode_cursor(filters.get("cursor"), kind="invocations", scope_hash=scope_hash)
         items = sorted(
             self._filtered_metrics(session, filters),
             key=lambda item: (str(_iso(item.get("occurred_at"))), str(item.get("invocation_id"))),
@@ -660,7 +710,7 @@ class InMemoryLlmGovernanceRepository:
         next_cursor = None
         if has_more:
             last = page_items[-1]
-            next_cursor = _encode_cursor({"kind": "invocations", "occurred_at": _iso(last.get("occurred_at")), "id": last.get("invocation_id")})
+            next_cursor = _encode_cursor({"version": 1, "kind": "invocations", "scope_hash": scope_hash, "occurred_at": _iso(last.get("occurred_at")), "id": last.get("invocation_id")})
         return {"items": [_public_invocation(item) for item in page_items], "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
 
 
@@ -915,7 +965,11 @@ class PostgresLlmGovernanceRepository:
     def list_versions_page(self, session: SystemAdminSession, organization_id: str, *, limit: int = 50, cursor: str | None = None) -> dict[str, Any]:
         _require_role(session, _READ_ROLES)
         limit = min(max(int(limit), 1), 100)
-        decoded = _decode_cursor(cursor, kind="config_versions")
+        scope_hash = _cursor_scope_hash(
+            "config_versions",
+            {"organization_id": organization_id, "sort": ["version_number:desc"]},
+        )
+        decoded = _decode_cursor(cursor, kind="config_versions", scope_hash=scope_hash)
         before = int(decoded["version_number"]) if decoded else None
         def op(cur: Any) -> dict[str, Any]:
             cur.execute(
@@ -927,7 +981,7 @@ class PostgresLlmGovernanceRepository:
             has_more = len(rows) > limit
             rows = rows[:limit]
             items = [self._fetch_version(cur, str(row[0])) for row in rows]
-            next_cursor = _encode_cursor({"kind": "config_versions", "version_number": int(rows[-1][1])}) if has_more else None
+            next_cursor = _encode_cursor({"version": 1, "kind": "config_versions", "scope_hash": scope_hash, "version_number": int(rows[-1][1])}) if has_more else None
             return {"items": items, "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
         return self._read(op)
 
@@ -1175,7 +1229,8 @@ class PostgresLlmGovernanceRepository:
         _require_role(session, _READ_ROLES)
         where, params = self._usage_where(filters)
         limit = min(max(int(filters.get("limit", 100)), 1), 500)
-        decoded = _decode_cursor(filters.get("cursor"), kind="invocations")
+        scope_hash = _cursor_scope_hash("invocations", _invocation_cursor_scope(filters))
+        decoded = _decode_cursor(filters.get("cursor"), kind="invocations", scope_hash=scope_hash)
         if decoded:
             cursor_clause = "(metric.occurred_at, metric.id) < (%s::timestamptz, %s::uuid)"
             where += (" AND " if where else " WHERE ") + cursor_clause
@@ -1192,7 +1247,7 @@ class PostgresLlmGovernanceRepository:
             next_cursor = None
             if has_more:
                 last = rows[-1]
-                next_cursor = _encode_cursor({"kind": "invocations", "occurred_at": last["occurred_at"], "id": last["invocation_id"]})
+                next_cursor = _encode_cursor({"version": 1, "kind": "invocations", "scope_hash": scope_hash, "occurred_at": last["occurred_at"], "id": last["invocation_id"]})
             return {"items": rows, "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
         return self._read(op)
 

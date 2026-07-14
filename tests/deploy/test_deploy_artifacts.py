@@ -122,7 +122,10 @@ def test_helm_api_uses_dedicated_service_account_and_secret_allowlist() -> None:
     assert api["serviceAccount"] == {"create": True, "name": "", "automount": True}
     assert api["secretAccess"]["enabled"] is True
     assert api["secretAccess"]["allowedSecretRefs"] == [
-        {"name": "ecommerce-cs-agent-llm-provider", "keys": ["api-key"]}
+        {
+            "name": "ecommerce-cs-agent-llm-provider",
+            "keys": [{"key": "api-key", "allowedOrigins": []}],
+        }
     ]
     assert api["runtimeLlmSecretRef"] == {
         "name": "ecommerce-cs-agent-llm-provider",
@@ -172,7 +175,16 @@ def test_helm_rendered_secret_access_is_dedicated_and_key_scoped() -> None:
     ]
     env = {item["name"]: item for item in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
     refs = json.loads(env["LLM_GOVERNANCE_ALLOWED_SECRET_REFS"]["value"])
-    assert refs == [{"name": "ecommerce-cs-agent-llm-provider", "keys": ["api-key"]}]
+    assert refs == [
+        {
+            "name": "ecommerce-cs-agent-llm-provider",
+            "keys": [{"key": "api-key", "allowedOrigins": []}],
+        }
+    ]
+    assert json.loads(env["LLM_GOVERNANCE_RUNTIME_LLM_SECRET_REF"]["value"]) == {
+        "name": "ecommerce-cs-agent-llm-provider",
+        "key": "api-key",
+    }
     assert env["LLM_API_KEY"] == {
         "name": "LLM_API_KEY",
         "valueFrom": {
@@ -201,7 +213,7 @@ def test_helm_rejects_empty_or_runtime_secret_access_refs() -> None:
     )
     runtime_ref = _render_helm(
         "--set-json",
-        'api.secretAccess.allowedSecretRefs=[{"name":"ecommerce-cs-agent-runtime","keys":["DATABASE_URL"]}]',
+        'api.secretAccess.allowedSecretRefs=[{"name":"ecommerce-cs-agent-runtime","keys":[{"key":"DATABASE_URL","allowedOrigins":["https://models.example"]}]}]',
         expect_success=False,
     )
     non_list_keys = _render_helm(
@@ -216,7 +228,7 @@ def test_helm_rejects_empty_or_runtime_secret_access_refs() -> None:
     )
     invalid_key = _render_helm(
         "--set-json",
-        'api.secretAccess.allowedSecretRefs=[{"name":"ecommerce-cs-agent-llm-provider","keys":["bad/key"]}]',
+        'api.secretAccess.allowedSecretRefs=[{"name":"ecommerce-cs-agent-llm-provider","keys":[{"key":"bad/key","allowedOrigins":[]}]}]',
         expect_success=False,
     )
 
@@ -225,7 +237,23 @@ def test_helm_rejects_empty_or_runtime_secret_access_refs() -> None:
     assert "must not include api.envFromSecret" in runtime_ref
     assert "keys must be a non-empty list" in non_list_keys
     assert ".name is invalid" in invalid_name
-    assert ".keys[0] is invalid" in invalid_key
+    assert ".keys[0].key is invalid" in invalid_key
+
+
+def test_helm_rejects_missing_or_invalid_origins_for_non_runtime_secret_keys() -> None:
+    empty_extra_origins = _render_helm(
+        "--set-json",
+        'api.secretAccess.allowedSecretRefs=[{"name":"ecommerce-cs-agent-llm-provider","keys":[{"key":"api-key","allowedOrigins":[]}]},{"name":"other-provider","keys":[{"key":"api-key","allowedOrigins":[]}]}]',
+        expect_success=False,
+    )
+    invalid_origin = _render_helm(
+        "--set-json",
+        'api.secretAccess.allowedSecretRefs=[{"name":"ecommerce-cs-agent-llm-provider","keys":[{"key":"api-key","allowedOrigins":[]}]},{"name":"other-provider","keys":[{"key":"api-key","allowedOrigins":["http://internal.example"]}]}]',
+        expect_success=False,
+    )
+
+    assert "non-runtime keys require allowedOrigins" in empty_extra_origins
+    assert "allowedOrigins[0] is invalid" in invalid_origin
 
 
 def test_helm_rejects_runtime_llm_ref_outside_dedicated_allowlist() -> None:

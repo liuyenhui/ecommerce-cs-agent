@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -21,6 +22,7 @@ PROVIDER_B_ID = "33333333-3333-3333-3333-333333333333"
 STORE_A_ID = "44444444-4444-4444-4444-444444444444"
 STORE_B_ID = "55555555-5555-5555-5555-555555555555"
 SYSTEM_HEADERS = {"Cookie": "agent_system_admin_session=test-system-session"}
+OTHER_ORG_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 PROVIDER = {
     "name": "primary",
     "provider_type": "openai_compatible",
@@ -53,6 +55,16 @@ def _routes(provider_id: str) -> list[dict[str, Any]]:
             "blind_test_question_generation",
         )
     ]
+
+
+def _decode_cursor_payload(cursor: str) -> dict[str, Any]:
+    return json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+
+
+def _encode_cursor_payload(payload: dict[str, Any]) -> str:
+    return base64.urlsafe_b64encode(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).decode().rstrip("=")
 
 
 def _client(
@@ -433,6 +445,88 @@ def test_config_version_and_invocation_cursor_pages_are_stable(monkeypatch: pyte
     )
     invocation_ids = [item["invocation_id"] for page in (inv_first, inv_second) for item in page.json()["items"]]
     assert len(invocation_ids) == len(set(invocation_ids)) == 3
+
+
+def test_cursors_are_versioned_and_bound_to_organization_and_normalized_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, repository = _client(monkeypatch)
+    for index in range(3):
+        response = client.post(
+            "/v1/system-admin/llm/config-versions/drafts",
+            headers=SYSTEM_HEADERS,
+            json={"organization_id": ORG_ID, "reason": "scope", "idempotency_key": f"scope-{index}"},
+        )
+        assert response.status_code == 201
+    version_first = client.get(
+        f"/v1/system-admin/llm/config-versions?organization_id={ORG_ID}&limit=2",
+        headers=SYSTEM_HEADERS,
+    )
+    version_cursor = version_first.json()["page_info"]["next_cursor"]
+    version_payload = _decode_cursor_payload(version_cursor)
+    assert version_payload["version"] == 1
+    assert version_payload["kind"] == "config_versions"
+    assert len(version_payload["scope_hash"]) == 64
+    cross_org = client.get(
+        f"/v1/system-admin/llm/config-versions?organization_id={OTHER_ORG_ID}&cursor={version_cursor}",
+        headers=SYSTEM_HEADERS,
+    )
+    assert cross_org.status_code == 422
+
+    for index in range(3):
+        repository.invocation_metrics.append(
+            {
+                "invocation_id": str(UUID(int=200 + index)),
+                "occurred_at": f"2026-07-14T0{index + 7}:00:00+00:00",
+                "provider_config_id": PROVIDER_A_ID,
+                "provider_name": "primary",
+                "model": "chat-pro",
+                "scenario": "reply_generation",
+                "organization_id": ORG_ID,
+                "store_id": STORE_A_ID,
+                "route_role": "primary",
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "latency_ms": 1,
+                "status": "succeeded",
+                "error_code": None,
+                "estimated_cost_micros": 1,
+                "currency": "USD",
+            }
+        )
+    query = (
+        "start_at=2026-07-14T00:00:00Z&end_at=2026-07-15T00:00:00Z"
+        f"&provider_config_id={PROVIDER_A_ID}&model=chat-pro&scenario=reply_generation"
+        f"&organization_id={ORG_ID}&store_id={STORE_A_ID}&currency=USD&limit=2"
+    )
+    invocation_first = client.get(
+        f"/v1/system-admin/llm/usage/invocations?{query}", headers=SYSTEM_HEADERS
+    )
+    invocation_cursor = invocation_first.json()["page_info"]["next_cursor"]
+    invocation_payload = _decode_cursor_payload(invocation_cursor)
+    assert invocation_payload["version"] == 1
+    assert invocation_payload["kind"] == "invocations"
+    assert len(invocation_payload["scope_hash"]) == 64
+
+    changed_filter = client.get(
+        f"/v1/system-admin/llm/usage/invocations?{query.replace('currency=USD', 'currency=CNY')}&cursor={invocation_cursor}",
+        headers=SYSTEM_HEADERS,
+    )
+    assert changed_filter.status_code == 422
+
+    naive_payload = {**invocation_payload, "occurred_at": "2026-07-14T08:00:00"}
+    naive = client.get(
+        f"/v1/system-admin/llm/usage/invocations?{query}&cursor={_encode_cursor_payload(naive_payload)}",
+        headers=SYSTEM_HEADERS,
+    )
+    assert naive.status_code == 422
+
+    tampered_payload = {**invocation_payload, "scope_hash": "0" * 64}
+    tampered = client.get(
+        f"/v1/system-admin/llm/usage/invocations?{query}&cursor={_encode_cursor_payload(tampered_payload)}",
+        headers=SYSTEM_HEADERS,
+    )
+    assert tampered.status_code == 422
 
 
 @pytest.mark.parametrize(

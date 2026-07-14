@@ -23,7 +23,8 @@ api:
     allowedSecretRefs:
       - name: ecommerce-cs-agent-llm-provider
         keys:
-          - api-key
+          - key: api-key
+            allowedOrigins: []
   image:
     repository: registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-api
     tag: dev
