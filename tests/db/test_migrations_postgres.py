@@ -96,6 +96,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                   AND relation.relname IN (
                       'llm_provider_config',
                       'llm_config_version',
+                      'llm_release_record',
                       'llm_scenario_route',
                       'llm_connection_test',
                       'llm_invocation_metric'
@@ -104,7 +105,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 """,
                 (schema_name,),
             )
-            assert cursor.fetchone() == (5,)
+            assert cursor.fetchone() == (6,)
 
             cursor.execute(
                 """
@@ -117,7 +118,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
             cursor.execute(
                 """
                 INSERT INTO system_admin_user (email, password_hash, display_name, role)
-                VALUES ('migration-reviewer@example.invalid', 'not-a-real-password-hash', 'Migration Reviewer', 'release_manager')
+                VALUES ('migration-reviewer@example.invalid', 'not-a-real-password-hash', 'Migration Reviewer', 'release_admin')
                 RETURNING id
                 """
             )
@@ -161,6 +162,21 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 """
             )
             provider_id = cursor.fetchone()[0]
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_provider_config SET base_url='https://other.invalid', revision=revision+1 WHERE id=%s",
+                (provider_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_provider_config SET name='missing-revision' WHERE id=%s",
+                (provider_id,),
+            )
+            cursor.execute(
+                "UPDATE llm_provider_config SET name='test-provider-renamed', revision=revision+1 WHERE id=%s RETURNING revision",
+                (provider_id,),
+            )
+            assert cursor.fetchone() == (2,)
             cursor.execute(
                 """
                 INSERT INTO llm_config_version (
@@ -458,6 +474,46 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 (config_version_id,),
             )
             published_snapshot = cursor.fetchone()
+            cursor.execute(
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    submitted_by_system_admin_user_id
+                ) VALUES (%s, %s, 'migration-eval', %s)
+                RETURNING id
+                """,
+                (organization_id, config_version_id, system_admin_user_id),
+            )
+            release_record_id = cursor.fetchone()[0]
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    submitted_by_system_admin_user_id
+                ) VALUES (%s, %s, 'wrong-tenant', %s)
+                """,
+                (other_organization_id, config_version_id, system_admin_user_id),
+            )
+            cursor.execute(
+                """
+                UPDATE llm_release_record
+                SET status='running', revision=revision+1,
+                    published_by_system_admin_user_id=%s, published_at=now()
+                WHERE id=%s
+                """,
+                (system_admin_user_id, release_record_id),
+            )
+            cursor.execute(
+                "UPDATE llm_release_record SET status='superseded', revision=revision+1 WHERE id=%s",
+                (release_record_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_release_record SET evaluation_run_id='rewritten', revision=revision+1 WHERE id=%s",
+                (release_record_id,),
+            )
+            assert_integrity_error(cursor, "DELETE FROM llm_release_record WHERE id=%s", (release_record_id,))
             assert_integrity_error(
                 cursor,
                 "DELETE FROM llm_config_version WHERE id = %s",

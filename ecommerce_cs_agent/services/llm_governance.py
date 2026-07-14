@@ -7,6 +7,7 @@ import math
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Protocol
+from urllib.parse import urlsplit
 
 from psycopg.types.json import Jsonb
 
@@ -14,7 +15,7 @@ from ecommerce_cs_agent.api.errors import api_error
 from ecommerce_cs_agent.services.admin_auth import SystemAdminSession
 
 
-_WRITE_ROLES = {"super_admin", "release_manager"}
+_WRITE_ROLES = {"super_admin", "release_admin"}
 _READ_ROLES = _WRITE_ROLES | {"technical_support", "security_auditor"}
 _CONNECTION_TEST_ROLES = _WRITE_ROLES | {"technical_support"}
 _PROVIDER_TYPES = {"openai", "openai_compatible", "anthropic", "azure_openai"}
@@ -89,13 +90,22 @@ def _require_role(session: SystemAdminSession, roles: set[str]) -> None:
 
 
 def _require_write(payload: dict[str, Any]) -> tuple[str, str]:
-    reason = str(payload.get("reason") or "").strip()
-    key = str(payload.get("idempotency_key") or "").strip()
+    reason = _bounded_text(payload.get("reason"), "reason", 512)
+    key = _bounded_text(payload.get("idempotency_key"), "idempotency_key", 128)
     if not reason:
         raise api_error(422, "audit_reason_required", "reason is required")
     if not key:
         raise api_error(422, "idempotency_key_required", "idempotency_key is required")
     return reason, key
+
+
+def _bounded_text(value: Any, field: str, maximum: int, *, required: bool = True) -> str:
+    text = str(value or "").strip()
+    if required and not text:
+        raise api_error(422, f"{field}_required", f"{field} is required")
+    if len(text) > maximum or any(ord(char) < 32 for char in text):
+        raise api_error(422, f"invalid_{field}", f"{field} exceeds its safe text boundary")
+    return text
 
 
 def _fingerprint(value: Any) -> str:
@@ -121,7 +131,7 @@ def _validate_provider_input(payload: dict[str, Any], *, partial: bool = False) 
         ref = payload.get("secret_ref")
         if not isinstance(ref, dict):
             raise api_error(422, "invalid_secret_ref", "secret_ref must be an object")
-        values = {key: str(ref.get(key) or "").strip() for key in ("namespace", "name", "key")}
+        values = {key: _bounded_text(ref.get(key), f"secret_{key}", 253) for key in ("namespace", "name", "key")}
         if not all(values.values()):
             raise api_error(422, "invalid_secret_ref", "secret_ref namespace, name, and key are required")
         allowed.update({"secret_namespace": values["namespace"], "secret_name": values["name"], "secret_key": values["key"]})
@@ -130,8 +140,16 @@ def _validate_provider_input(payload: dict[str, Any], *, partial: bool = False) 
         raise api_error(422, "invalid_provider", "provider name, type, base URL, and Secret reference are required")
     if "provider_type" in allowed and allowed["provider_type"] not in _PROVIDER_TYPES:
         raise api_error(422, "invalid_provider_type", "provider type is not allowed")
-    if "base_url" in allowed and not str(allowed["base_url"]).startswith("https://"):
-        raise api_error(422, "invalid_provider_url", "provider base URL must use HTTPS")
+    if "name" in allowed:
+        allowed["name"] = _bounded_text(allowed["name"], "provider_name", 128)
+    if "provider_type" in allowed:
+        allowed["provider_type"] = _bounded_text(allowed["provider_type"], "provider_type", 64)
+    if "base_url" in allowed:
+        base_url = _bounded_text(allowed["base_url"], "provider_url", 2048)
+        parsed = urlsplit(base_url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise api_error(422, "invalid_provider_url", "provider base URL must be a credential-free HTTPS origin without query or fragment")
+        allowed["base_url"] = base_url.rstrip("/")
     if "enabled" in allowed:
         allowed["enabled"] = bool(allowed["enabled"])
     return allowed
@@ -161,7 +179,7 @@ def _sanitize_error_code(value: Any) -> str:
 
 
 def _safe_evaluation_run_id(value: Any) -> str:
-    candidate = str(value or "").strip()
+    candidate = _bounded_text(value, "evaluation_run_id", 128)
     if not candidate or len(candidate) > 128 or not all(char.isalnum() or char in "-_:" for char in candidate):
         raise api_error(422, "evaluation_run_required", "a non-sensitive evaluation_run_id is required")
     return candidate
@@ -187,6 +205,13 @@ def _validate_route(route: dict[str, Any]) -> dict[str, Any]:
     has_fallback_model = bool(item["fallback_model"])
     if has_fallback_provider != has_fallback_model:
         raise api_error(422, "invalid_llm_route", "fallback provider and model must be supplied together")
+    item["scenario"] = _bounded_text(item["scenario"], "scenario", 64)
+    item["primary_provider_config_id"] = _bounded_text(item["primary_provider_config_id"], "primary_provider_config_id", 128)
+    item["primary_model"] = _bounded_text(item["primary_model"], "primary_model", 128)
+    if item["fallback_provider_config_id"] is not None:
+        item["fallback_provider_config_id"] = _bounded_text(item["fallback_provider_config_id"], "fallback_provider_config_id", 128)
+    if item["fallback_model"] is not None:
+        item["fallback_model"] = _bounded_text(item["fallback_model"], "fallback_model", 128)
     item["enabled"] = bool(item["enabled"])
     item["temperature"] = float(item["temperature"])
     item["max_output_tokens"] = int(item["max_output_tokens"])
@@ -203,10 +228,24 @@ def _configuration_hash(routes: list[dict[str, Any]]) -> str:
     return _fingerprint(routes)
 
 
+def _validate_route_collection(routes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if len(routes) > 32:
+        raise api_error(422, "too_many_routes", "at most 32 scenario routes are allowed")
+    return [_validate_route(route) for route in routes]
+
+
 def _public_invocation(item: dict[str, Any]) -> dict[str, Any]:
     result = {field: copy.deepcopy(item.get(field)) for field in _PUBLIC_INVOCATION_FIELDS}
     result["occurred_at"] = _iso(result["occurred_at"])
     return result
+
+
+def _bounded_snapshot(response: dict[str, Any]) -> dict[str, Any]:
+    snapshot = copy.deepcopy(response)
+    encoded = json.dumps(snapshot, sort_keys=True, default=str, separators=(",", ":")).encode()
+    if len(encoded) > 64 * 1024:
+        raise api_error(422, "idempotency_snapshot_too_large", "safe idempotency response exceeds 64 KiB")
+    return snapshot
 
 
 class InMemoryLlmGovernanceRepository:
@@ -217,6 +256,7 @@ class InMemoryLlmGovernanceRepository:
     ) -> None:
         self.providers: dict[str, dict[str, Any]] = {}
         self.versions: dict[str, dict[str, Any]] = {}
+        self.release_records: dict[str, dict[str, Any]] = {}
         self.connection_tests: list[dict[str, Any]] = []
         self.invocation_metrics: list[dict[str, Any]] = []
         self.audit_logs: list[dict[str, Any]] = []
@@ -241,7 +281,7 @@ class InMemoryLlmGovernanceRepository:
         safe_diff = {"reason": reason, "idempotency_key": key, "request_hash": _fingerprint(request_data)}
         audit_id = f"audit-{uuid.uuid4().hex}"
         self.audit_logs.insert(0, {"audit_log_id": audit_id, "actor_system_user_id": session.user_id, "action": action, "object_type": object_type, "object_id": object_id, "reason": reason, "diff_summary": safe_diff, "created_at": _iso(_now_dt())})
-        result = copy.deepcopy(response)
+        result = _bounded_snapshot(response)
         self._idempotency[(action, key)] = {"fingerprint": _fingerprint(request_data), "response": result}
         return copy.deepcopy(result)
 
@@ -273,7 +313,14 @@ class InMemoryLlmGovernanceRepository:
             raise api_error(404, "provider_not_found", "provider was not found")
         if provider["revision"] != expected_revision:
             raise api_error(409, "stale_revision", "provider revision is stale")
-        provider.update(data)
+        for field in ("provider_type", "base_url", "secret_namespace", "secret_name", "secret_key"):
+            if field in data and data[field] != provider[field]:
+                raise api_error(409, "provider_endpoint_immutable", "provider endpoint and Secret reference are immutable; create a new Provider")
+        if "name" in data and any(item["provider_id"] != provider_id and item["name"] == data["name"] for item in self.providers.values()):
+            raise api_error(409, "provider_name_conflict", "provider name already exists")
+        if not any(field in data for field in ("name", "enabled")):
+            raise api_error(422, "provider_update_empty", "only provider name and enabled state may be updated")
+        provider.update({field: data[field] for field in ("name", "enabled") if field in data})
         if "enabled" in data:
             provider["status"] = "active" if data["enabled"] else "disabled"
         provider["revision"] = expected_revision + 1
@@ -294,29 +341,39 @@ class InMemoryLlmGovernanceRepository:
             version = self.versions.get(str(config_version_id))
             if not version or version["status"] != "draft":
                 raise api_error(409, "connection_test_requires_draft", "connection tests may only target an existing draft")
-        raw = self._connection_tester(_public_provider(provider), request)
+        provider_snapshot = copy.deepcopy(provider)
+        version_snapshot = copy.deepcopy(self.versions.get(str(config_version_id))) if config_version_id else None
+        try:
+            raw = self._connection_tester(_public_provider(provider_snapshot), request)
+        except Exception:
+            raw = {"status": "failed", "latency_ms": 0, "error_code": "tester_unavailable"}
+        if self.providers.get(provider_id, {}).get("revision") != provider_snapshot["revision"]:
+            raise api_error(409, "provider_changed_during_test", "provider changed while the connection test was running")
+        if config_version_id and self.versions.get(str(config_version_id)) != version_snapshot:
+            raise api_error(409, "draft_changed_during_test", "draft changed while the connection test was running")
         status = "passed" if raw.get("status") == "passed" else "failed"
         checked_at = _iso(_now_dt())
         error_code = _sanitize_error_code(raw.get("error_code")) if status == "failed" else None
-        record = {"connection_test_id": f"connection-test-{uuid.uuid4().hex}", "provider_config_id": provider_id, "config_version_id": config_version_id, "status": status, "latency_ms": max(0, int(raw.get("latency_ms") or 0)), "checked_at": checked_at, "error_code": error_code, "redacted_error_message": _redacted_error_message(error_code)}
+        provider["revision"] += 1
+        record = {"connection_test_id": f"connection-test-{uuid.uuid4().hex}", "provider_config_id": provider_id, "config_version_id": config_version_id, "provider_revision": provider["revision"], "status": status, "latency_ms": max(0, int(raw.get("latency_ms") or 0)), "checked_at": checked_at, "error_code": error_code, "redacted_error_message": _redacted_error_message(error_code)}
         self.connection_tests.append(copy.deepcopy(record))
         provider.update({"last_connection_test_status": status, "last_connection_test_latency_ms": record["latency_ms"], "last_connection_test_error_code": error_code, "last_connection_tested_at": checked_at, "updated_at": checked_at})
         if provider["enabled"]:
             provider["status"] = "active" if status == "passed" else "unhealthy"
-        provider["revision"] += 1
         return self._finish_write(session, "llm.provider.connection_test", "llm_connection_test", record["connection_test_id"], reason, key, request_data, record)
 
     def create_draft(self, session: SystemAdminSession, payload: dict[str, Any]) -> dict[str, Any]:
-        organization_id = str(payload.get("organization_id") or "").strip()
+        organization_id = _bounded_text(payload.get("organization_id"), "organization_id", 128)
         if not organization_id:
             raise api_error(422, "organization_required", "organization_id is required")
-        request_data = {"organization_id": organization_id, "description": str(payload.get("description") or "").strip() or None}
+        description = _bounded_text(payload.get("description"), "description", 512, required=False) or None
+        request_data = {"organization_id": organization_id, "description": description}
         reason, key, replay = self._begin_write(session, _WRITE_ROLES, "llm.config.create_draft", payload, request_data)
         if replay is not None:
             return replay
         number = max((int(v["version_number"]) for v in self.versions.values() if v["organization_id"] == organization_id), default=0) + 1
         version_id = f"version-{uuid.uuid4().hex}"
-        version = {"version_id": version_id, "organization_id": organization_id, "version_number": number, "status": "draft", "revision": 1, "description": request_data["description"], "configuration_hash": _configuration_hash([]), "created_by_system_admin_user_id": session.user_id, "created_at": _iso(_now_dt()), "published_by_system_admin_user_id": None, "published_at": None, "rollback_of_version_id": None, "evaluation_run_id": None, "routes": []}
+        version = {"version_id": version_id, "organization_id": organization_id, "version_number": number, "status": "draft", "revision": 1, "description": request_data["description"], "configuration_hash": _configuration_hash([]), "created_by_system_admin_user_id": session.user_id, "created_at": _iso(_now_dt()), "published_by_system_admin_user_id": None, "published_at": None, "rollback_of_version_id": None, "release_record_id": None, "release_status": None, "evaluation_run_id": None, "routes": []}
         self.versions[version_id] = version
         return self._finish_write(session, "llm.config.create_draft", "llm_config_version", version_id, reason, key, request_data, copy.deepcopy(version))
 
@@ -332,7 +389,7 @@ class InMemoryLlmGovernanceRepository:
         return copy.deepcopy(version)
 
     def replace_routes(self, session: SystemAdminSession, version_id: str, routes: list[dict[str, Any]], *, expected_revision: int, payload: dict[str, Any]) -> dict[str, Any]:
-        clean_routes = [_validate_route(route) for route in routes]
+        clean_routes = _validate_route_collection(routes)
         scenarios = [route["scenario"] for route in clean_routes]
         if len(scenarios) != len(set(scenarios)):
             raise api_error(422, "duplicate_scenario", "each scenario may appear only once")
@@ -357,7 +414,7 @@ class InMemoryLlmGovernanceRepository:
         version["revision"] += 1
         return self._finish_write(session, "llm.config.replace_routes", "llm_config_version", version_id, reason, key, request_data, copy.deepcopy(version))
 
-    def _ensure_version_ready(self, version: dict[str, Any]) -> None:
+    def _ensure_version_ready(self, version: dict[str, Any], *, require_current_test: bool = True) -> None:
         _require_complete_scenarios(version["routes"])
         used_provider_ids = {
             str(route[field])
@@ -374,7 +431,7 @@ class InMemoryLlmGovernanceRepository:
                 if item["provider_config_id"] == provider_id
                 and item.get("config_version_id") == version["version_id"]
             ]
-            if not tests or tests[-1]["status"] != "passed":
+            if not tests or tests[-1]["status"] != "passed" or (require_current_test and tests[-1].get("provider_revision") != provider["revision"]):
                 raise api_error(409, "provider_connection_test_required", "each route provider needs a passed connection test for this draft")
 
     def validate_draft(self, session: SystemAdminSession, version_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -402,12 +459,23 @@ class InMemoryLlmGovernanceRepository:
         if not version or version["status"] != "validated" or version["revision"] != expected_revision:
             raise api_error(409, "stale_revision", "config version is not a matching validated version")
         self._ensure_version_ready(version)
-        gate = self._release_gate_checker(copy.deepcopy(version), evaluation_run_id)
+        version_snapshot = copy.deepcopy(version)
+        try:
+            gate = self._release_gate_checker(copy.deepcopy(version_snapshot), evaluation_run_id)
+        except Exception:
+            gate = {"status": "failed", "error_code": "release_gate_unavailable"}
+        if self.versions.get(version_id) != version_snapshot:
+            raise api_error(409, "draft_changed_during_release_gate", "config version changed while release evaluation was running")
+        self._ensure_version_ready(version)
         if gate.get("status") != "passed":
             raise api_error(409, "release_gate_failed", "release evaluation gate did not pass")
         version["status"] = "pending_publish"
         version["revision"] += 1
         version["evaluation_run_id"] = evaluation_run_id
+        release_id = f"release-{uuid.uuid4().hex}"
+        self.release_records[version_id] = {"release_record_id": release_id, "organization_id": version["organization_id"], "config_version_id": version_id, "evaluation_run_id": evaluation_run_id, "status": "pending", "revision": 1, "submitted_by_system_admin_user_id": session.user_id, "submitted_at": _iso(_now_dt()), "published_by_system_admin_user_id": None, "published_at": None, "rollback_of_release_id": None, "rollback_of_version_id": None}
+        version["release_record_id"] = release_id
+        version["release_status"] = "pending"
         return self._finish_write(session, "llm.config.submit_publish", "llm_config_version", version_id, reason, key, request_data, copy.deepcopy(version))
 
     def publish(self, session: SystemAdminSession, version_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -428,10 +496,18 @@ class InMemoryLlmGovernanceRepository:
             if current["organization_id"] == version["organization_id"] and current["status"] == "running":
                 current["status"] = "superseded"
                 current["revision"] += 1
+                release = self.release_records.get(current["version_id"])
+                if release:
+                    release["status"] = "superseded"
+                    release["revision"] += 1
+                    current["release_status"] = "superseded"
         version["status"] = "running"
         version["revision"] += 1
         version["published_by_system_admin_user_id"] = session.user_id
         version["published_at"] = _iso(_now_dt())
+        release = self.release_records[version_id]
+        release.update({"status": "running", "revision": release["revision"] + 1, "published_by_system_admin_user_id": session.user_id, "published_at": version["published_at"]})
+        version["release_status"] = "running"
         response = copy.deepcopy(version)
         return self._finish_write(session, "llm.config.publish", "llm_config_version", version_id, reason, key, request_data, response)
 
@@ -443,20 +519,31 @@ class InMemoryLlmGovernanceRepository:
         source = self.versions.get(version_id)
         if not source or source["status"] not in {"running", "superseded", "rolled_back"}:
             raise api_error(409, "rollback_source_invalid", "rollback source must be released history")
-        self._ensure_version_ready(source)
+        self._ensure_version_ready(source, require_current_test=False)
         versions_before = copy.deepcopy(self.versions)
+        releases_before = copy.deepcopy(self.release_records)
         try:
             for current in self.versions.values():
                 if current["organization_id"] == source["organization_id"] and current["status"] == "running":
                     current["status"] = "superseded" if current["version_id"] == version_id else "rolled_back"
                     current["revision"] += 1
+                    current_release = self.release_records.get(current["version_id"])
+                    if current_release:
+                        current_release["status"] = "superseded" if current["version_id"] == version_id else "rolled_back"
+                        current_release["revision"] += 1
+                        current["release_status"] = current_release["status"]
             number = max(int(v["version_number"]) for v in self.versions.values() if v["organization_id"] == source["organization_id"]) + 1
             new_id = f"version-{uuid.uuid4().hex}"
-            rolled_back = {"version_id": new_id, "organization_id": source["organization_id"], "version_number": number, "status": "running", "revision": 4, "description": f"Rollback of version {source['version_number']}", "configuration_hash": source["configuration_hash"], "created_by_system_admin_user_id": session.user_id, "created_at": _iso(_now_dt()), "published_by_system_admin_user_id": session.user_id, "published_at": _iso(_now_dt()), "rollback_of_version_id": version_id, "evaluation_run_id": source.get("evaluation_run_id"), "routes": copy.deepcopy(source["routes"])}
+            rolled_back = {"version_id": new_id, "organization_id": source["organization_id"], "version_number": number, "status": "running", "revision": 4, "description": f"Rollback of version {source['version_number']}", "configuration_hash": source["configuration_hash"], "created_by_system_admin_user_id": session.user_id, "created_at": _iso(_now_dt()), "published_by_system_admin_user_id": session.user_id, "published_at": _iso(_now_dt()), "rollback_of_version_id": version_id, "evaluation_run_id": source.get("evaluation_run_id"), "release_status": "running", "routes": copy.deepcopy(source["routes"])}
             self.versions[new_id] = rolled_back
+            source_release = self.release_records.get(version_id)
+            release_id = f"release-{uuid.uuid4().hex}"
+            self.release_records[new_id] = {"release_record_id": release_id, "organization_id": source["organization_id"], "config_version_id": new_id, "evaluation_run_id": source.get("evaluation_run_id"), "status": "running", "revision": 2, "submitted_by_system_admin_user_id": session.user_id, "submitted_at": rolled_back["created_at"], "published_by_system_admin_user_id": session.user_id, "published_at": rolled_back["published_at"], "rollback_of_release_id": source_release.get("release_record_id") if source_release else None, "rollback_of_version_id": version_id}
+            rolled_back["release_record_id"] = release_id
             return self._finish_write(session, "llm.config.rollback", "llm_config_version", new_id, reason, key, request_data, copy.deepcopy(rolled_back))
         except Exception:
             self.versions = versions_before
+            self.release_records = releases_before
             raise
 
     def _filtered_metrics(self, session: SystemAdminSession, filters: dict[str, Any]) -> list[dict[str, Any]]:
@@ -476,7 +563,13 @@ class InMemoryLlmGovernanceRepository:
         items = self._filtered_metrics(session, filters)
         calls = len(items)
         latencies = sorted(int(item.get("latency_ms", 0)) for item in items)
-        p95 = latencies[max(0, math.ceil(calls * .95) - 1)] if calls else None
+        if calls:
+            position = (calls - 1) * 0.95
+            lower = math.floor(position)
+            upper = math.ceil(position)
+            p95 = latencies[lower] + (latencies[upper] - latencies[lower]) * (position - lower)
+        else:
+            p95 = None
         costs: dict[str, int] = {}
         for item in items:
             currency = str(item.get("currency") or "USD")
@@ -538,8 +631,20 @@ class PostgresLlmGovernanceRepository:
                 result = operation(cur)
             conn.commit()
             return result
-        except Exception:
+        except Exception as exc:
             conn.rollback()
+            if getattr(exc, "status_code", None) is not None:
+                raise
+            sqlstate = getattr(exc, "sqlstate", None)
+            constraint = str(getattr(getattr(exc, "diag", None), "constraint_name", "") or "")
+            if sqlstate == "23505" and "provider" in constraint:
+                raise api_error(409, "provider_name_conflict", "provider name already exists") from None
+            if sqlstate == "23505":
+                raise api_error(409, "governance_conflict", "LLM governance record conflicts with existing state") from None
+            if sqlstate == "23503":
+                raise api_error(422, "invalid_governance_reference", "referenced governance resource does not exist") from None
+            if sqlstate == "23514":
+                raise api_error(409, "invalid_governance_state", "LLM governance state transition was rejected") from None
             raise
         finally:
             conn.close()
@@ -568,7 +673,7 @@ class PostgresLlmGovernanceRepository:
         return {"object_id": str(row[0]), "response": copy.deepcopy(row[2])}
 
     def _audit(self, cur: Any, session: SystemAdminSession, action: str, object_type: str, object_id: str, reason: str, key: str, request_data: Any, response: dict[str, Any]) -> None:
-        safe_snapshot = copy.deepcopy(response)
+        safe_snapshot = _bounded_snapshot(response)
         cur.execute("INSERT INTO system_admin_audit_log (id, system_admin_user_id, action, object_type, object_id, diff_summary, idempotency_key) VALUES (%s, %s, %s, %s, %s, %s, %s)", (str(uuid.uuid4()), session.user_id, action, object_type, object_id, Jsonb({"reason": reason, "request_hash": _fingerprint(request_data), "response_snapshot": safe_snapshot}), key))
 
     @staticmethod
@@ -613,8 +718,19 @@ class PostgresLlmGovernanceRepository:
                 raise api_error(409, "idempotency_conflict", "idempotency key belongs to another provider")
             if replay:
                 return replay["response"]
+            cur.execute("SELECT id::text, name, provider_type, base_url, secret_namespace, secret_name, secret_key, enabled, status, last_connection_test_status, last_connection_test_latency_ms, last_connection_test_error_code, last_connection_tested_at, created_at, updated_at, revision FROM llm_provider_config WHERE id=%s FOR UPDATE", (provider_id,))
+            current_row = cur.fetchone()
+            if not current_row:
+                raise api_error(404, "provider_not_found", "provider was not found")
+            current = self._provider_from_row(current_row)
+            immutable_values = {"provider_type": current["provider_type"], "base_url": current["base_url"], "secret_namespace": current["secret_ref"]["namespace"], "secret_name": current["secret_ref"]["name"], "secret_key": current["secret_ref"]["key"]}
+            for field, value in immutable_values.items():
+                if field in data and data[field] != value:
+                    raise api_error(409, "provider_endpoint_immutable", "provider endpoint and Secret reference are immutable; create a new Provider")
+            if not any(field in data for field in ("name", "enabled")):
+                raise api_error(422, "provider_update_empty", "only provider name and enabled state may be updated")
             assignments, params = [], []
-            for field in ("name", "provider_type", "base_url", "secret_namespace", "secret_name", "secret_key", "enabled"):
+            for field in ("name", "enabled"):
                 if field in data:
                     assignments.append(f"{field} = %s")
                     params.append(data[field])
@@ -636,29 +752,55 @@ class PostgresLlmGovernanceRepository:
         _require_role(session, _CONNECTION_TEST_ROLES)
         reason, key = _require_write(payload)
         request = _validate_connection_request(payload)
+        config_version_id = payload.get("config_version_id")
+        request_data = {"provider_id": provider_id, **request, "config_version_id": config_version_id}
+        def preload(cur: Any) -> dict[str, Any]:
+            cur.execute("SELECT diff_summary->>'request_hash', diff_summary->'response_snapshot' FROM system_admin_audit_log WHERE action='llm.provider.connection_test' AND idempotency_key=%s", (key,))
+            replay = cur.fetchone()
+            if replay:
+                if str(replay[0] or "") != _fingerprint(request_data):
+                    raise api_error(409, "idempotency_conflict", "idempotency key was already used with a different request")
+                return {"replay": copy.deepcopy(replay[1])}
+            cur.execute("SELECT id::text, name, provider_type, base_url, secret_namespace, secret_name, secret_key, enabled, status, last_connection_test_status, last_connection_test_latency_ms, last_connection_test_error_code, last_connection_tested_at, created_at, updated_at, revision FROM llm_provider_config WHERE id=%s", (provider_id,))
+            provider_row = cur.fetchone()
+            if not provider_row:
+                raise api_error(404, "provider_not_found", "provider was not found")
+            version_snapshot = None
+            if config_version_id:
+                cur.execute("SELECT status, revision, configuration_hash FROM llm_config_version WHERE id=%s", (config_version_id,))
+                version_snapshot = cur.fetchone()
+                if not version_snapshot or version_snapshot[0] != "draft":
+                    raise api_error(409, "connection_test_requires_draft", "connection tests may only target an existing draft")
+            return {"provider": self._provider_from_row(provider_row), "version": version_snapshot}
+        snapshot = self._read(preload)
+        if snapshot.get("replay") is not None:
+            return snapshot["replay"]
+        try:
+            raw = self._connection_tester(copy.deepcopy(snapshot["provider"]), request)
+        except Exception:
+            raw = {"status": "failed", "latency_ms": 0, "error_code": "tester_unavailable"}
+        status = "passed" if raw.get("status") == "passed" else "failed"
+        latency_ms = max(0, int(raw.get("latency_ms") or 0))
+        error_code = _sanitize_error_code(raw.get("error_code")) if status == "failed" else None
         def op(cur: Any) -> dict[str, Any]:
-            request_data = {"provider_id": provider_id, **request, "config_version_id": payload.get("config_version_id")}
             replay = self._find_idempotency(cur, "llm.provider.connection_test", key, request_data)
             if replay:
                 return replay["response"]
             cur.execute("SELECT id::text, name, provider_type, base_url, secret_namespace, secret_name, secret_key, enabled, status, last_connection_test_status, last_connection_test_latency_ms, last_connection_test_error_code, last_connection_tested_at, created_at, updated_at, revision FROM llm_provider_config WHERE id=%s FOR UPDATE", (provider_id,))
             provider_row = cur.fetchone()
-            if not provider_row:
-                raise api_error(404, "provider_not_found", "provider was not found")
-            config_version_id = payload.get("config_version_id")
+            current_provider = self._provider_from_row(provider_row) if provider_row else None
+            if not current_provider or current_provider["revision"] != snapshot["provider"]["revision"]:
+                raise api_error(409, "provider_changed_during_test", "provider changed while the connection test was running")
             if config_version_id:
-                cur.execute("SELECT status FROM llm_config_version WHERE id=%s FOR KEY SHARE", (config_version_id,))
+                cur.execute("SELECT status, revision, configuration_hash FROM llm_config_version WHERE id=%s FOR UPDATE", (config_version_id,))
                 version_row = cur.fetchone()
-                if not version_row or version_row[0] != "draft":
-                    raise api_error(409, "connection_test_requires_draft", "connection tests may only target an existing draft")
-            raw = self._connection_tester(self._provider_from_row(provider_row), request)
-            status = "passed" if raw.get("status") == "passed" else "failed"
-            latency_ms = max(0, int(raw.get("latency_ms") or 0))
-            error_code = _sanitize_error_code(raw.get("error_code")) if status == "failed" else None
+                if tuple(version_row or ()) != tuple(snapshot["version"] or ()):
+                    raise api_error(409, "draft_changed_during_test", "draft changed while the connection test was running")
+            cur.execute("UPDATE llm_provider_config SET last_connection_test_status=%s, last_connection_test_latency_ms=%s, last_connection_test_error_code=%s, last_connection_tested_at=now(), status=CASE WHEN enabled THEN %s ELSE 'disabled' END, revision=revision+1, updated_at=now() WHERE id=%s AND revision=%s RETURNING revision", (status, latency_ms, error_code, "active" if status == "passed" else "unhealthy", provider_id, snapshot["provider"]["revision"]))
+            new_provider_revision = int(cur.fetchone()[0])
             test_id = str(uuid.uuid4())
-            cur.execute("INSERT INTO llm_connection_test (id, provider_config_id, config_version_id, checked_by_system_admin_user_id, status, latency_ms, error_code, redacted_error_message) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id::text, provider_config_id::text, config_version_id::text, status, latency_ms, checked_at, error_code, redacted_error_message", (test_id, provider_id, config_version_id, session.user_id, status, latency_ms, error_code, _redacted_error_message(error_code)))
+            cur.execute("INSERT INTO llm_connection_test (id, provider_config_id, config_version_id, provider_revision, checked_by_system_admin_user_id, status, latency_ms, error_code, redacted_error_message) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id::text, provider_config_id::text, config_version_id::text, provider_revision, status, latency_ms, checked_at, error_code, redacted_error_message", (test_id, provider_id, config_version_id, new_provider_revision, session.user_id, status, latency_ms, error_code, _redacted_error_message(error_code)))
             result = _connection_test_from_row(cur.fetchone())
-            cur.execute("UPDATE llm_provider_config SET last_connection_test_status=%s, last_connection_test_latency_ms=%s, last_connection_test_error_code=%s, last_connection_tested_at=%s, status=CASE WHEN enabled THEN %s ELSE 'disabled' END, revision=revision+1, updated_at=now() WHERE id=%s", (status, latency_ms, error_code, result["checked_at"], "active" if status == "passed" else "unhealthy", provider_id))
             self._audit(cur, session, "llm.provider.connection_test", "llm_connection_test", test_id, reason, key, request_data, result)
             return result
         return self._transaction(op)
@@ -666,10 +808,10 @@ class PostgresLlmGovernanceRepository:
     def create_draft(self, session: SystemAdminSession, payload: dict[str, Any]) -> dict[str, Any]:
         _require_role(session, _WRITE_ROLES)
         reason, key = _require_write(payload)
-        organization_id = str(payload.get("organization_id") or "").strip()
+        organization_id = _bounded_text(payload.get("organization_id"), "organization_id", 128)
         if not organization_id:
             raise api_error(422, "organization_required", "organization_id is required")
-        description = str(payload.get("description") or "").strip() or None
+        description = _bounded_text(payload.get("description"), "description", 512, required=False) or None
         def op(cur: Any) -> dict[str, Any]:
             request_data = {"organization_id": organization_id, "description": description}
             replay = self._find_idempotency(cur, "llm.config.create_draft", key, request_data)
@@ -707,22 +849,17 @@ class PostgresLlmGovernanceRepository:
         cur.execute("SELECT id::text, scenario, primary_provider_config_id::text, primary_model, fallback_provider_config_id::text, fallback_model, enabled, temperature, max_output_tokens, timeout_seconds, max_retries, circuit_breaker_threshold, recovery_probe_seconds, revision FROM llm_scenario_route WHERE config_version_id=%s ORDER BY scenario", (version_id,))
         route_keys = ("route_id", "scenario", "primary_provider_config_id", "primary_model", "fallback_provider_config_id", "fallback_model", "enabled", "temperature", "max_output_tokens", "timeout_seconds", "max_retries", "circuit_breaker_threshold", "recovery_probe_seconds", "revision")
         version["routes"] = [{**dict(zip(route_keys, route)), "temperature": float(route[7])} for route in cur.fetchall()]
-        cur.execute(
-            "SELECT diff_summary->'response_snapshot'->>'evaluation_run_id' "
-            "FROM system_admin_audit_log "
-            "WHERE object_id=%s AND action IN ('llm.config.submit_publish','llm.config.rollback') "
-            "AND diff_summary->'response_snapshot' ? 'evaluation_run_id' "
-            "ORDER BY created_at DESC LIMIT 1",
-            (version_id,),
-        )
-        evaluation_row = cur.fetchone()
-        version["evaluation_run_id"] = str(evaluation_row[0]) if evaluation_row and evaluation_row[0] is not None else None
+        cur.execute("SELECT id::text, evaluation_run_id, status FROM llm_release_record WHERE config_version_id=%s", (version_id,))
+        release_row = cur.fetchone()
+        version["release_record_id"] = str(release_row[0]) if release_row else None
+        version["evaluation_run_id"] = str(release_row[1]) if release_row else None
+        version["release_status"] = str(release_row[2]) if release_row else None
         return version
 
     def replace_routes(self, session: SystemAdminSession, version_id: str, routes: list[dict[str, Any]], *, expected_revision: int, payload: dict[str, Any]) -> dict[str, Any]:
         _require_role(session, _WRITE_ROLES)
         reason, key = _require_write(payload)
-        clean = [_validate_route(route) for route in routes]
+        clean = _validate_route_collection(routes)
         if len({route["scenario"] for route in clean}) != len(clean):
             raise api_error(422, "duplicate_scenario", "each scenario may appear only once")
         request_data = {"version_id": version_id, "expected_revision": expected_revision, "routes": clean}
@@ -742,7 +879,7 @@ class PostgresLlmGovernanceRepository:
             return result
         return self._transaction(op)
 
-    def _ensure_version_ready_pg(self, cur: Any, version: dict[str, Any]) -> None:
+    def _ensure_version_ready_pg(self, cur: Any, version: dict[str, Any], *, require_current_test: bool = True) -> None:
         _require_complete_scenarios(version["routes"])
         provider_ids = {
             str(route[field])
@@ -751,13 +888,13 @@ class PostgresLlmGovernanceRepository:
             if route.get(field)
         }
         for provider_id in provider_ids:
-            cur.execute("SELECT enabled, status FROM llm_provider_config WHERE id=%s FOR KEY SHARE", (provider_id,))
+            cur.execute("SELECT enabled, status, revision FROM llm_provider_config WHERE id=%s FOR KEY SHARE", (provider_id,))
             provider = cur.fetchone()
             if not provider or not provider[0] or provider[1] != "active":
                 raise api_error(409, "provider_not_ready", "all route providers must be enabled and active")
-            cur.execute("SELECT status FROM llm_connection_test WHERE provider_config_id=%s AND config_version_id=%s ORDER BY checked_at DESC, id DESC LIMIT 1", (provider_id, version["version_id"]))
+            cur.execute("SELECT status, provider_revision FROM llm_connection_test WHERE provider_config_id=%s AND config_version_id=%s ORDER BY checked_at DESC, id DESC LIMIT 1", (provider_id, version["version_id"]))
             tested = cur.fetchone()
-            if not tested or tested[0] != "passed":
+            if not tested or tested[0] != "passed" or (require_current_test and int(tested[1]) != int(provider[2])):
                 raise api_error(409, "provider_connection_test_required", "each route provider needs a passed connection test for this draft")
 
     def validate_draft(self, session: SystemAdminSession, version_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -785,19 +922,37 @@ class PostgresLlmGovernanceRepository:
         expected_revision = int(payload.get("expected_revision", 0))
         evaluation_run_id = _safe_evaluation_run_id(payload.get("evaluation_run_id"))
         request_data = {"version_id": version_id, "expected_revision": expected_revision, "evaluation_run_id": evaluation_run_id}
+        def preload(cur: Any) -> dict[str, Any]:
+            cur.execute("SELECT diff_summary->>'request_hash', diff_summary->'response_snapshot' FROM system_admin_audit_log WHERE action='llm.config.submit_publish' AND idempotency_key=%s", (key,))
+            replay = cur.fetchone()
+            if replay:
+                if str(replay[0] or "") != _fingerprint(request_data):
+                    raise api_error(409, "idempotency_conflict", "idempotency key was already used with a different request")
+                return {"replay": copy.deepcopy(replay[1])}
+            return {"version": self._fetch_version(cur, version_id)}
+        snapshot = self._read(preload)
+        if snapshot.get("replay") is not None:
+            return snapshot["replay"]
+        candidate = snapshot["version"]
+        if candidate["status"] != "validated" or candidate["revision"] != expected_revision:
+            raise api_error(409, "stale_revision", "config version is not a matching validated version")
+        try:
+            gate = self._release_gate_checker(copy.deepcopy(candidate), evaluation_run_id)
+        except Exception:
+            gate = {"status": "failed", "error_code": "release_gate_unavailable"}
+        if gate.get("status") != "passed":
+            raise api_error(409, "release_gate_failed", "release evaluation gate did not pass")
         def op(cur: Any) -> dict[str, Any]:
             replay = self._find_idempotency(cur, "llm.config.submit_publish", key, request_data)
             if replay:
                 return replay["response"]
             version = self._fetch_version(cur, version_id, lock=True)
-            if version["status"] != "validated" or version["revision"] != expected_revision:
+            if version["status"] != "validated" or version["revision"] != expected_revision or version["configuration_hash"] != candidate["configuration_hash"]:
                 raise api_error(409, "stale_revision", "config version is not a matching validated version")
             self._ensure_version_ready_pg(cur, version)
-            if self._release_gate_checker(copy.deepcopy(version), evaluation_run_id).get("status") != "passed":
-                raise api_error(409, "release_gate_failed", "release evaluation gate did not pass")
             cur.execute("UPDATE llm_config_version SET status='pending_publish', revision=revision+1 WHERE id=%s AND status='validated' AND revision=%s", (version_id, expected_revision))
+            cur.execute("INSERT INTO llm_release_record (organization_id, config_version_id, evaluation_run_id, submitted_by_system_admin_user_id) VALUES (%s,%s,%s,%s)", (version["organization_id"], version_id, evaluation_run_id, session.user_id))
             result = self._fetch_version(cur, version_id)
-            result["evaluation_run_id"] = evaluation_run_id
             self._audit(cur, session, "llm.config.submit_publish", "llm_config_version", version_id, reason, key, request_data, result)
             return result
         return self._transaction(op)
@@ -824,7 +979,9 @@ class PostgresLlmGovernanceRepository:
             running = [str(row[0]) for row in cur.fetchall()]
             for current_id in running:
                 cur.execute("UPDATE llm_config_version SET status='superseded', revision=revision+1 WHERE id=%s", (current_id,))
+                cur.execute("UPDATE llm_release_record SET status='superseded', revision=revision+1 WHERE config_version_id=%s AND status='running'", (current_id,))
             cur.execute("UPDATE llm_config_version SET status='running', revision=revision+1, published_by_system_admin_user_id=%s, published_at=now() WHERE id=%s", (session.user_id, version_id))
+            cur.execute("UPDATE llm_release_record SET status='running', revision=revision+1, published_by_system_admin_user_id=%s, published_at=now() WHERE config_version_id=%s AND status='pending'", (session.user_id, version_id))
             result = self._fetch_version(cur, version_id)
             self._audit(cur, session, "llm.config.publish", "llm_config_version", version_id, reason, key, request_data, result)
             return result
@@ -846,22 +1003,24 @@ class PostgresLlmGovernanceRepository:
             source = self._fetch_version(cur, version_id, lock=True)
             if source["status"] not in {"running", "superseded", "rolled_back"}:
                 raise api_error(409, "rollback_source_invalid", "rollback source must be released history")
-            self._ensure_version_ready_pg(cur, source)
+            self._ensure_version_ready_pg(cur, source, require_current_test=False)
             cur.execute("SELECT id::text FROM llm_config_version WHERE organization_id=%s AND status='running' FOR UPDATE", (source["organization_id"],))
             running = [str(row[0]) for row in cur.fetchall()]
             for current_id in running:
                 terminal_status = "superseded" if current_id == version_id else "rolled_back"
                 cur.execute("UPDATE llm_config_version SET status=%s, revision=revision+1 WHERE id=%s", (terminal_status, current_id))
+                cur.execute("UPDATE llm_release_record SET status=%s, revision=revision+1 WHERE config_version_id=%s AND status='running'", (terminal_status, current_id))
             new_id = str(uuid.uuid4())
             cur.execute("SELECT COALESCE(MAX(version_number),0)+1 FROM llm_config_version WHERE organization_id=%s", (source["organization_id"],))
             number = int(cur.fetchone()[0])
             cur.execute("INSERT INTO llm_config_version (id, organization_id, version_number, description, configuration_hash, created_by_system_admin_user_id, rollback_of_version_id) VALUES (%s,%s,%s,%s,%s,%s,%s)", (new_id, source["organization_id"], number, f"Rollback of version {source['version_number']}", source["configuration_hash"], session.user_id, version_id))
+            cur.execute("INSERT INTO llm_release_record (organization_id, config_version_id, evaluation_run_id, submitted_by_system_admin_user_id, rollback_of_release_id, rollback_of_version_id) VALUES (%s,%s,%s,%s,%s,%s)", (source["organization_id"], new_id, source.get("evaluation_run_id") or "rollback-no-evaluation", session.user_id, source.get("release_record_id"), version_id))
             cur.execute("INSERT INTO llm_scenario_route (config_version_id, scenario, primary_provider_config_id, primary_model, fallback_provider_config_id, fallback_model, enabled, temperature, max_output_tokens, timeout_seconds, max_retries, circuit_breaker_threshold, recovery_probe_seconds) SELECT %s, scenario, primary_provider_config_id, primary_model, fallback_provider_config_id, fallback_model, enabled, temperature, max_output_tokens, timeout_seconds, max_retries, circuit_breaker_threshold, recovery_probe_seconds FROM llm_scenario_route WHERE config_version_id=%s", (new_id, version_id))
             for state in ("validated", "pending_publish"):
                 cur.execute("UPDATE llm_config_version SET status=%s, revision=revision+1 WHERE id=%s", (state, new_id))
             cur.execute("UPDATE llm_config_version SET status='running', revision=revision+1, published_by_system_admin_user_id=%s, published_at=now() WHERE id=%s", (session.user_id, new_id))
+            cur.execute("UPDATE llm_release_record SET status='running', revision=revision+1, published_by_system_admin_user_id=%s, published_at=now() WHERE config_version_id=%s AND status='pending'", (session.user_id, new_id))
             result = self._fetch_version(cur, new_id)
-            result["evaluation_run_id"] = source.get("evaluation_run_id")
             self._audit(cur, session, "llm.config.rollback", "llm_config_version", new_id, reason, key, request_data, result)
             return result
         return self._transaction(op)
@@ -889,14 +1048,14 @@ class PostgresLlmGovernanceRepository:
             cur.execute("SELECT metric.currency, SUM(metric.estimated_cost_micros)" + self._usage_from() + where + " GROUP BY metric.currency ORDER BY metric.currency", tuple(params))
             costs = {str(cost[0]): int(cost[1]) for cost in cur.fetchall()}
             estimated_cost = 0 if not costs else next(iter(costs.values())) if len(costs) == 1 else None
-            return {"calls": int(row[0]), "input_tokens": int(row[1]), "output_tokens": int(row[2]), "total_tokens": int(row[3]), "estimated_cost_micros": estimated_cost, "cost_by_currency": costs, "p95_latency_ms": int(row[4]) if row[4] is not None else None, "error_rate": float(row[5]) if row[5] is not None else None, "fallback_rate": float(row[6]) if row[6] is not None else None}
+            return {"calls": int(row[0]), "input_tokens": int(row[1]), "output_tokens": int(row[2]), "total_tokens": int(row[3]), "estimated_cost_micros": estimated_cost, "cost_by_currency": costs, "p95_latency_ms": float(row[4]) if row[4] is not None else None, "error_rate": float(row[5]) if row[5] is not None else None, "fallback_rate": float(row[6]) if row[6] is not None else None}
         return self._read(op)
 
     def usage_timeseries(self, session: SystemAdminSession, filters: dict[str, Any]) -> list[dict[str, Any]]:
         _require_role(session, _READ_ROLES)
         where, params = self._usage_where(filters)
         def op(cur: Any) -> list[dict[str, Any]]:
-            cur.execute("SELECT date_trunc('hour', occurred_at), metric.currency, COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(estimated_cost_micros), COUNT(*) FILTER (WHERE metric.status<>'succeeded')" + self._usage_from() + where + " GROUP BY 1,2 ORDER BY 1,2", tuple(params))
+            cur.execute("SELECT date_trunc('hour', occurred_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', metric.currency, COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(estimated_cost_micros), COUNT(*) FILTER (WHERE metric.status<>'succeeded')" + self._usage_from() + where + " GROUP BY 1,2 ORDER BY 1,2", tuple(params))
             return [{"bucket": _iso(row[0]), "currency": str(row[1]), "calls": int(row[2]), "input_tokens": int(row[3]), "output_tokens": int(row[4]), "estimated_cost_micros": int(row[5]), "errors": int(row[6])} for row in cur.fetchall()]
         return self._read(op)
 
@@ -928,7 +1087,7 @@ class PostgresLlmGovernanceRepository:
 
 
 def _connection_test_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
-    keys = ("connection_test_id", "provider_config_id", "config_version_id", "status", "latency_ms", "checked_at", "error_code", "redacted_error_message")
+    keys = ("connection_test_id", "provider_config_id", "config_version_id", "provider_revision", "status", "latency_ms", "checked_at", "error_code", "redacted_error_message")
     value = dict(zip(keys, row))
     value["checked_at"] = _iso(value["checked_at"])
     return value

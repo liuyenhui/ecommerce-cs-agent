@@ -4,12 +4,12 @@
 
 CREATE TABLE IF NOT EXISTS llm_provider_config (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    name text NOT NULL UNIQUE,
-    provider_type text NOT NULL,
-    base_url text NOT NULL,
-    secret_namespace text NOT NULL,
-    secret_name text NOT NULL,
-    secret_key text NOT NULL,
+    name text NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 128),
+    provider_type text NOT NULL CHECK (length(provider_type) BETWEEN 1 AND 64),
+    base_url text NOT NULL CHECK (length(base_url) BETWEEN 1 AND 2048),
+    secret_namespace text NOT NULL CHECK (length(secret_namespace) BETWEEN 1 AND 253),
+    secret_name text NOT NULL CHECK (length(secret_name) BETWEEN 1 AND 253),
+    secret_key text NOT NULL CHECK (length(secret_key) BETWEEN 1 AND 253),
     enabled boolean NOT NULL DEFAULT true,
     status text NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'disabled', 'unhealthy')),
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS llm_config_version (
     status text NOT NULL DEFAULT 'draft'
         CHECK (status IN ('draft', 'validated', 'pending_publish', 'running', 'superseded', 'rolled_back')),
     revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
-    description text,
+    description text CHECK (description IS NULL OR length(description) <= 512),
     configuration_hash text NOT NULL,
     created_by_system_admin_user_id uuid NOT NULL
         REFERENCES system_admin_user(id) ON DELETE RESTRICT,
@@ -59,6 +59,41 @@ CREATE TABLE IF NOT EXISTS llm_config_version (
     UNIQUE (organization_id, version_number)
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_config_version_id_organization
+    ON llm_config_version (id, organization_id);
+
+CREATE TABLE IF NOT EXISTS llm_release_record (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id uuid NOT NULL REFERENCES organization(id) ON DELETE RESTRICT,
+    config_version_id uuid NOT NULL,
+    evaluation_run_id varchar(128) NOT NULL,
+    status text NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'running', 'superseded', 'rolled_back')),
+    submitted_by_system_admin_user_id uuid NOT NULL
+        REFERENCES system_admin_user(id) ON DELETE RESTRICT,
+    submitted_at timestamptz NOT NULL DEFAULT now(),
+    published_by_system_admin_user_id uuid
+        REFERENCES system_admin_user(id) ON DELETE RESTRICT,
+    published_at timestamptz,
+    rollback_of_release_id uuid REFERENCES llm_release_record(id) ON DELETE RESTRICT,
+    rollback_of_version_id uuid REFERENCES llm_config_version(id) ON DELETE RESTRICT,
+    revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
+    UNIQUE (config_version_id),
+    FOREIGN KEY (config_version_id, organization_id)
+        REFERENCES llm_config_version(id, organization_id) ON DELETE RESTRICT,
+    CHECK (
+        (status = 'pending' AND published_by_system_admin_user_id IS NULL AND published_at IS NULL)
+        OR (status IN ('running', 'superseded', 'rolled_back')
+            AND published_by_system_admin_user_id IS NOT NULL AND published_at IS NOT NULL)
+    )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_release_record_one_running
+    ON llm_release_record (organization_id) WHERE status = 'running';
+
+CREATE INDEX IF NOT EXISTS idx_llm_release_record_org_status_submitted
+    ON llm_release_record (organization_id, status, submitted_at DESC);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_config_version_one_running
     ON llm_config_version (organization_id)
     WHERE status = 'running';
@@ -70,13 +105,13 @@ CREATE TABLE IF NOT EXISTS llm_scenario_route (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     config_version_id uuid NOT NULL
         REFERENCES llm_config_version(id) ON DELETE RESTRICT,
-    scenario text NOT NULL,
+    scenario text NOT NULL CHECK (length(scenario) BETWEEN 1 AND 64),
     primary_provider_config_id uuid NOT NULL
         REFERENCES llm_provider_config(id) ON DELETE RESTRICT,
-    primary_model text NOT NULL,
+    primary_model text NOT NULL CHECK (length(primary_model) BETWEEN 1 AND 128),
     fallback_provider_config_id uuid
         REFERENCES llm_provider_config(id) ON DELETE RESTRICT,
-    fallback_model text,
+    fallback_model text CHECK (fallback_model IS NULL OR length(fallback_model) BETWEEN 1 AND 128),
     enabled boolean NOT NULL DEFAULT true,
     temperature numeric(4, 3) NOT NULL DEFAULT 0.200
         CHECK (temperature >= 0 AND temperature <= 2),
@@ -114,6 +149,7 @@ CREATE TABLE IF NOT EXISTS llm_connection_test (
         REFERENCES llm_provider_config(id) ON DELETE RESTRICT,
     config_version_id uuid
         REFERENCES llm_config_version(id) ON DELETE RESTRICT,
+    provider_revision integer NOT NULL DEFAULT 1 CHECK (provider_revision > 0),
     checked_by_system_admin_user_id uuid NOT NULL
         REFERENCES system_admin_user(id) ON DELETE RESTRICT,
     status text NOT NULL CHECK (status IN ('passed', 'failed')),
@@ -518,3 +554,111 @@ CREATE TRIGGER trg_validate_llm_config_version_transition
     BEFORE INSERT OR UPDATE OR DELETE ON llm_config_version
     FOR EACH ROW
     EXECUTE FUNCTION validate_llm_config_version_transition();
+
+CREATE OR REPLACE FUNCTION protect_llm_release_record_history()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.status <> 'pending' OR NEW.revision <> 1
+            OR NEW.published_by_system_admin_user_id IS NOT NULL OR NEW.published_at IS NOT NULL
+        THEN
+            RAISE EXCEPTION 'release records must start as pending revision one'
+                USING ERRCODE = '23514';
+        END IF;
+        IF NEW.rollback_of_release_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM llm_release_record source
+            WHERE source.id = NEW.rollback_of_release_id
+              AND source.organization_id = NEW.organization_id
+              AND source.status IN ('running', 'superseded', 'rolled_back')
+        ) THEN
+            RAISE EXCEPTION 'rollback release source must belong to the same organization'
+                USING ERRCODE = '23514';
+        END IF;
+        IF NEW.rollback_of_version_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM llm_config_version source
+            WHERE source.id = NEW.rollback_of_version_id
+              AND source.organization_id = NEW.organization_id
+              AND source.status IN ('running', 'superseded', 'rolled_back')
+        ) THEN
+            RAISE EXCEPTION 'rollback version source must belong to the same organization'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'release records are immutable history'
+            USING ERRCODE = '23514';
+    END IF;
+    IF OLD.status IN ('superseded', 'rolled_back') THEN
+        RAISE EXCEPTION 'terminal release records are immutable'
+            USING ERRCODE = '23514';
+    END IF;
+    IF NEW.id IS DISTINCT FROM OLD.id
+        OR NEW.organization_id IS DISTINCT FROM OLD.organization_id
+        OR NEW.config_version_id IS DISTINCT FROM OLD.config_version_id
+        OR NEW.evaluation_run_id IS DISTINCT FROM OLD.evaluation_run_id
+        OR NEW.submitted_by_system_admin_user_id IS DISTINCT FROM OLD.submitted_by_system_admin_user_id
+        OR NEW.submitted_at IS DISTINCT FROM OLD.submitted_at
+        OR NEW.rollback_of_release_id IS DISTINCT FROM OLD.rollback_of_release_id
+        OR NEW.rollback_of_version_id IS DISTINCT FROM OLD.rollback_of_version_id
+    THEN
+        RAISE EXCEPTION 'release record linkage and evaluation are immutable'
+            USING ERRCODE = '23514';
+    END IF;
+    IF NEW.revision <> OLD.revision + 1
+        OR NOT (
+            (OLD.status = 'pending' AND NEW.status = 'running')
+            OR (OLD.status = 'running' AND NEW.status IN ('superseded', 'rolled_back'))
+        )
+    THEN
+        RAISE EXCEPTION 'invalid release record lifecycle transition'
+            USING ERRCODE = '23514';
+    END IF;
+    IF OLD.status = 'pending' AND NEW.status = 'running' THEN
+        IF NEW.published_by_system_admin_user_id IS NULL OR NEW.published_at IS NULL THEN
+            RAISE EXCEPTION 'running release requires publication metadata'
+                USING ERRCODE = '23514';
+        END IF;
+    ELSIF NEW.published_by_system_admin_user_id IS DISTINCT FROM OLD.published_by_system_admin_user_id
+        OR NEW.published_at IS DISTINCT FROM OLD.published_at
+    THEN
+        RAISE EXCEPTION 'release publication metadata is immutable'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_protect_llm_release_record_history ON llm_release_record;
+CREATE TRIGGER trg_protect_llm_release_record_history
+    BEFORE INSERT OR UPDATE OR DELETE ON llm_release_record
+    FOR EACH ROW EXECUTE FUNCTION protect_llm_release_record_history();
+
+CREATE OR REPLACE FUNCTION protect_llm_provider_endpoint()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.provider_type IS DISTINCT FROM OLD.provider_type
+        OR NEW.base_url IS DISTINCT FROM OLD.base_url
+        OR NEW.secret_namespace IS DISTINCT FROM OLD.secret_namespace
+        OR NEW.secret_name IS DISTINCT FROM OLD.secret_name
+        OR NEW.secret_key IS DISTINCT FROM OLD.secret_key
+    THEN
+        RAISE EXCEPTION 'provider endpoint and Secret reference are immutable'
+            USING ERRCODE = '23514';
+    END IF;
+    IF NEW.revision <> OLD.revision + 1 THEN
+        RAISE EXCEPTION 'provider updates must increment revision exactly once'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_protect_llm_provider_endpoint ON llm_provider_config;
+CREATE TRIGGER trg_protect_llm_provider_endpoint
+    BEFORE UPDATE ON llm_provider_config
+    FOR EACH ROW EXECUTE FUNCTION protect_llm_provider_endpoint();

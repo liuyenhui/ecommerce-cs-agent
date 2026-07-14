@@ -244,6 +244,10 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
         "create table if not exists llm_connection_test",
         "create table if not exists llm_invocation_metric",
     )
+    release_sql = section(
+        "create table if not exists llm_release_record",
+        "create table if not exists llm_scenario_route",
+    )
     invocation_sql = section("create table if not exists llm_invocation_metric")
 
     required_by_section = [
@@ -282,6 +286,7 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
         (connection_test_sql, [
             "provider_config_id uuid not null references llm_provider_config(id) on delete restrict",
             "config_version_id uuid references llm_config_version(id) on delete restrict",
+            "provider_revision integer not null",
             "checked_by_system_admin_user_id uuid not null references system_admin_user(id) on delete restrict",
             "status text not null check (status in ('passed', 'failed'))",
             "latency_ms integer check (latency_ms is null or latency_ms >= 0)",
@@ -289,6 +294,13 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "error_code text",
             "redacted_error_message text",
             "create index if not exists idx_llm_connection_test_version_checked on llm_connection_test (config_version_id, checked_at desc)",
+        ]),
+        (release_sql, [
+            "evaluation_run_id varchar(128) not null",
+            "unique (config_version_id)",
+            "foreign key (config_version_id, organization_id)",
+            "check (status in ('pending', 'running', 'superseded', 'rolled_back'))",
+            "create unique index if not exists idx_llm_release_record_one_running",
         ]),
         (invocation_sql, [
             "scenario_route_id uuid not null references llm_scenario_route(id) on delete restrict",
@@ -362,6 +374,10 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             assert snippet in scoped_sql
 
     assert invocation_sql.count("perform lock_llm_config_versions") >= 3
+    assert "create or replace function protect_llm_release_record_history()" in compact_sql
+    assert "terminal release records are immutable" in compact_sql
+    assert "create or replace function protect_llm_provider_endpoint()" in compact_sql
+    assert "provider endpoint and secret reference are immutable" in compact_sql
 
     for redundant_attribution_column in [
         "provider_config_id uuid",

@@ -17,6 +17,7 @@ from ecommerce_cs_agent.services.admin_auth import SystemAdminSession
 from ecommerce_cs_agent.services.llm_governance import (
     InMemoryLlmGovernanceRepository,
     PostgresLlmGovernanceRepository,
+    _bounded_snapshot,
     _fingerprint,
 )
 
@@ -44,6 +45,10 @@ REPLY_ROUTE = {
     "circuit_breaker_threshold": 5,
     "recovery_probe_seconds": 30,
 }
+
+
+def _integration_database_url() -> str | None:
+    return os.environ.get("TEST_DATABASE_URL")
 
 
 def _all_routes(primary_id: str, fallback_id: str | None = None) -> list[dict[str, Any]]:
@@ -119,6 +124,64 @@ def test_all_writes_require_live_system_session_role_reason_and_idempotency_key(
             service.create_provider(_session(), payload)
         assert invalid.value.status_code == 422
 
+    release_provider = service.create_provider(_session("release_admin"), dict(PROVIDER_PAYLOAD, name="release-admin", idempotency_key="release-admin"))
+    assert release_provider["name"] == "release-admin"
+    assert service.test_connection(_session("technical_support"), release_provider["provider_id"], {"reason": "diagnose", "idempotency_key": "support-test"})["status"] == "passed"
+    with pytest.raises(HTTPException):
+        service.test_connection(_session("security_auditor"), release_provider["provider_id"], {"reason": "diagnose", "idempotency_key": "auditor-test"})
+    with pytest.raises(HTTPException):
+        service.create_provider(_session("technical_support"), dict(PROVIDER_PAYLOAD, idempotency_key="support-denied"))
+
+
+@pytest.mark.parametrize("base_url", [
+    "https://user:password@llm.example.test/v1",
+    "https://llm.example.test/v1?token=private",
+    "https://llm.example.test/v1#secret",
+    "https:///missing-host",
+    "http://llm.example.test/v1",
+])
+def test_provider_url_rejects_credentials_query_fragment_and_non_https(base_url: str) -> None:
+    with pytest.raises(HTTPException) as invalid:
+        InMemoryLlmGovernanceRepository().create_provider(_session(), dict(PROVIDER_PAYLOAD, base_url=base_url, idempotency_key=f"invalid-url-{len(base_url)}"))
+    assert invalid.value.detail["error"]["code"] == "invalid_provider_url"
+
+
+def test_provider_endpoint_is_immutable_and_revision_change_requires_retest() -> None:
+    service = InMemoryLlmGovernanceRepository()
+    provider = _create_provider(service, name="immutable", idem="immutable-provider")
+    for changes in ({"base_url": "https://other.example.test"}, {"secret_ref": {"namespace": "runtime", "name": "other", "key": "api-key"}}):
+        with pytest.raises(HTTPException) as immutable:
+            service.update_provider(_session(), provider["provider_id"], {**changes, "reason": "change endpoint", "idempotency_key": f"immutable-{len(str(changes))}"}, expected_revision=1)
+        assert immutable.value.detail["error"]["code"] == "provider_endpoint_immutable"
+    draft = service.create_draft(_session(), {"organization_id": ORG_ID, "reason": "draft", "idempotency_key": "immutable-draft"})
+    changed = service.replace_routes(_session(), draft["version_id"], _all_routes(provider["provider_id"]), expected_revision=1, payload={"reason": "routes", "idempotency_key": "immutable-routes"})
+    service.test_connection(_session("technical_support"), provider["provider_id"], {"config_version_id": draft["version_id"], "reason": "test", "idempotency_key": "immutable-test-one"})
+    service.update_provider(_session(), provider["provider_id"], {"name": "renamed", "reason": "rename", "idempotency_key": "immutable-rename"}, expected_revision=2)
+    with pytest.raises(HTTPException) as stale_test:
+        service.validate_draft(_session(), draft["version_id"], {"expected_revision": changed["revision"], "reason": "validate", "idempotency_key": "immutable-validate-fail"})
+    assert stale_test.value.detail["error"]["code"] == "provider_connection_test_required"
+    service.test_connection(_session("technical_support"), provider["provider_id"], {"config_version_id": draft["version_id"], "reason": "retest", "idempotency_key": "immutable-test-two"})
+    assert service.validate_draft(_session(), draft["version_id"], {"expected_revision": changed["revision"], "reason": "validate", "idempotency_key": "immutable-validate"})["status"] == "validated"
+
+
+def test_input_boundaries_reject_audit_growth_and_too_many_routes() -> None:
+    service = InMemoryLlmGovernanceRepository()
+    with pytest.raises(HTTPException):
+        service.create_provider(_session(), dict(PROVIDER_PAYLOAD, name="x" * 129, idempotency_key="long-name"))
+    with pytest.raises(HTTPException):
+        service.create_provider(_session(), dict(PROVIDER_PAYLOAD, reason="x" * 513, idempotency_key="long-reason"))
+    with pytest.raises(HTTPException):
+        service.create_draft(_session(), {"organization_id": ORG_ID, "description": "x" * 513, "reason": "draft", "idempotency_key": "long-description"})
+    draft = service.create_draft(_session(), {"organization_id": ORG_ID, "reason": "draft", "idempotency_key": "bounded-draft"})
+    with pytest.raises(HTTPException) as excessive:
+        service.replace_routes(_session(), draft["version_id"], [dict(REPLY_ROUTE, scenario=f"scenario-{index}") for index in range(33)], expected_revision=1, payload={"reason": "routes", "idempotency_key": "too-many-routes"})
+    assert excessive.value.detail["error"]["code"] == "too_many_routes"
+    with pytest.raises(HTTPException):
+        service.replace_routes(_session(), draft["version_id"], [dict(REPLY_ROUTE, primary_model="x" * 129)], expected_revision=1, payload={"reason": "routes", "idempotency_key": "long-model"})
+    with pytest.raises(HTTPException) as oversized_snapshot:
+        _bounded_snapshot({"safe": "x" * (65 * 1024)})
+    assert oversized_snapshot.value.detail["error"]["code"] == "idempotency_snapshot_too_large"
+
 
 def test_idempotency_replays_same_request_and_rejects_different_payload() -> None:
     service = InMemoryLlmGovernanceRepository()
@@ -173,7 +236,7 @@ def test_connection_test_enforces_boundary_and_stores_only_redacted_metadata() -
         _session("technical_support"), provider["provider_id"],
         {"timeout_seconds": 20, "max_tokens": 256, "reason": "diagnose", "idempotency_key": "test-1"},
     )
-    assert set(result) == {"connection_test_id", "provider_config_id", "config_version_id", "status", "latency_ms", "checked_at", "error_code", "redacted_error_message"}
+    assert set(result) == {"connection_test_id", "provider_config_id", "config_version_id", "provider_revision", "status", "latency_ms", "checked_at", "error_code", "redacted_error_message"}
     assert result["error_code"] == "upstream_error"
     assert service.providers[provider["provider_id"]]["revision"] == 2
     flattened = json.dumps({"result": result, "stored": service.connection_tests, "audit": service.audit_logs})
@@ -181,6 +244,23 @@ def test_connection_test_enforces_boundary_and_stores_only_redacted_metadata() -
     assert "secret-private" not in flattened
     assert "customer text" not in flattened
     assert "private model output" not in flattened
+
+
+def test_callbacks_use_snapshots_and_reject_concurrent_changes_without_leaking_exceptions() -> None:
+    service = InMemoryLlmGovernanceRepository()
+    provider = _create_provider(service, name="callback", idem="callback-provider")
+    draft = service.create_draft(_session(), {"organization_id": ORG_ID, "reason": "draft", "idempotency_key": "callback-draft"})
+    service._connection_tester = lambda _provider, _request: service.providers[provider["provider_id"]].update(revision=99) or {"status": "passed"}
+    with pytest.raises(HTTPException) as changed:
+        service.test_connection(_session("technical_support"), provider["provider_id"], {"config_version_id": draft["version_id"], "reason": "test", "idempotency_key": "callback-test"})
+    assert changed.value.detail["error"]["code"] == "provider_changed_during_test"
+    assert service.connection_tests == []
+
+    safe = InMemoryLlmGovernanceRepository(connection_tester=lambda _provider, _request: (_ for _ in ()).throw(RuntimeError("Bearer secret")))
+    safe_provider = _create_provider(safe, name="callback-safe", idem="callback-safe-provider")
+    result = safe.test_connection(_session("technical_support"), safe_provider["provider_id"], {"reason": "test", "idempotency_key": "callback-safe-test"})
+    assert result["error_code"] == "tester_unavailable"
+    assert "Bearer secret" not in json.dumps({"result": result, "stored": safe.connection_tests, "audit": safe.audit_logs})
 
 
 def test_draft_publish_and_rollback_preserve_immutable_history() -> None:
@@ -240,6 +320,12 @@ def test_validate_submit_and_publish_are_explicit_and_gate_failure_preserves_sta
         service.submit_publish(_session(), draft["version_id"], {"expected_revision": 3, "evaluation_run_id": "eval-explicit", "reason": "submit", "idempotency_key": "explicit-submit-fail"})
     assert failed_gate.value.detail["error"]["code"] == "release_gate_failed"
     assert service.get_version(_session(), draft["version_id"])["status"] == "validated"
+    with pytest.raises(HTTPException):
+        service.submit_publish(_session(), draft["version_id"], {"expected_revision": 3, "evaluation_run_id": "x" * 129, "reason": "submit", "idempotency_key": "explicit-long-eval"})
+    service._release_gate_checker = lambda _version, _run: (_ for _ in ()).throw(RuntimeError("Bearer secret"))
+    with pytest.raises(HTTPException) as safe_gate_error:
+        service.submit_publish(_session(), draft["version_id"], {"expected_revision": 3, "evaluation_run_id": "eval-safe", "reason": "submit", "idempotency_key": "explicit-submit-exception"})
+    assert "Bearer secret" not in json.dumps(safe_gate_error.value.detail)
     service._release_gate_checker = lambda _version, _run: {"status": "passed"}
     pending = service.submit_publish(_session(), draft["version_id"], {"expected_revision": 3, "evaluation_run_id": "eval-explicit", "reason": "submit", "idempotency_key": "explicit-submit"})
     assert (pending["status"], pending["revision"]) == ("pending_publish", 4)
@@ -281,7 +367,7 @@ def test_usage_filters_summary_rates_groups_trends_and_metadata_without_content(
     )
     filters = {"start_at": now - timedelta(minutes=1), "end_at": now + timedelta(minutes=1), "provider_config_id": "p1", "model": "chat-pro", "scenario": "reply_generation", "organization_id": ORG_ID, "store_id": "s1"}
     summary = service.usage_summary(_session("security_auditor"), filters)
-    assert summary == {"calls": 2, "input_tokens": 30, "output_tokens": 15, "total_tokens": 45, "estimated_cost_micros": 600, "cost_by_currency": {"USD": 600}, "p95_latency_ms": 300, "error_rate": 0.5, "fallback_rate": 0.5}
+    assert summary == {"calls": 2, "input_tokens": 30, "output_tokens": 15, "total_tokens": 45, "estimated_cost_micros": 600, "cost_by_currency": {"USD": 600}, "p95_latency_ms": 290.0, "error_rate": 0.5, "fallback_rate": 0.5}
     assert service.usage_timeseries(_session(), filters)
     assert service.usage_breakdown(_session(), filters, "model")[0]["calls"] == 2
     flattened = json.dumps(service.list_invocations(_session(), filters))
@@ -315,7 +401,9 @@ def test_usage_never_mixes_currency_and_details_are_sorted_and_limited() -> None
 
 
 def test_postgres_queries_are_parameterized_transactional_and_never_select_content() -> None:
-    connection = _FakeConnection(fetch_rows=[None])
+    now = datetime.now(timezone.utc)
+    provider_row = ("33333333-3333-3333-3333-333333333333", "old", "openai_compatible", "https://llm.example.test/v1", "runtime", "llm", "api-key", True, "active", None, None, None, None, now, now, 9)
+    connection = _FakeConnection(fetch_rows=[None, provider_row, None])
     service = PostgresLlmGovernanceRepository("postgresql://example")
     service._connect = lambda _url: connection
     with pytest.raises(HTTPException):
@@ -324,7 +412,7 @@ def test_postgres_queries_are_parameterized_transactional_and_never_select_conte
             {"name": "new", "reason": "rename", "idempotency_key": "pg-update"}, expected_revision=9,
         )
     sql = "\n".join(statement for statement, _params in connection.executed).lower()
-    assert "where id = %s" in sql
+    assert "where id=%s" in sql
     assert "revision = %s" in sql
     assert "secret_value" not in sql
     assert "prompt" not in sql and "customer_message" not in sql and "model_response" not in sql
@@ -392,9 +480,9 @@ class _FakeCursor:
 
 
 def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
-    database_url = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    database_url = _integration_database_url()
     if not database_url:
-        pytest.skip("set TEST_DATABASE_URL or DATABASE_URL to run PostgreSQL service integration")
+        pytest.skip("set TEST_DATABASE_URL to run PostgreSQL service integration")
     schema_name = f"llm_service_test_{__import__('uuid').uuid4().hex}"
     setup = psycopg.connect(database_url)
     try:
@@ -414,6 +502,51 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
         provider_payload = dict(PROVIDER_PAYLOAD, idempotency_key="integration-provider")
         provider = service.create_provider(session, provider_payload)
         assert set(provider["secret_ref"]) == {"namespace", "name", "key"}
+        with pytest.raises(HTTPException) as immutable_provider:
+            service.update_provider(session, provider["provider_id"], {"base_url": "https://other.example.test", "reason": "integration", "idempotency_key": "integration-immutable"}, expected_revision=1)
+        assert immutable_provider.value.detail["error"]["code"] == "provider_endpoint_immutable"
+        with pytest.raises(HTTPException) as duplicate_provider:
+            service.create_provider(session, dict(provider_payload, idempotency_key="integration-provider-duplicate"))
+        assert duplicate_provider.value.detail["error"]["code"] == "provider_name_conflict"
+        with pytest.raises(HTTPException) as invalid_org:
+            service.create_draft(session, {"organization_id": "ffffffff-ffff-ffff-ffff-ffffffffffff", "reason": "integration", "idempotency_key": "integration-invalid-org"})
+        assert invalid_org.value.detail["error"]["code"] == "invalid_governance_reference"
+        invalid_route_draft = service.create_draft(session, {"organization_id": organization_id, "reason": "integration", "idempotency_key": "integration-invalid-route-draft"})
+        with pytest.raises(HTTPException) as invalid_provider:
+            service.replace_routes(session, invalid_route_draft["version_id"], _all_routes("ffffffff-ffff-ffff-ffff-ffffffffffff"), expected_revision=1, payload={"reason": "integration", "idempotency_key": "integration-invalid-provider"})
+        assert invalid_provider.value.detail["error"]["code"] == "invalid_governance_reference"
+        concurrent_provider = service.create_provider(session, dict(provider_payload, name="concurrent-provider", idempotency_key="integration-concurrent-provider"))
+        concurrent_draft = service.create_draft(session, {"organization_id": organization_id, "reason": "integration", "idempotency_key": "integration-concurrent-draft"})
+        def mutate_provider_outside_test_transaction(_provider: dict[str, Any], _request: dict[str, int]) -> dict[str, Any]:
+            with psycopg.connect(scoped_url) as concurrent_connection:
+                with concurrent_connection.cursor() as cur:
+                    cur.execute("UPDATE llm_provider_config SET name='changed-during-test', revision=revision+1 WHERE id=%s", (concurrent_provider["provider_id"],))
+            return {"status": "passed", "latency_ms": 1}
+        concurrent_service = PostgresLlmGovernanceRepository(scoped_url, connection_tester=mutate_provider_outside_test_transaction)
+        with pytest.raises(HTTPException) as concurrent_change:
+            concurrent_service.test_connection(session, concurrent_provider["provider_id"], {"config_version_id": concurrent_draft["version_id"], "reason": "integration", "idempotency_key": "integration-concurrent-test"})
+        assert concurrent_change.value.detail["error"]["code"] == "provider_changed_during_test"
+        with psycopg.connect(scoped_url) as verify_no_stale_test:
+            with verify_no_stale_test.cursor() as cur:
+                cur.execute("SELECT count(*) FROM llm_connection_test WHERE provider_config_id=%s", (concurrent_provider["provider_id"],))
+                assert cur.fetchone() == (0,)
+        gate_draft = service.create_draft(session, {"organization_id": organization_id, "reason": "integration", "idempotency_key": "integration-gate-draft"})
+        gate_changed = service.replace_routes(session, gate_draft["version_id"], _all_routes(concurrent_provider["provider_id"]), expected_revision=1, payload={"reason": "integration", "idempotency_key": "integration-gate-routes"})
+        service.test_connection(session, concurrent_provider["provider_id"], {"config_version_id": gate_draft["version_id"], "reason": "integration", "idempotency_key": "integration-gate-test"})
+        gate_validated = service.validate_draft(session, gate_draft["version_id"], {"expected_revision": gate_changed["revision"], "reason": "integration", "idempotency_key": "integration-gate-validate"})
+        def mutate_version_outside_gate_transaction(_version: dict[str, Any], _evaluation: str) -> dict[str, Any]:
+            with psycopg.connect(scoped_url) as concurrent_connection:
+                with concurrent_connection.cursor() as cur:
+                    cur.execute("UPDATE llm_config_version SET revision=revision+1 WHERE id=%s", (gate_draft["version_id"],))
+            return {"status": "passed"}
+        concurrent_gate_service = PostgresLlmGovernanceRepository(scoped_url, release_gate_checker=mutate_version_outside_gate_transaction)
+        with pytest.raises(HTTPException) as gate_change:
+            concurrent_gate_service.submit_publish(session, gate_draft["version_id"], {"expected_revision": gate_validated["revision"], "evaluation_run_id": "integration-concurrent-gate", "reason": "integration", "idempotency_key": "integration-concurrent-gate"})
+        assert gate_change.value.status_code == 409
+        with psycopg.connect(scoped_url) as verify_no_release:
+            with verify_no_release.cursor() as cur:
+                cur.execute("SELECT count(*) FROM llm_release_record WHERE config_version_id=%s", (gate_draft["version_id"],))
+                assert cur.fetchone() == (0,)
         draft = service.create_draft(session, {"organization_id": organization_id, "reason": "integration", "idempotency_key": "integration-draft"})
         changed = service.replace_routes(session, draft["version_id"], _all_routes(provider["provider_id"]), expected_revision=1, payload={"reason": "integration", "idempotency_key": "integration-routes"})
         tested = service.test_connection(session, provider["provider_id"], {"config_version_id": draft["version_id"], "reason": "integration", "idempotency_key": "integration-test"})
@@ -424,11 +557,13 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
         assert create_conflict.value.status_code == 409
         validated = service.validate_draft(session, draft["version_id"], {"expected_revision": changed["revision"], "reason": "integration", "idempotency_key": "integration-validate"})
         pending = service.submit_publish(session, draft["version_id"], {"expected_revision": validated["revision"], "evaluation_run_id": "integration-eval", "reason": "integration", "idempotency_key": "integration-submit"})
+        assert pending["release_status"] == "pending"
         assert service.get_version(session, draft["version_id"])["evaluation_run_id"] == "integration-eval"
         assert service.list_versions(session, organization_id)[0]["evaluation_run_id"] == "integration-eval"
         running = service.publish(session, draft["version_id"], {"expected_revision": pending["revision"], "reason": "integration", "idempotency_key": "integration-publish"})
         assert running["status"] == "running"
         assert running["evaluation_run_id"] == "integration-eval"
+        assert running["release_status"] == "running"
         second_draft = service.create_draft(session, {"organization_id": organization_id, "reason": "integration", "idempotency_key": "integration-draft-two"})
         second_changed = service.replace_routes(session, second_draft["version_id"], _all_routes(provider["provider_id"]), expected_revision=1, payload={"reason": "integration", "idempotency_key": "integration-routes-two"})
         service.test_connection(session, provider["provider_id"], {"config_version_id": second_draft["version_id"], "reason": "integration", "idempotency_key": "integration-test-two"})
@@ -445,6 +580,10 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
                 assert cur.fetchone() == ("running",)
                 cur.execute("SELECT status FROM llm_config_version WHERE id=%s", (second_draft["version_id"],))
                 assert cur.fetchone() == ("pending_publish",)
+                cur.execute("SELECT status FROM llm_release_record WHERE config_version_id=%s", (running["version_id"],))
+                assert cur.fetchone() == ("running",)
+                cur.execute("SELECT status FROM llm_release_record WHERE config_version_id=%s", (second_draft["version_id"],))
+                assert cur.fetchone() == ("pending",)
         service.update_provider(session, provider["provider_id"], {"enabled": False, "reason": "integration", "idempotency_key": "integration-disable"}, expected_revision=3)
         with pytest.raises(HTTPException):
             service.publish(session, second_draft["version_id"], {"expected_revision": second_pending["revision"], "reason": "integration", "idempotency_key": "integration-publish-two"})
@@ -461,7 +600,7 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
         assert {row["currency"] for row in service.usage_timeseries(session, {"organization_id": organization_id})} == {"CNY", "USD"}
         assert {row["currency"] for row in service.usage_breakdown(session, {"organization_id": organization_id}, "model")} == {"CNY", "USD"}
         assert len(service.list_invocations(session, {"organization_id": organization_id, "currency": "CNY", "limit": 1})) == 1
-        assert len(service.list_providers(session)) == 1
+        assert len(service.list_providers(session)) == 2
         service.update_provider(session, provider["provider_id"], {"enabled": True, "reason": "integration", "idempotency_key": "integration-enable"}, expected_revision=4)
         second_running = service.publish(session, second_draft["version_id"], {"expected_revision": second_pending["revision"], "reason": "integration", "idempotency_key": "integration-publish-two-success"})
         assert second_running["status"] == "running"
@@ -474,8 +613,10 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
             with verify_rollback.cursor() as cur:
                 cur.execute("SELECT status FROM llm_config_version WHERE id=%s", (second_running["version_id"],))
                 assert cur.fetchone() == ("running",)
+                cur.execute("SELECT status FROM llm_release_record WHERE config_version_id=%s", (second_running["version_id"],))
+                assert cur.fetchone() == ("running",)
                 cur.execute("SELECT count(*) FROM llm_config_version WHERE organization_id=%s", (organization_id,))
-                assert cur.fetchone() == (2,)
+                assert cur.fetchone() == (5,)
         rolled_back = service.rollback(session, second_running["version_id"], {"reason": "integration", "idempotency_key": "integration-rollback-running"})
         assert rolled_back["status"] == "running"
         assert rolled_back["rollback_of_version_id"] == second_running["version_id"]
@@ -486,3 +627,9 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
         with psycopg.connect(database_url, autocommit=True) as cleanup:
             with cleanup.cursor() as cur:
                 cur.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema_name)))
+
+
+def test_service_integration_never_falls_back_to_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TEST_DATABASE_URL", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://must-not-be-used")
+    assert _integration_database_url() is None
