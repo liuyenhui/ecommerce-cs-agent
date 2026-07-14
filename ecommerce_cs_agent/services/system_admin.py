@@ -17,6 +17,9 @@ _RAW_TRACE_CAPABILITY = "trace:raw_payload:read"
 
 
 class SystemAdminRepository(Protocol):
+    def dashboard_summary(self, session: SystemAdminSession) -> dict[str, Any]:
+        raise NotImplementedError
+
     def list_users(self, session: SystemAdminSession) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -88,8 +91,26 @@ class InMemorySystemAdminRepository:
                 "created_at": _now(),
             }
         }
+        self.decisions: dict[str, dict[str, Any]] = {}
         self.tasks: dict[str, dict[str, Any]] = {}
         self.audit_logs: list[dict[str, Any]] = []
+
+    def dashboard_summary(self, session: SystemAdminSession) -> dict[str, Any]:
+        decisions_today = [item for item in self.decisions.values() if _is_today(item.get("created_at"))]
+        decision_count = len(decisions_today)
+        self._audit(session, "system_admin.dashboard.get", "system_dashboard", "summary", {})
+        return {
+            "active_organizations": sum(item.get("status") == "active" for item in self.organizations.values()),
+            "active_stores": sum(item.get("status") == "active" for item in self.stores.values()),
+            "decisions_today": decision_count,
+            "auto_reply_rate": _rate(sum(item.get("decision_type") == "auto_reply" for item in decisions_today), decision_count),
+            "handoff_rate": _rate(sum(item.get("decision_type") == "handoff" for item in decisions_today), decision_count),
+            "error_rate": _rate(sum(item.get("status") in {"error", "failed"} for item in decisions_today), decision_count),
+            "readiness_blockers": sum(item.get("readiness_status") == "blocked" for item in self.stores.values()),
+            "pending_tasks": sum(item.get("status") in {"queued", "running"} for item in self.tasks.values()),
+            "critical_alerts": sum(item.get("status") == "failed" for item in self.tasks.values()),
+            "generated_at": _now(),
+        }
 
     def list_users(self, session: SystemAdminSession) -> dict[str, Any]:
         self._require_any_role(session, {"super_admin", "security_auditor"})
@@ -322,6 +343,87 @@ class PostgresSystemAdminRepository:
 
         self._connect = psycopg.connect
         self._database_url = database_url
+
+    def dashboard_summary(self, session: SystemAdminSession) -> dict[str, Any]:
+        with self._connect(self._database_url) as conn:
+            with conn.cursor() as cur:
+                self._audit(cur, session, None, None, "system_admin.dashboard.get", "system_dashboard", "summary", {})
+                cur.execute(
+                    """
+                    WITH organization_totals AS (
+                        SELECT count(*) FILTER (WHERE status = 'active') AS active_organizations
+                        FROM organization
+                    ),
+                    store_totals AS (
+                        SELECT
+                            count(*) FILTER (WHERE status = 'active') AS active_stores,
+                            count(*) FILTER (
+                                WHERE status = 'active'
+                                  AND NOT EXISTS (SELECT 1 FROM product WHERE product.store_id = store.id)
+                            ) AS readiness_blockers
+                        FROM store
+                    ),
+                    decision_totals AS (
+                        SELECT
+                            count(*) FILTER (
+                                WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP)
+                            ) AS decisions_today,
+                            count(*) FILTER (
+                                WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP)
+                                  AND decision_type = 'auto_reply'
+                            )::double precision
+                                / NULLIF(count(*) FILTER (
+                                    WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP)
+                                ), 0) AS auto_reply_rate,
+                            count(*) FILTER (
+                                WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP)
+                                  AND decision_type = 'handoff'
+                            )::double precision
+                                / NULLIF(count(*) FILTER (
+                                    WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP)
+                                ), 0) AS handoff_rate,
+                            count(*) FILTER (
+                                WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP)
+                                  AND status IN ('error', 'failed')
+                            )::double precision
+                                / NULLIF(count(*) FILTER (
+                                    WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP)
+                                ), 0) AS error_rate
+                        FROM decision_record
+                    ),
+                    task_totals AS (
+                        SELECT
+                            count(*) FILTER (WHERE status IN ('queued', 'running')) AS pending_tasks,
+                            count(*) FILTER (WHERE status = 'failed') AS critical_alerts
+                        FROM background_task
+                    )
+                    SELECT
+                        organization_totals.active_organizations,
+                        store_totals.active_stores,
+                        decision_totals.decisions_today,
+                        decision_totals.auto_reply_rate,
+                        decision_totals.handoff_rate,
+                        decision_totals.error_rate,
+                        store_totals.readiness_blockers,
+                        task_totals.pending_tasks,
+                        task_totals.critical_alerts,
+                        CURRENT_TIMESTAMP
+                    FROM organization_totals, store_totals, decision_totals, task_totals
+                    """
+                )
+                row = cur.fetchone()
+        return {
+            "active_organizations": int(row[0] or 0),
+            "active_stores": int(row[1] or 0),
+            "decisions_today": int(row[2] or 0),
+            "auto_reply_rate": None if row[3] is None else float(row[3]),
+            "handoff_rate": None if row[4] is None else float(row[4]),
+            "error_rate": None if row[5] is None else float(row[5]),
+            "readiness_blockers": int(row[6] or 0),
+            "pending_tasks": int(row[7] or 0),
+            "critical_alerts": int(row[8] or 0),
+            "generated_at": row[9],
+        }
 
     def list_users(self, session: SystemAdminSession) -> dict[str, Any]:
         self._require_any_role(session, {"super_admin", "security_auditor"})
@@ -1108,6 +1210,25 @@ def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         parsed = default
     return max(minimum, min(maximum, parsed))
+
+
+def _rate(numerator: int, denominator: int) -> float | None:
+    return numerator / denominator if denominator else None
+
+
+def _is_today(value: Any) -> bool:
+    if isinstance(value, datetime):
+        timestamp = value
+    elif isinstance(value, str):
+        try:
+            timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+    else:
+        return False
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(timezone.utc).date() == datetime.now(timezone.utc).date()
 
 
 def _system_user(user_id: str, email: str, display_name: str, roles: list[str], status: str = "active") -> dict[str, Any]:

@@ -594,6 +594,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def get_system_health(session: Any = Depends(system_session)) -> dict[str, Any]:
         return system_admin_data.system_health(session)
 
+    @app.get("/v1/system-admin/dashboard-summary")
+    def get_system_dashboard_summary(session: Any = Depends(system_session)) -> dict[str, Any]:
+        return system_admin_data.dashboard_summary(session)
+
     @app.get("/v1/system-admin/readiness/stores")
     def list_system_store_readiness(request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
         return system_admin_data.store_readiness(session, _query_filters(request))

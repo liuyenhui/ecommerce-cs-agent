@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -21,6 +22,11 @@ def _test_app():
     return create_app(Settings(environment="test", database_url=None))
 
 
+def _system_session():
+    service = InMemorySystemAdminAuthService(Settings(environment="test", database_url=None))
+    return service.require_session("agent_system_admin_session=test-system-session", None)[1]
+
+
 def test_system_admin_repository_allows_in_memory_only_in_test() -> None:
     repository = system_admin_repository_for(Settings(environment="test", database_url=None))
 
@@ -30,6 +36,79 @@ def test_system_admin_repository_allows_in_memory_only_in_test() -> None:
 def test_system_admin_repository_requires_database_outside_test() -> None:
     with pytest.raises(RuntimeError, match="DATABASE_URL is required for System Admin"):
         system_admin_repository_for(Settings(environment="development", database_url=None))
+
+
+def test_system_admin_dashboard_summary_contract() -> None:
+    client = TestClient(_test_app())
+
+    response = client.get(
+        "/v1/system-admin/dashboard-summary",
+        headers={"Cookie": "agent_system_admin_session=test-system-session"},
+    )
+
+    assert response.status_code == 200
+    assert set(response.json()) == {
+        "active_organizations",
+        "active_stores",
+        "decisions_today",
+        "auto_reply_rate",
+        "handoff_rate",
+        "error_rate",
+        "readiness_blockers",
+        "pending_tasks",
+        "critical_alerts",
+        "generated_at",
+    }
+    assert response.json()["auto_reply_rate"] is None
+    assert response.json()["handoff_rate"] is None
+    assert response.json()["error_rate"] is None
+
+    customer_session = client.get(
+        "/v1/system-admin/dashboard-summary",
+        headers={"Cookie": "agent_admin_session=test-admin-session"},
+    )
+    missing_session = client.get("/v1/system-admin/dashboard-summary")
+
+    assert customer_session.status_code == 403
+    assert missing_session.status_code == 401
+
+
+def test_in_memory_system_admin_dashboard_summary_uses_explicit_fixture_collections() -> None:
+    now = datetime.now(timezone.utc)
+    repository = InMemorySystemAdminRepository()
+    repository.organizations = {
+        "org-active": {"status": "active"},
+        "org-suspended": {"status": "suspended"},
+    }
+    repository.stores = {
+        "store-ready": {"status": "active", "readiness_status": "ready"},
+        "store-blocked": {"status": "active", "readiness_status": "blocked"},
+        "store-inactive": {"status": "inactive", "readiness_status": "ready"},
+    }
+    repository.decisions = {
+        "auto": {"decision_type": "auto_reply", "status": "completed", "created_at": now},
+        "handoff": {"decision_type": "handoff", "status": "completed", "created_at": now},
+        "error": {"decision_type": "candidate", "status": "failed", "created_at": now},
+        "old": {"decision_type": "auto_reply", "status": "completed", "created_at": now - timedelta(days=1)},
+    }
+    repository.tasks = {
+        "queued": {"status": "queued"},
+        "running": {"status": "running"},
+        "failed": {"status": "failed"},
+        "done": {"status": "completed"},
+    }
+
+    response = repository.dashboard_summary(_system_session())
+
+    assert response["active_organizations"] == 1
+    assert response["active_stores"] == 2
+    assert response["decisions_today"] == 3
+    assert response["auto_reply_rate"] == pytest.approx(1 / 3)
+    assert response["handoff_rate"] == pytest.approx(1 / 3)
+    assert response["error_rate"] == pytest.approx(1 / 3)
+    assert response["readiness_blockers"] == 1
+    assert response["pending_tasks"] == 2
+    assert response["critical_alerts"] == 1
 
 
 def test_system_admin_message_traces_require_scope_and_use_repository_policy() -> None:
@@ -113,6 +192,74 @@ def test_system_admin_organization_store_and_audit_are_repository_backed() -> No
     assert "page_info" in tasks.json()
     assert audit.status_code == 200
     assert audit.json()["items"][0]["action"].startswith("system_admin.")
+
+
+def test_system_admin_dashboard_summary_uses_postgres_total_aggregates(monkeypatch) -> None:
+    connection = _FakeConnection(
+        fetch_rows=[
+            (
+                123,
+                456,
+                789,
+                0.25,
+                0.125,
+                0.05,
+                7,
+                11,
+                2,
+                "2026-07-14T08:00:00Z",
+            )
+        ]
+    )
+
+    def fake_repo_init(self: PostgresSystemAdminRepository, database_url: str) -> None:
+        self._database_url = database_url
+        self._connect = lambda _url: connection
+
+    monkeypatch.setattr(app_module, "system_admin_auth_service_for", lambda settings: InMemorySystemAdminAuthService(settings))
+    monkeypatch.setattr(PostgresSystemAdminRepository, "__init__", fake_repo_init)
+
+    client = TestClient(create_app(Settings(database_url="postgresql://example", environment="development")))
+    response = client.get(
+        "/v1/system-admin/dashboard-summary",
+        headers={"Cookie": "agent_system_admin_session=test-system-session"},
+    )
+
+    executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    assert response.status_code == 200
+    assert response.json() == {
+        "active_organizations": 123,
+        "active_stores": 456,
+        "decisions_today": 789,
+        "auto_reply_rate": 0.25,
+        "handoff_rate": 0.125,
+        "error_rate": 0.05,
+        "readiness_blockers": 7,
+        "pending_tasks": 11,
+        "critical_alerts": 2,
+        "generated_at": "2026-07-14T08:00:00Z",
+    }
+    assert "FROM organization" in executed_sql
+    assert "FROM store" in executed_sql
+    assert "FROM decision_record" in executed_sql
+    assert "FROM background_task" in executed_sql
+    assert "NULLIF" in executed_sql
+    assert "LIMIT" not in executed_sql
+    assert "OFFSET" not in executed_sql
+    assert executed_sql.count("INSERT INTO system_admin_audit_log") == 1
+
+
+def test_postgres_system_admin_dashboard_summary_maps_zero_denominator_rates_to_none() -> None:
+    connection = _FakeConnection(fetch_rows=[(0, 0, 0, None, None, None, 0, 0, 0, "2026-07-14T08:00:00Z")])
+    repository = PostgresSystemAdminRepository.__new__(PostgresSystemAdminRepository)
+    repository._database_url = "postgresql://example"
+    repository._connect = lambda _url: connection
+
+    response = repository.dashboard_summary(_system_session())
+
+    assert response["auto_reply_rate"] is None
+    assert response["handoff_rate"] is None
+    assert response["error_rate"] is None
 
 
 def test_system_admin_api_uses_postgres_repository_when_database_url_is_configured(monkeypatch) -> None:
