@@ -146,7 +146,7 @@ KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent
 
 检查 Deployment 的 `LLM_API_KEY.valueFrom.secretKeyRef` 是否指向专用 Secret，并检查 Role 的 `resourceNames` 是否包含相同 Secret 名。不要要求或恢复 `ecommerce-cs-agent-runtime` 中的 `LLM_API_KEY`，也不要输出 Secret 数据、环境变量值或解码结果。
 
-检查 `allowedOrigins` 时只核对 origin 和 Secret/key 名称，不要读取凭据值。Provider 连接测试要求所有 DNS 结果均为公网地址，并在一次请求内固定已验证 IP；内部 Provider、重定向和 DNS 混合解析属于预期拒绝。Kubernetes Secret 读取不使用业务 Pod 的 Provider 代理。DNS、Secret 读取和 Provider 请求共享 20 秒总截止时间，任一阶段耗尽后不会继续下一阶段。
+检查 `allowedOrigins` 时只核对 origin 和 Secret/key 名称，不要读取凭据值。Provider 连接测试要求所有 DNS 结果均为公网地址，并在一次请求内固定已验证 IP；内部 Provider、重定向和 DNS 混合解析属于预期拒绝。Kubernetes Secret 读取不使用业务 Pod 的 Provider 代理。DNS、Secret 读取和 Provider 请求共享 20 秒绝对截止时间；TCP、CONNECT、TLS、请求头和分块响应体每阶段都只使用剩余时间，socket 到期 guard 会关闭仍在慢速读写的连接，任一阶段耗尽后不会继续下一阶段。
 
 日志中如包含 provider 请求头、key、prompt 原文或客户 payload，先脱敏再分享。
 

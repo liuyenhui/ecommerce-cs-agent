@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from pathlib import Path
 from urllib.error import HTTPError
 
@@ -14,6 +15,16 @@ from ecommerce_cs_agent.services.llm_governance_adapters import (
     _KubernetesApiTransport,
     _PinnedProviderTransport,
 )
+
+
+def _deadline(seconds: float) -> object:
+    deadline_type = getattr(adapter_module, "_Deadline", None)
+    assert deadline_type is not None, "transport deadline abstraction is required"
+    return deadline_type(time.monotonic() + seconds)
+
+
+def _remaining(deadline: object) -> float:
+    return getattr(deadline, "remaining")()
 
 
 def _provider(provider_type: str = "openai") -> dict[str, object]:
@@ -32,7 +43,7 @@ def test_kubernetes_secret_tester_resolves_secret_and_probes_openai_without_leak
     ca_file.write_text("test-ca", encoding="utf-8")
     requests: list[object] = []
 
-    def transport(request: object, timeout: float, _ca_file: str | None) -> tuple[int, bytes]:
+    def transport(request: object, deadline: object, _ca_file: str | None) -> tuple[int, bytes]:
         requests.append(request)
         if str(request.full_url).startswith("https://10.0.0.1:443/api/"):
             assert request.headers["Authorization"] == "Bearer service-account-token"
@@ -41,7 +52,7 @@ def test_kubernetes_secret_tester_resolves_secret_and_probes_openai_without_leak
         assert request.full_url == "https://models.example.test/v1/models"
         assert request.headers["Authorization"] == "Bearer provider-secret"
         assert "provider-secret" not in request.full_url
-        assert timeout <= 20
+        assert _remaining(deadline) <= 20
         return 200, b"{}"
 
     tester = KubernetesSecretProviderConnectionTester(
@@ -54,7 +65,7 @@ def test_kubernetes_secret_tester_resolves_secret_and_probes_openai_without_leak
             ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
         },
         kubernetes_transport=transport,
-        provider_transport=lambda request, timeout, _ip, _host: transport(request, timeout, None),
+        provider_transport=lambda request, deadline, _ip, _host: transport(request, deadline, None),
         resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
         monotonic=lambda: 1.0,
     )
@@ -323,7 +334,7 @@ def test_kubernetes_secret_tester_uses_standard_azure_models_url(
     token_file.write_text("sa", encoding="utf-8")
     ca_file.write_text("ca", encoding="utf-8")
 
-    def transport(request: object, timeout: float, _ca_file: str | None) -> tuple[int, bytes]:
+    def transport(request: object, deadline: object, _ca_file: str | None) -> tuple[int, bytes]:
         if "/api/v1/namespaces/" in request.full_url:
             return 200, json.dumps({"data": {"api-key": base64.b64encode(b"secret").decode()}}).encode()
         assert request.full_url == expected_url
@@ -332,7 +343,7 @@ def test_kubernetes_secret_tester_uses_standard_azure_models_url(
             "Host": "azure.example.test",
             "Api-key": "secret",
         }
-        assert 0 < timeout <= 3.0
+        assert 0 < _remaining(deadline) <= 3.0
         assert "secret" not in request.full_url
         assert "?" not in request.full_url
         return 200, b"{}"
@@ -347,7 +358,7 @@ def test_kubernetes_secret_tester_uses_standard_azure_models_url(
             ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://azure.example.test"}
         },
         kubernetes_transport=transport,
-        provider_transport=lambda request, timeout, _ip, _host: transport(request, timeout, None),
+        provider_transport=lambda request, deadline, _ip, _host: transport(request, deadline, None),
         resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
     )
     provider = _provider("azure_openai")
@@ -493,15 +504,18 @@ def test_single_deadline_passes_only_remaining_time_to_provider(tmp_path: Path) 
     token_file.write_text("sa", encoding="utf-8")
     ca_file.write_text("ca", encoding="utf-8")
     clock = [0.0]
+    deadlines: list[object] = []
     provider_timeouts: list[float] = []
 
-    def kubernetes_transport(_request: object, timeout: float, _ca: str | None) -> tuple[int, bytes]:
-        assert timeout == pytest.approx(20.0)
+    def kubernetes_transport(_request: object, deadline: object, _ca: str | None) -> tuple[int, bytes]:
+        deadlines.append(deadline)
+        assert _remaining(deadline) == pytest.approx(20.0)
         clock[0] = 12.0
         return 200, json.dumps({"data": {"api-key": base64.b64encode(b"secret").decode()}}).encode()
 
-    def provider_transport(_request: object, timeout: float, _ip: str, _host: str) -> tuple[int, bytes]:
-        provider_timeouts.append(timeout)
+    def provider_transport(_request: object, deadline: object, _ip: str, _host: str) -> tuple[int, bytes]:
+        deadlines.append(deadline)
+        provider_timeouts.append(_remaining(deadline))
         return 200, b"{}"
 
     tester = KubernetesSecretProviderConnectionTester(
@@ -520,6 +534,7 @@ def test_single_deadline_passes_only_remaining_time_to_provider(tmp_path: Path) 
     )
 
     assert tester(_provider(), {"timeout_seconds": 20})["status"] == "passed"
+    assert deadlines[0] is deadlines[1]
     assert provider_timeouts == [pytest.approx(8.0)]
 
 
@@ -556,10 +571,58 @@ def test_exhausted_deadline_after_secret_resolution_does_not_call_provider(tmp_p
     assert provider_calls == []
 
 
+def test_exhausted_deadline_after_provider_response_is_canonical_timeout(tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("sa", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+    clock = [0.0]
+
+    def kubernetes_transport(_request: object, _deadline: object, _ca: str | None) -> tuple[int, bytes]:
+        return 200, json.dumps({"data": {"api-key": base64.b64encode(b"secret").decode()}}).encode()
+
+    def provider_transport(_request: object, _deadline: object, _ip: str, _host: str) -> tuple[int, bytes]:
+        clock[0] = 21.0
+        return 200, b"{}"
+
+    tester = KubernetesSecretProviderConnectionTester(
+        kubernetes_host="10.96.0.1",
+        kubernetes_port=443,
+        service_account_token_file=str(token_file),
+        kubernetes_ca_file=str(ca_file),
+        allowed_namespace="runtime",
+        allowed_secret_origins={
+            ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
+        },
+        kubernetes_transport=kubernetes_transport,
+        provider_transport=provider_transport,
+        resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
+        monotonic=lambda: clock[0],
+    )
+
+    result = tester(_provider(), {"timeout_seconds": 20})
+
+    assert result["status"] == "failed"
+    assert result["error_code"] == "timeout"
+    assert set(result) == {"status", "latency_ms", "error_code"}
+
+
 def test_default_kubernetes_transport_ignores_https_proxy_and_targets_only_cluster_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: dict[str, object] = {}
+
+    class RawSocket:
+        def settimeout(self, timeout: float) -> None: calls["socket_timeout"] = timeout
+        def shutdown(self, _how: int) -> None: return None
+        def close(self) -> None: calls["socket_closed"] = True
+
+    raw_socket = RawSocket()
+
+    class Context:
+        def wrap_socket(self, sock: object, *, server_hostname: str) -> object:
+            calls.update(wrapped_socket=sock, server_hostname=server_hostname)
+            return sock
 
     class Response:
         status = 200
@@ -570,6 +633,7 @@ def test_default_kubernetes_transport_ignores_https_proxy_and_targets_only_clust
     class Connection:
         def __init__(self, host: str, port: int, **kwargs: object) -> None:
             calls.update(host=host, port=port, kwargs=kwargs)
+            self.sock: object | None = None
 
         def request(self, method: str, path: str, headers: dict[str, str]) -> None:
             calls.update(method=method, path=path, headers=headers)
@@ -581,21 +645,28 @@ def test_default_kubernetes_transport_ignores_https_proxy_and_targets_only_clust
             calls["closed"] = True
 
     monkeypatch.setenv("HTTPS_PROXY", "https://attacker.invalid:8443")
-    monkeypatch.setattr(adapter_module.http.client, "HTTPSConnection", Connection)
-    monkeypatch.setattr(adapter_module.ssl, "create_default_context", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        adapter_module.socket,
+        "create_connection",
+        lambda address, timeout: calls.update(socket_address=address) or raw_socket,
+    )
+    monkeypatch.setattr(adapter_module.http.client, "HTTPConnection", Connection)
+    monkeypatch.setattr(adapter_module.ssl, "create_default_context", lambda **_kwargs: Context())
 
     status, body = _KubernetesApiTransport()(
         adapter_module.Request(
             "https://10.96.0.1:443/api/v1/namespaces/runtime/secrets/llm",
             headers={"Authorization": "Bearer token"},
         ),
-        5.0,
+        _deadline(5.0),
         "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
     )
 
     assert (status, body) == (200, b"{}")
     assert calls["host"] == "10.96.0.1"
     assert calls["port"] == 443
+    assert calls["socket_address"] == ("10.96.0.1", 443)
+    assert calls["server_hostname"] == "10.96.0.1"
     assert calls["path"] == "/api/v1/namespaces/runtime/secrets/llm"
     assert "attacker.invalid" not in repr(calls)
 
@@ -638,7 +709,12 @@ def test_default_provider_transport_connects_to_pinned_ip_with_original_tls_sni(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: dict[str, object] = {}
-    raw_socket = object()
+    class RawSocket:
+        def settimeout(self, timeout: float) -> None: calls["socket_timeout"] = timeout
+        def shutdown(self, _how: int) -> None: return None
+        def close(self) -> None: calls["socket_closed"] = True
+
+    raw_socket = RawSocket()
 
     class Context:
         def wrap_socket(self, sock: object, *, server_hostname: str) -> object:
@@ -678,7 +754,7 @@ def test_default_provider_transport_connects_to_pinned_ip_with_original_tls_sni(
             "https://models.example.test/models",
             headers={"Host": "models.example.test", "Authorization": "Bearer secret"},
         ),
-        5.0,
+        _deadline(5.0),
         "93.184.216.34",
         "models.example.test",
     )
@@ -687,6 +763,174 @@ def test_default_provider_transport_connects_to_pinned_ip_with_original_tls_sni(
     assert calls["socket_address"] == ("93.184.216.34", 443)
     assert calls["server_hostname"] == "models.example.test"
     assert calls["headers"] == {"Host": "models.example.test", "Authorization": "Bearer secret"}
+
+
+def test_provider_transport_enforces_one_deadline_across_tcp_tls_and_http_stages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SlowSocket:
+        def settimeout(self, _timeout: float) -> None: return None
+        def shutdown(self, _how: int) -> None: return None
+        def close(self) -> None: return None
+
+    slow_socket = SlowSocket()
+
+    class Context:
+        def wrap_socket(self, sock: object, *, server_hostname: str) -> object:
+            assert server_hostname == "models.example.test"
+            time.sleep(0.04)
+            return sock
+
+    class Connection:
+        def __init__(self, _host: str, _port: int, timeout: float) -> None:
+            self.sock: object | None = None
+        def request(self, _method: str, _path: str, headers: dict[str, str]) -> None:
+            time.sleep(0.04)
+        def getresponse(self) -> object:
+            raise AssertionError("deadline must expire before reading the response")
+        def close(self) -> None:
+            raise OSError("socket was closed by deadline guard")
+
+    def slow_connect(_address: object, timeout: float) -> SlowSocket:
+        assert 0 < timeout <= 0.1
+        time.sleep(0.04)
+        return slow_socket
+
+    monkeypatch.setattr(adapter_module.socket, "create_connection", slow_connect)
+    monkeypatch.setattr(adapter_module.ssl, "create_default_context", lambda: Context())
+    monkeypatch.setattr(adapter_module.http.client, "HTTPConnection", Connection)
+    started = time.monotonic()
+
+    with pytest.raises(TimeoutError):
+        _PinnedProviderTransport()(
+            adapter_module.Request("https://models.example.test/models"),
+            _deadline(0.1),
+            "93.184.216.34",
+            "models.example.test",
+        )
+
+    assert time.monotonic() - started < 0.25
+
+
+def test_deadline_guard_socket_oserror_and_close_error_remain_canonical_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [0.0]
+
+    class Socket:
+        def settimeout(self, _timeout: float) -> None: return None
+        def shutdown(self, _how: int) -> None: return None
+        def close(self) -> None: return None
+
+    sock = Socket()
+
+    class Context:
+        def wrap_socket(self, value: object, *, server_hostname: str) -> object:
+            return value
+
+    class Connection:
+        def __init__(self, _host: str, _port: int, timeout: float) -> None:
+            self.sock: object | None = None
+        def request(self, _method: str, _path: str, headers: dict[str, str]) -> None:
+            clock[0] = 2.0
+            raise OSError("deadline guard closed socket")
+        def close(self) -> None:
+            raise OSError("already closed")
+
+    deadline_type = getattr(adapter_module, "_Deadline")
+    monkeypatch.setattr(adapter_module.socket, "create_connection", lambda *_args, **_kwargs: sock)
+    monkeypatch.setattr(adapter_module.ssl, "create_default_context", lambda: Context())
+    monkeypatch.setattr(adapter_module.http.client, "HTTPConnection", Connection)
+
+    with pytest.raises(TimeoutError):
+        _PinnedProviderTransport()(
+            adapter_module.Request("https://models.example.test/models"),
+            deadline_type(1.0, lambda: clock[0]),
+            "93.184.216.34",
+            "models.example.test",
+        )
+
+
+def test_proxy_connect_slow_fragments_share_the_provider_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SlowProxySocket:
+        def __init__(self) -> None:
+            self.fragments = [b"HTTP/1.1 200 ", b"Connection established\r\n\r\n"]
+        def settimeout(self, _timeout: float) -> None: return None
+        def sendall(self, _value: bytes) -> None: return None
+        def recv(self, _size: int) -> bytes:
+            time.sleep(0.06)
+            return self.fragments.pop(0)
+        def shutdown(self, _how: int) -> None: return None
+        def close(self) -> None: return None
+
+    proxy_socket = SlowProxySocket()
+    monkeypatch.setattr(adapter_module.socket, "create_connection", lambda *_args, **_kwargs: proxy_socket)
+    started = time.monotonic()
+
+    with pytest.raises(TimeoutError):
+        _PinnedProviderTransport("http://proxy.example:8080")(
+            adapter_module.Request("https://models.example.test/models"),
+            _deadline(0.1),
+            "93.184.216.34",
+            "models.example.test",
+        )
+
+    assert time.monotonic() - started < 0.25
+
+
+def test_kubernetes_transport_enforces_one_deadline_across_tls_and_body_stages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SlowSocket:
+        def settimeout(self, _timeout: float) -> None: return None
+        def shutdown(self, _how: int) -> None: return None
+        def close(self) -> None: return None
+
+    slow_socket = SlowSocket()
+
+    class Context:
+        def wrap_socket(self, sock: object, *, server_hostname: str) -> object:
+            assert server_hostname == "10.96.0.1"
+            time.sleep(0.03)
+            return sock
+
+    class Response:
+        status = 200
+        def read(self, _limit: int) -> bytes:
+            time.sleep(0.03)
+            return b"{}"
+
+    class Connection:
+        def __init__(self, _host: str, _port: int, **_kwargs: object) -> None:
+            self.sock: object | None = None
+        def request(self, _method: str, _path: str, headers: dict[str, str]) -> None:
+            time.sleep(0.03)
+        def getresponse(self) -> Response:
+            time.sleep(0.03)
+            return Response()
+        def close(self) -> None: return None
+
+    def slow_connect(_address: object, timeout: float) -> SlowSocket:
+        assert 0 < timeout <= 0.1
+        time.sleep(0.03)
+        return slow_socket
+
+    monkeypatch.setattr(adapter_module.socket, "create_connection", slow_connect)
+    monkeypatch.setattr(adapter_module.ssl, "create_default_context", lambda **_kwargs: Context())
+    monkeypatch.setattr(adapter_module.http.client, "HTTPSConnection", Connection)
+    monkeypatch.setattr(adapter_module.http.client, "HTTPConnection", Connection)
+    started = time.monotonic()
+
+    with pytest.raises(TimeoutError):
+        _KubernetesApiTransport()(
+            adapter_module.Request("https://10.96.0.1/api/v1/namespaces/runtime/secrets/provider"),
+            _deadline(0.1),
+            "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+        )
+
+    assert time.monotonic() - started < 0.25
 
 
 @pytest.mark.parametrize(
@@ -713,7 +957,7 @@ def test_provider_transport_fails_closed_for_unsupported_proxy_urls(
     with pytest.raises(ValueError, match="unsupported_proxy"):
         _PinnedProviderTransport(proxy_url)(
             adapter_module.Request("https://models.example.test/models"),
-            5.0,
+            _deadline(5.0),
             "93.184.216.34",
             "models.example.test",
         )
@@ -736,6 +980,12 @@ def test_http_proxy_uses_connect_to_pinned_ip_before_tls_and_never_receives_prov
 
         def recv(self, _size: int) -> bytes:
             return self.responses.pop(0) if self.responses else b""
+
+        def settimeout(self, timeout: float) -> None:
+            calls["socket_timeout"] = timeout
+
+        def shutdown(self, _how: int) -> None:
+            return None
 
         def close(self) -> None:
             calls["proxy_closed"] = True
@@ -779,7 +1029,7 @@ def test_http_proxy_uses_connect_to_pinned_ip_before_tls_and_never_receives_prov
             "https://models.example.test/models",
             headers={"Host": "models.example.test", "Authorization": "Bearer secret"},
         ),
-        5.0,
+        _deadline(5.0),
         "93.184.216.34",
         "models.example.test",
     )

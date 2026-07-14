@@ -22,8 +22,8 @@ from urllib.request import Request
 import psycopg
 
 
-KubernetesTransport = Callable[[Request, float, str | None], tuple[int, bytes]]
-ProviderTransport = Callable[[Request, float, str, str], tuple[int, bytes]]
+KubernetesTransport = Callable[[Request, "_Deadline", str | None], tuple[int, bytes]]
+ProviderTransport = Callable[[Request, "_Deadline", str, str], tuple[int, bytes]]
 Resolver = Callable[[str, int, float], list[str]]
 _SECRET_REF = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?$")
 _SECRET_KEY = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
@@ -32,6 +32,51 @@ _MAX_RESPONSE_BYTES = 1024 * 1024
 
 class _SecurityPolicyError(ValueError):
     pass
+
+
+class _Deadline:
+    def __init__(self, end: float, monotonic: Callable[[], float] = time.monotonic) -> None:
+        self.end = end
+        self._monotonic = monotonic
+
+    def remaining(self) -> float:
+        value = self.end - self._monotonic()
+        if value <= 0:
+            raise TimeoutError
+        return value
+
+    def expired(self) -> bool:
+        return self.end - self._monotonic() <= 0
+
+
+class _SocketDeadlineGuard:
+    def __init__(self, sock: Any, deadline: _Deadline) -> None:
+        self._lock = threading.Lock()
+        self._socket = sock
+        self.expired = False
+        self._timer = threading.Timer(deadline.remaining(), self._expire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def replace_socket(self, sock: Any) -> None:
+        with self._lock:
+            self._socket = sock
+
+    def _expire(self) -> None:
+        with self._lock:
+            self.expired = True
+            sock = self._socket
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except (AttributeError, OSError):
+            pass
+        try:
+            sock.close()
+        except (AttributeError, OSError):
+            pass
+
+    def cancel(self) -> None:
+        self._timer.cancel()
 
 
 def _contains_control(value: str) -> bool:
@@ -92,45 +137,101 @@ def _bounded_resolver(host: str, port: int, timeout: float) -> list[str]:
     return outcome
 
 
-def _read_bounded(response: http.client.HTTPResponse) -> bytes:
-    body = response.read(_MAX_RESPONSE_BYTES + 1)
-    if len(body) > _MAX_RESPONSE_BYTES:
-        raise _SecurityPolicyError("response_too_large")
-    return body
+def _set_deadline_timeout(sock: Any, deadline: _Deadline) -> None:
+    sock.settimeout(deadline.remaining())
+
+
+def _read_bounded(response: http.client.HTTPResponse, deadline: _Deadline, sock: Any) -> bytes:
+    read1 = getattr(response, "read1", None)
+    if not callable(read1):
+        _set_deadline_timeout(sock, deadline)
+        body = response.read(_MAX_RESPONSE_BYTES + 1)
+        deadline.remaining()
+        if len(body) > _MAX_RESPONSE_BYTES:
+            raise _SecurityPolicyError("response_too_large")
+        return body
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        _set_deadline_timeout(sock, deadline)
+        chunk = read1(min(64 * 1024, _MAX_RESPONSE_BYTES + 1 - total))
+        deadline.remaining()
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > _MAX_RESPONSE_BYTES:
+            raise _SecurityPolicyError("response_too_large")
+
+
+def _guard_socket(sock: Any, deadline: _Deadline) -> _SocketDeadlineGuard:
+    try:
+        return _SocketDeadlineGuard(sock, deadline)
+    except Exception:
+        try:
+            sock.close()
+        except (AttributeError, OSError):
+            pass
+        raise
+
+
+def _safe_close(value: Any) -> None:
+    try:
+        value.close()
+    except (AttributeError, OSError):
+        pass
 
 
 class _KubernetesApiTransport:
     """In-cluster HTTPS only; intentionally has no proxy or redirect support."""
 
-    def __call__(self, request: Request, timeout: float, ca_file: str | None) -> tuple[int, bytes]:
+    def __call__(self, request: Request, deadline: _Deadline, ca_file: str | None) -> tuple[int, bytes]:
         parsed = urlsplit(request.full_url)
-        if parsed.scheme != "https" or not parsed.hostname or not ca_file or timeout <= 0:
+        if parsed.scheme != "https" or not parsed.hostname or not ca_file:
             raise _SecurityPolicyError("invalid_kubernetes_request")
         context = ssl.create_default_context(cafile=ca_file)
-        connection = http.client.HTTPSConnection(
-            parsed.hostname,
-            parsed.port or 443,
-            timeout=timeout,
-            context=context,
-        )
+        port = parsed.port or 443
+        raw_socket = socket.create_connection((parsed.hostname, port), timeout=deadline.remaining())
+        guard = _guard_socket(raw_socket, deadline)
+        connection: http.client.HTTPConnection | None = None
         path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
         try:
+            _set_deadline_timeout(raw_socket, deadline)
+            tls_socket = context.wrap_socket(raw_socket, server_hostname=parsed.hostname)
+            deadline.remaining()
+            guard.replace_socket(tls_socket)
+            connection = http.client.HTTPConnection(parsed.hostname, port, timeout=deadline.remaining())
+            connection.sock = tls_socket
+            _set_deadline_timeout(tls_socket, deadline)
             connection.request("GET", path, headers=dict(request.header_items()))
+            deadline.remaining()
+            _set_deadline_timeout(tls_socket, deadline)
             response = connection.getresponse()
-            return int(response.status), _read_bounded(response)
+            deadline.remaining()
+            return int(response.status), _read_bounded(response, deadline, tls_socket)
+        except Exception:
+            if deadline.expired() or guard.expired:
+                raise TimeoutError from None
+            raise
         finally:
-            connection.close()
+            guard.cancel()
+            if connection is not None:
+                _safe_close(connection)
 
 
-def _proxy_tunnel_socket(proxy_url: str, pinned_ip: str, port: int, timeout: float) -> socket.socket:
+def _proxy_tunnel_socket(
+    proxy_url: str,
+    pinned_ip: str,
+    port: int,
+    deadline: _Deadline,
+) -> tuple[socket.socket, _SocketDeadlineGuard]:
     try:
         proxy = urlsplit(proxy_url)
         proxy_port = proxy.port or 80
     except ValueError:
         raise _SecurityPolicyError("unsupported_proxy") from None
     if (
-        timeout <= 0
-        or _contains_control(proxy_url)
+        _contains_control(proxy_url)
         or proxy.scheme.lower() != "http"
         or not proxy.hostname
         or proxy.username is not None
@@ -141,21 +242,32 @@ def _proxy_tunnel_socket(proxy_url: str, pinned_ip: str, port: int, timeout: flo
         or not 1 <= proxy_port <= 65535
     ):
         raise _SecurityPolicyError("unsupported_proxy")
-    sock = socket.create_connection((proxy.hostname, proxy_port), timeout=timeout)
+    sock = socket.create_connection((proxy.hostname, proxy_port), timeout=deadline.remaining())
+    guard = _guard_socket(sock, deadline)
     authority = f"[{pinned_ip}]:{port}" if ":" in pinned_ip else f"{pinned_ip}:{port}"
     request = f"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n"
-    sock.sendall(request.encode("ascii"))
-    response = bytearray()
-    while b"\r\n\r\n" not in response and len(response) <= 16 * 1024:
-        chunk = sock.recv(4096)
-        if not chunk:
-            break
-        response.extend(chunk)
-    status_line = bytes(response).split(b"\r\n", 1)[0]
-    if not status_line.startswith(b"HTTP/") or b" 200 " not in status_line:
-        sock.close()
-        raise _SecurityPolicyError("proxy_connect_failed")
-    return sock
+    try:
+        _set_deadline_timeout(sock, deadline)
+        sock.sendall(request.encode("ascii"))
+        deadline.remaining()
+        response = bytearray()
+        while b"\r\n\r\n" not in response and len(response) <= 16 * 1024:
+            _set_deadline_timeout(sock, deadline)
+            chunk = sock.recv(4096)
+            deadline.remaining()
+            if not chunk:
+                break
+            response.extend(chunk)
+        status_line = bytes(response).split(b"\r\n", 1)[0]
+        if not status_line.startswith(b"HTTP/") or b" 200 " not in status_line:
+            raise _SecurityPolicyError("proxy_connect_failed")
+        return sock, guard
+    except Exception:
+        guard.cancel()
+        _safe_close(sock)
+        if deadline.expired() or guard.expired:
+            raise TimeoutError from None
+        raise
 
 
 class _PinnedProviderTransport:
@@ -167,30 +279,50 @@ class _PinnedProviderTransport:
     def __call__(
         self,
         request: Request,
-        timeout: float,
+        deadline: _Deadline,
         pinned_ip: str,
         server_hostname: str,
     ) -> tuple[int, bytes]:
         parsed = urlsplit(request.full_url)
         port = parsed.port or 443
-        if parsed.scheme != "https" or timeout <= 0:
+        if parsed.scheme != "https":
             raise _SecurityPolicyError("invalid_provider_request")
-        raw_socket = (
-            _proxy_tunnel_socket(self._proxy_url, pinned_ip, port, timeout)
-            if self._proxy_url
-            else socket.create_connection((pinned_ip, port), timeout=timeout)
-        )
-        context = ssl.create_default_context()
-        tls_socket = context.wrap_socket(raw_socket, server_hostname=server_hostname)
-        connection = http.client.HTTPConnection(pinned_ip, port, timeout=timeout)
-        connection.sock = tls_socket
+        if self._proxy_url:
+            raw_socket, guard = _proxy_tunnel_socket(
+                self._proxy_url, pinned_ip, port, deadline
+            )
+        else:
+            raw_socket = socket.create_connection(
+                (pinned_ip, port), timeout=deadline.remaining()
+            )
+            guard = _guard_socket(raw_socket, deadline)
+        connection: http.client.HTTPConnection | None = None
         path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
         try:
+            context = ssl.create_default_context()
+            _set_deadline_timeout(raw_socket, deadline)
+            tls_socket = context.wrap_socket(raw_socket, server_hostname=server_hostname)
+            deadline.remaining()
+            guard.replace_socket(tls_socket)
+            connection = http.client.HTTPConnection(
+                pinned_ip, port, timeout=deadline.remaining()
+            )
+            connection.sock = tls_socket
+            _set_deadline_timeout(tls_socket, deadline)
             connection.request("GET", path, headers=dict(request.header_items()))
+            deadline.remaining()
+            _set_deadline_timeout(tls_socket, deadline)
             response = connection.getresponse()
-            return int(response.status), _read_bounded(response)
+            deadline.remaining()
+            return int(response.status), _read_bounded(response, deadline, tls_socket)
+        except Exception:
+            if deadline.expired() or guard.expired:
+                raise TimeoutError from None
+            raise
         finally:
-            connection.close()
+            guard.cancel()
+            if connection is not None:
+                _safe_close(connection)
 
 
 class KubernetesSecretProviderConnectionTester:
@@ -343,7 +475,7 @@ class KubernetesSecretProviderConnectionTester:
             raise RuntimeError("Kubernetes runtime LLM Secret reference is invalid")
         return value["name"], value["key"]
 
-    def _resolve_secret(self, reference: Mapping[str, Any], timeout: float) -> str:
+    def _resolve_secret(self, reference: Mapping[str, Any], deadline: _Deadline) -> str:
         namespace, name, key = (reference.get(field) for field in ("namespace", "name", "key"))
         if (
             not self._valid_ref(namespace)
@@ -361,7 +493,8 @@ class KubernetesSecretProviderConnectionTester:
             f"{quote(namespace, safe='')}/secrets/{quote(name, safe='')}"
         )
         request = Request(url, method="GET", headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
-        status, body = self._kubernetes_transport(request, timeout, self._ca_file)
+        status, body = self._kubernetes_transport(request, deadline, self._ca_file)
+        deadline.remaining()
         if 300 <= status < 400:
             raise _SecurityPolicyError("kubernetes_redirect_forbidden")
         if status != 200:
@@ -448,13 +581,7 @@ class KubernetesSecretProviderConnectionTester:
     def __call__(self, provider: dict[str, Any], request_options: dict[str, int]) -> dict[str, Any]:
         started = self._monotonic()
         timeout = float(min(20, max(1, int(request_options.get("timeout_seconds", 20)))))
-        deadline = started + timeout
-
-        def remaining() -> float:
-            value = deadline - self._monotonic()
-            if value <= 0:
-                raise TimeoutError
-            return value
+        deadline = _Deadline(started + timeout, self._monotonic)
 
         try:
             reference = provider.get("secret_ref") or {}
@@ -470,8 +597,8 @@ class KubernetesSecretProviderConnectionTester:
             allowed_origins = self._allowed_secret_origins.get((name, key), frozenset())
             if origin not in allowed_origins:
                 raise _SecurityPolicyError("origin_binding_mismatch")
-            pinned_ip = self._resolve_public_provider_ip(host, port, remaining())
-            secret = self._resolve_secret(reference, remaining())
+            pinned_ip = self._resolve_public_provider_ip(host, port, deadline.remaining())
+            secret = self._resolve_secret(reference, deadline)
             provider_type = str(provider.get("provider_type") or "")
             headers = {"Accept": "application/json", "Host": host_header}
             if provider_type in {"openai", "openai_compatible"}:
@@ -484,10 +611,11 @@ class KubernetesSecretProviderConnectionTester:
                 raise _SecurityPolicyError("invalid_provider_type")
             status, _body = self._provider_transport(
                 Request(probe_url, method="GET", headers=headers),
-                remaining(),
+                deadline,
                 pinned_ip,
                 host,
             )
+            deadline.remaining()
             if 300 <= status < 400:
                 raise _SecurityPolicyError("provider_redirect_forbidden")
             if not 200 <= status < 300:

@@ -2257,6 +2257,7 @@ paths:
           schema: {type: integer, minimum: 1, maximum: 100, default: 50}
         - name: cursor
           in: query
+          description: Opaque cursor for the exclusive page boundary. Reuse only with the same organization_id; changing the organization or supplying an invalid or mismatched scope returns 422.
           schema: {type: string, minLength: 1, maxLength: 1024}
       responses:
         "200":
@@ -2748,6 +2749,7 @@ paths:
           schema: {type: integer, minimum: 1, maximum: 500, default: 100}
         - name: cursor
           in: query
+          description: Opaque cursor for the exclusive page boundary. Reuse only with the same normalized usage filters; changing any filter or supplying an invalid or mismatched scope returns 422.
           schema: {type: string, minLength: 1, maxLength: 1024}
       responses:
         "200":
@@ -3258,11 +3260,15 @@ components:
     LlmPageInfo:
       type: object
       additionalProperties: false
+      description: Cursor pagination metadata. A cursor resumes after an exclusive boundary and must be reused with the same organization for configuration versions or the same filters for invocation usage.
       required: [limit, has_more, next_cursor]
       properties:
         limit: {type: integer, minimum: 1, maximum: 500}
         has_more: {type: boolean}
-        next_cursor: {type: [string, "null"], maxLength: 1024}
+        next_cursor:
+          type: [string, "null"]
+          maxLength: 1024
+          description: Cursor for the next page; null means there is no next page.
 
     LlmUsageSummary:
       type: object

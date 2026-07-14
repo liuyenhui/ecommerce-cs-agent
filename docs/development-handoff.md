@@ -6,7 +6,7 @@
 
 ### 2026-07-15
 
-- LLM 连接测试安全边界收紧：每个允许的 `(Secret name, key)` 绑定精确 Provider HTTPS origins，runtime tuple 自动绑定 `LLM_BASE_URL`；拒绝内部/Kubernetes/混合 DNS、重定向和 DNS rebinding，Provider 使用验证后固定 IP + 原始 SNI/Host，Kubernetes Secret 读取使用隔离 transport，三个阶段共享 20 秒绝对截止时间。用量分页 cursor 同时绑定版本、资源类型、组织与规范化筛选；四个用量接口复用同一组 OpenAPI 查询参数组件。
+- LLM 连接测试安全边界收紧：每个允许的 `(Secret name, key)` 绑定精确 Provider HTTPS origins，runtime tuple 自动绑定 `LLM_BASE_URL`；拒绝内部/Kubernetes/混合 DNS、重定向和 DNS rebinding，Provider 使用验证后固定 IP + 原始 SNI/Host，Kubernetes Secret 读取使用隔离 transport。DNS、Secret、TCP/CONNECT、TLS、HTTP 与分块响应体共享同一 20 秒绝对 Deadline，socket guard 到期即中止。用量分页 cursor 同时绑定版本、资源类型、组织与规范化筛选；OpenAPI 明确同 scope 复用、排他边界、无下一页为 null 及 scope 变化返回 422，四个用量接口复用同一组查询参数组件。
 - LLM Provider 凭据从运行时 Secret 中分离：连接测试仅可读取 `api.secretAccess.allowedSecretRefs` 指定的专用 Secret 与 key；API Deployment 的 `LLM_API_KEY` 通过同一专用 `(name,key)` 的 `api.runtimeLlmSecretRef` / `secretKeyRef` 注入。禁止复用 `ecommerce-cs-agent-runtime`，API ServiceAccount 继续使用 namespaced `secrets/get/resourceNames` 最小权限。
 
 ### 2026-07-14

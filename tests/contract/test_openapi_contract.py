@@ -278,6 +278,30 @@ class OpenApiContractTest(unittest.TestCase):
             )
         self.assertTrue(all(value == resolved_sets[0] for value in resolved_sets[1:]))
 
+    def test_llm_cursor_contract_documents_scope_exclusive_boundary_and_end_of_pages(self):
+        paths = self.document["paths"]
+        config_parameters = paths["/v1/system-admin/llm/config-versions"]["get"]["parameters"]
+        invocation_parameters = paths["/v1/system-admin/llm/usage/invocations"]["get"]["parameters"]
+        config_cursor = next(item for item in config_parameters if item.get("name") == "cursor")
+        invocation_cursor = next(item for item in invocation_parameters if item.get("name") == "cursor")
+        page_info = self.document["components"]["schemas"]["LlmPageInfo"]
+
+        for parameter in (config_cursor, invocation_cursor):
+            description = parameter.get("description", "").lower()
+            self.assertIn("same", description)
+            self.assertIn("exclusive", description)
+            self.assertIn("422", description)
+        self.assertIn("organization", config_cursor["description"].lower())
+        self.assertIn("filters", invocation_cursor["description"].lower())
+
+        schema_description = page_info.get("description", "").lower()
+        next_description = page_info["properties"]["next_cursor"].get("description", "").lower()
+        self.assertIn("same organization", schema_description)
+        self.assertIn("same filters", schema_description)
+        self.assertIn("exclusive", schema_description)
+        self.assertIn("null", next_description)
+        self.assertIn("no next page", next_description)
+
     def test_schema_validator_rejects_formats_enums_bounds_patterns_and_one_of(self):
         schemas = self.document["components"]["schemas"]
         connection_test = {
