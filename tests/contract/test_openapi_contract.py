@@ -255,6 +255,21 @@ def assert_schema_valid(instance, schema, document):
     validator.validate(instance)
 
 
+def presents_customer_admin_provisioning_as_current_capability(line: str) -> bool:
+    customer_admin_terms = (
+        "客户后台初始管理员",
+        "客户管理员邀请",
+        "客户管理员开通",
+    )
+    if not any(term in line for term in customer_admin_terms):
+        return False
+    non_current_markers = ("后续", "当前不可用", "当前不", "不提供", "不得", "经批准部署")
+    if any(marker in line for marker in non_current_markers):
+        return False
+    current_action_markers = ("能", "可以", "支持", "创建", "开通", "邀请", "重发", "禁用", "恢复", "可用")
+    return any(marker in line for marker in current_action_markers)
+
+
 class OpenApiContractTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -343,18 +358,24 @@ class OpenApiContractTest(unittest.TestCase):
             self.document,
         )
 
-    def test_system_admin_design_marks_customer_admin_invitations_future_only(self):
-        invitation_lines = [
+    def test_customer_admin_provisioning_capability_guard_has_positive_and_negative_cases(self):
+        self.assertTrue(presents_customer_admin_provisioning_as_current_capability("第一版能开通客户后台初始管理员。"))
+        self.assertTrue(presents_customer_admin_provisioning_as_current_capability("客户管理员邀请当前可用。"))
+        self.assertFalse(presents_customer_admin_provisioning_as_current_capability("展示经批准部署流程配置的客户后台初始管理员准备状态。"))
+        self.assertFalse(presents_customer_admin_provisioning_as_current_capability("邀请系统管理员加入平台。"))
+
+    def test_system_admin_design_does_not_claim_customer_admin_provisioning_as_current_ui_capability(self):
+        provisioning_lines = [
             line.strip()
             for line in SYSTEM_ADMIN_DESIGN_PATH.read_text(encoding="utf-8").splitlines()
-            if "邀请" in line or "客户管理员开通" in line
+            if any(term in line for term in ("客户后台初始管理员", "客户管理员邀请", "客户管理员开通"))
         ]
 
-        self.assertTrue(invitation_lines)
-        for line in invitation_lines:
-            self.assertTrue(
-                any(marker in line for marker in ("后续", "当前不可用", "当前不", "不得")),
-                f"customer admin invitation is presented as a current capability: {line}",
+        self.assertTrue(provisioning_lines)
+        for line in provisioning_lines:
+            self.assertFalse(
+                presents_customer_admin_provisioning_as_current_capability(line),
+                f"customer admin provisioning is presented as a current UI capability: {line}",
             )
 
     def test_actual_system_admin_organization_store_readiness_and_trace_shapes_validate(self):
