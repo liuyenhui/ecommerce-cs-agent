@@ -18,7 +18,7 @@ def _provider(provider_type: str = "openai") -> dict[str, object]:
         "provider_id": "11111111-1111-1111-1111-111111111111",
         "provider_type": provider_type,
         "base_url": "https://models.example.test/v1",
-        "secret_ref": {"namespace": "runtime", "name": "llm", "key": "api-key"},
+        "secret_ref": {"namespace": "runtime", "name": "ecommerce-cs-agent-llm-provider", "key": "api-key"},
     }
 
 
@@ -47,7 +47,7 @@ def test_kubernetes_secret_tester_resolves_secret_and_probes_openai_without_leak
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
         allowed_namespace="runtime",
-        allowed_secret_names={"llm"},
+        allowed_secret_refs={("ecommerce-cs-agent-llm-provider", "api-key")},
         transport=transport,
         monotonic=lambda: 1.0,
     )
@@ -85,7 +85,7 @@ def test_kubernetes_secret_tester_uses_provider_specific_auth_headers(
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
         allowed_namespace="runtime",
-        allowed_secret_names={"llm"},
+        allowed_secret_refs={("ecommerce-cs-agent-llm-provider", "api-key")},
         transport=transport,
     )
     assert tester(_provider(provider_type), {"timeout_seconds": 3})["status"] == "passed"
@@ -108,7 +108,7 @@ def test_kubernetes_secret_tester_redacts_transport_failures(tmp_path: Path) -> 
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
         allowed_namespace="runtime",
-        allowed_secret_names={"llm"},
+        allowed_secret_refs={("ecommerce-cs-agent-llm-provider", "api-key")},
         transport=transport,
     )
     result = tester(_provider(), {"timeout_seconds": 3})
@@ -126,8 +126,13 @@ def test_kubernetes_secret_tester_requires_in_cluster_prerequisites(tmp_path: Pa
 @pytest.mark.parametrize(
     "secret_ref",
     [
-        {"namespace": "other", "name": "llm", "key": "api-key"},
+        {"namespace": "other", "name": "ecommerce-cs-agent-llm-provider", "key": "api-key"},
+        {"namespace": "runtime", "name": "ecommerce-cs-agent-runtime", "key": "DATABASE_URL"},
+        {"namespace": "runtime", "name": "ecommerce-cs-agent-runtime", "key": "JWT_SECRET"},
+        {"namespace": "runtime", "name": "ecommerce-cs-agent-llm-provider", "key": "JWT_SECRET"},
         {"namespace": "runtime", "name": "other-llm", "key": "api-key"},
+        {"namespace": "runtime", "name": "ecommerce-cs-agent-llm-provider", "key": "bad/key"},
+        {"namespace": "runtime", "name": "ecommerce-cs-agent-llm-provider", "key": "a" * 254},
     ],
 )
 def test_kubernetes_secret_tester_rejects_secret_outside_allowlist_before_transport(
@@ -149,7 +154,7 @@ def test_kubernetes_secret_tester_rejects_secret_outside_allowlist_before_transp
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
         allowed_namespace="runtime",
-        allowed_secret_names={"llm"},
+        allowed_secret_refs={("ecommerce-cs-agent-llm-provider", "api-key")},
         transport=transport,
     )
     provider = _provider()
@@ -184,7 +189,9 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
     environment = {
         "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
         "KUBERNETES_SERVICE_PORT_HTTPS": "443",
-        "LLM_GOVERNANCE_ALLOWED_SECRET_NAMES": "llm, secondary-llm",
+        "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": json.dumps(
+            [{"name": "ecommerce-cs-agent-llm-provider", "keys": ["api-key"]}]
+        ),
     }
     if downward_namespace:
         environment["LLM_GOVERNANCE_SECRET_NAMESPACE"] = downward_namespace
@@ -198,7 +205,7 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
 
     assert tester(_provider(), {"timeout_seconds": 3})["status"] == "passed"
     assert secret_requests == [
-        "https://kubernetes.default.svc:443/api/v1/namespaces/runtime/secrets/llm"
+        "https://kubernetes.default.svc:443/api/v1/namespaces/runtime/secrets/ecommerce-cs-agent-llm-provider"
     ]
 
 
@@ -208,7 +215,9 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
         {
             "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
             "KUBERNETES_SERVICE_PORT_HTTPS": "443",
-            "LLM_GOVERNANCE_ALLOWED_SECRET_NAMES": "llm",
+            "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": json.dumps(
+                [{"name": "ecommerce-cs-agent-llm-provider", "keys": ["api-key"]}]
+            ),
         },
         {
             "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
@@ -219,7 +228,23 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
             "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
             "KUBERNETES_SERVICE_PORT_HTTPS": "443",
             "LLM_GOVERNANCE_SECRET_NAMESPACE": "runtime",
-            "LLM_GOVERNANCE_ALLOWED_SECRET_NAMES": " , ",
+            "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": "[]",
+        },
+        {
+            "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
+            "KUBERNETES_SERVICE_PORT_HTTPS": "443",
+            "LLM_GOVERNANCE_SECRET_NAMESPACE": "runtime",
+            "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": json.dumps(
+                [{"name": "ecommerce-cs-agent-llm-provider", "keys": []}]
+            ),
+        },
+        {
+            "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
+            "KUBERNETES_SERVICE_PORT_HTTPS": "443",
+            "LLM_GOVERNANCE_SECRET_NAMESPACE": "runtime",
+            "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": json.dumps(
+                [{"name": "ecommerce-cs-agent-llm-provider", "keys": ["bad/key"]}]
+            ),
         },
     ],
 )
@@ -272,7 +297,7 @@ def test_kubernetes_secret_tester_uses_standard_azure_models_url(
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
         allowed_namespace="runtime",
-        allowed_secret_names={"llm"},
+        allowed_secret_refs={("ecommerce-cs-agent-llm-provider", "api-key")},
         transport=transport,
     )
     provider = _provider("azure_openai")

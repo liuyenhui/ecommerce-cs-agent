@@ -17,8 +17,10 @@ api:
     automount: true
   secretAccess:
     enabled: true
-    allowedSecretNames:
-      - ecommerce-cs-agent-runtime
+    allowedSecretRefs:
+      - name: ecommerce-cs-agent-llm-provider
+        keys:
+          - api-key
   image:
     repository: registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-api
     tag: dev

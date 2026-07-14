@@ -4,6 +4,10 @@
 
 ## 最近文档更新
 
+### 2026-07-15
+
+- LLM Provider 凭据从运行时 Secret 中分离：连接测试仅可读取 `api.secretAccess.allowedSecretRefs` 指定的专用 Secret 与 key；禁止复用 `ecommerce-cs-agent-runtime`，API ServiceAccount 继续使用 namespaced `secrets/get/resourceNames` 最小权限。
+
 ### 2026-07-14
 
 - 确认系统后台采用任务导向完整重构：9 个可达页面、可收缩 Lucide 图标导航、移动抽屉、统一状态组件和真实数据空态；development/production 禁止回退 In-memory demo 仓库，系统指标必须来自服务端总量/聚合 API。

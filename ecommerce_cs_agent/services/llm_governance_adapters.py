@@ -20,6 +20,7 @@ import psycopg
 
 Transport = Callable[[Request, float, str | None], tuple[int, bytes]]
 _SECRET_REF = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?$")
+_SECRET_KEY = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
 
 
 def _default_transport(request: Request, timeout: float, ca_file: str | None) -> tuple[int, bytes]:
@@ -39,7 +40,7 @@ class KubernetesSecretProviderConnectionTester:
         service_account_token_file: str,
         kubernetes_ca_file: str,
         allowed_namespace: str,
-        allowed_secret_names: set[str] | frozenset[str],
+        allowed_secret_refs: set[tuple[str, str]] | frozenset[tuple[str, str]],
         transport: Transport | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -47,16 +48,22 @@ class KubernetesSecretProviderConnectionTester:
             raise RuntimeError("Kubernetes in-cluster host and port are required")
         if not Path(service_account_token_file).is_file() or not Path(kubernetes_ca_file).is_file():
             raise RuntimeError("Kubernetes in-cluster token and CA files are required")
-        if not self._valid_ref(allowed_namespace) or not allowed_secret_names:
+        if not self._valid_ref(allowed_namespace) or not allowed_secret_refs:
             raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
-        if not all(self._valid_ref(name) for name in allowed_secret_names):
+        if not all(
+            isinstance(ref, tuple)
+            and len(ref) == 2
+            and self._valid_ref(ref[0])
+            and self._valid_secret_key(ref[1])
+            for ref in allowed_secret_refs
+        ):
             raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
         self._host = kubernetes_host
         self._port = int(kubernetes_port)
         self._token_file = service_account_token_file
         self._ca_file = kubernetes_ca_file
         self._allowed_namespace = allowed_namespace
-        self._allowed_secret_names = frozenset(allowed_secret_names)
+        self._allowed_secret_refs = frozenset(allowed_secret_refs)
         self._transport = transport or _default_transport
         self._monotonic = monotonic
 
@@ -80,18 +87,16 @@ class KubernetesSecretProviderConnectionTester:
         namespace = env.get("LLM_GOVERNANCE_SECRET_NAMESPACE", "").strip()
         if not namespace and Path(namespace_file).is_file():
             namespace = Path(namespace_file).read_text(encoding="utf-8").strip()
-        allowed_secret_names = {
-            name.strip()
-            for name in env.get("LLM_GOVERNANCE_ALLOWED_SECRET_NAMES", "").split(",")
-            if name.strip()
-        }
+        allowed_secret_refs = cls._parse_allowed_secret_refs(
+            env.get("LLM_GOVERNANCE_ALLOWED_SECRET_REFS", "")
+        )
         return cls(
             kubernetes_host=host,
             kubernetes_port=parsed_port,
             service_account_token_file=token_file,
             kubernetes_ca_file=ca_file,
             allowed_namespace=namespace,
-            allowed_secret_names=allowed_secret_names,
+            allowed_secret_refs=allowed_secret_refs,
             transport=transport,
         )
 
@@ -99,11 +104,44 @@ class KubernetesSecretProviderConnectionTester:
     def _valid_ref(value: Any) -> bool:
         return isinstance(value, str) and bool(_SECRET_REF.fullmatch(value))
 
+    @staticmethod
+    def _valid_secret_key(value: Any) -> bool:
+        return isinstance(value, str) and bool(_SECRET_KEY.fullmatch(value))
+
+    @classmethod
+    def _parse_allowed_secret_refs(cls, raw_value: str) -> set[tuple[str, str]]:
+        if not raw_value.strip():
+            return set()
+        try:
+            entries = json.loads(raw_value)
+        except (json.JSONDecodeError, TypeError):
+            raise RuntimeError("Kubernetes namespace and Secret allowlist are required") from None
+        if not isinstance(entries, list):
+            raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
+        if not entries:
+            return set()
+
+        refs: set[tuple[str, str]] = set()
+        for entry in entries:
+            if not isinstance(entry, dict) or set(entry) != {"name", "keys"}:
+                raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
+            name, keys = entry["name"], entry["keys"]
+            if not cls._valid_ref(name) or not isinstance(keys, list) or not keys:
+                raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
+            if not all(cls._valid_secret_key(key) for key in keys):
+                raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
+            refs.update((name, key) for key in keys)
+        return refs
+
     def _resolve_secret(self, reference: Mapping[str, Any], timeout: float) -> str:
         namespace, name, key = (reference.get(field) for field in ("namespace", "name", "key"))
-        if not all(self._valid_ref(value) for value in (namespace, name, key)):
+        if (
+            not self._valid_ref(namespace)
+            or not self._valid_ref(name)
+            or not self._valid_secret_key(key)
+        ):
             raise ValueError("invalid_secret_ref")
-        if namespace != self._allowed_namespace or name not in self._allowed_secret_names:
+        if namespace != self._allowed_namespace or (name, key) not in self._allowed_secret_refs:
             raise ValueError("secret_access_denied")
         token = Path(self._token_file).read_text(encoding="utf-8").strip()
         if not token:

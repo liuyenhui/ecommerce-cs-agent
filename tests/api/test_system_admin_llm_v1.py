@@ -608,6 +608,6 @@ def test_non_test_app_fails_fast_without_kubernetes_secret_prerequisites(monkeyp
     monkeypatch.delenv("KUBERNETES_SERVICE_PORT", raising=False)
     monkeypatch.delenv("KUBERNETES_SERVICE_PORT_HTTPS", raising=False)
     monkeypatch.delenv("LLM_GOVERNANCE_SECRET_NAMESPACE", raising=False)
-    monkeypatch.delenv("LLM_GOVERNANCE_ALLOWED_SECRET_NAMES", raising=False)
+    monkeypatch.delenv("LLM_GOVERNANCE_ALLOWED_SECRET_REFS", raising=False)
     with pytest.raises(RuntimeError, match="Kubernetes in-cluster"):
         create_app(Settings(environment="development", database_url="postgresql://db.example.test/app"))

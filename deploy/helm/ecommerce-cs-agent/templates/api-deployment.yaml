@@ -42,8 +42,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: LLM_GOVERNANCE_ALLOWED_SECRET_NAMES
-              value: {{ join "," .Values.api.secretAccess.allowedSecretNames | quote }}
+            - name: LLM_GOVERNANCE_ALLOWED_SECRET_REFS
+              value: {{ toJson .Values.api.secretAccess.allowedSecretRefs | quote }}
             {{- if .Values.proxy.enabled }}
             - name: HTTP_PROXY
               value: {{ .Values.proxy.httpProxy | quote }}
