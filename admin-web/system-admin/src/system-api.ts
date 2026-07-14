@@ -2,7 +2,16 @@ import { requestJson } from "../../shared/api";
 import type { JsonRecord } from "../../shared/types";
 import type {
   AuditFilters,
+  CursorEnvelope,
   DashboardSummary,
+  LlmBreakdown,
+  LlmInvocation,
+  LlmProvider,
+  LlmRoute,
+  LlmUsageFilters,
+  LlmUsagePoint,
+  LlmUsageSummary,
+  LlmVersion,
   PageEnvelope,
   PageMeta,
   SystemHealth,
@@ -22,7 +31,12 @@ export const SYSTEM_ADMIN_URLS = {
   audit: "/v1/system-admin/audit-logs",
   health: "/v1/system-admin/health",
   llmProviders: "/v1/system-admin/llm/providers",
-  releases: "/v1/system-admin/llm/config-versions"
+  releases: "/v1/system-admin/llm/config-versions",
+  llmDrafts: "/v1/system-admin/llm/config-versions/drafts",
+  llmUsageSummary: "/v1/system-admin/llm/usage/summary",
+  llmUsageTimeseries: "/v1/system-admin/llm/usage/timeseries",
+  llmUsageBreakdown: "/v1/system-admin/llm/usage/breakdown",
+  llmInvocations: "/v1/system-admin/llm/usage/invocations"
 } as const;
 
 export function traceDetailPath(decisionId: string) {
@@ -45,6 +59,9 @@ function queryPath(path: string, filters: Record<string, string | number | boole
   const query = params.toString();
   return query ? `${path}?${query}` : path;
 }
+
+const writeJson = <T>(path: string, body: unknown, method = "POST", signal?: AbortSignal) => requestJson<T>(path, { method, body: JSON.stringify(body), signal });
+const versionActionPath = (versionId: string, action: string) => `${SYSTEM_ADMIN_URLS.releases}/${encodeURIComponent(versionId)}/${action}`;
 
 type RawPage<T> = { items?: T[]; page_info?: Partial<PageMeta> };
 
@@ -83,7 +100,22 @@ export const systemApi = {
   }),
   audit: (filters: AuditFilters | Record<string, string | number>, signal?: AbortSignal) => pageRequest(SYSTEM_ADMIN_URLS.audit, filters, signal),
   health: (signal?: AbortSignal) => requestJson<SystemHealth>(SYSTEM_ADMIN_URLS.health, { signal }),
-  releases: (filters: Record<string, string | number | boolean | undefined> = {}, signal?: AbortSignal) => pageRequest(SYSTEM_ADMIN_URLS.releases, filters, signal)
+  releases: (filters: Record<string, string | number | boolean | undefined> = {}, signal?: AbortSignal) => pageRequest(SYSTEM_ADMIN_URLS.releases, filters, signal),
+  llmProviders: (signal?: AbortSignal) => requestJson<{ items: LlmProvider[] }>(SYSTEM_ADMIN_URLS.llmProviders, { signal }),
+  createLlmProvider: (body: unknown, signal?: AbortSignal) => writeJson<LlmProvider>(SYSTEM_ADMIN_URLS.llmProviders, body, "POST", signal),
+  updateLlmProvider: (providerId: string, body: unknown, signal?: AbortSignal) => writeJson<LlmProvider>(`${SYSTEM_ADMIN_URLS.llmProviders}/${encodeURIComponent(providerId)}`, body, "PATCH", signal),
+  testLlmProvider: (providerId: string, body: unknown, signal?: AbortSignal) => writeJson<JsonRecord>(`${SYSTEM_ADMIN_URLS.llmProviders}/${encodeURIComponent(providerId)}/connection-tests`, body, "POST", signal),
+  llmVersions: (organizationId: string, cursor?: string, signal?: AbortSignal) => requestJson<CursorEnvelope<LlmVersion>>(queryPath(SYSTEM_ADMIN_URLS.releases, { organization_id: organizationId, limit: 50, cursor }), { signal }),
+  createLlmDraft: (body: unknown, signal?: AbortSignal) => writeJson<LlmVersion>(SYSTEM_ADMIN_URLS.llmDrafts, body, "POST", signal),
+  replaceLlmRoutes: (versionId: string, routes: LlmRoute[], expectedRevision: number, reason: string, idempotencyKey: string, signal?: AbortSignal) => writeJson<LlmVersion>(versionActionPath(versionId, "routes"), { routes, expected_revision: expectedRevision, reason, idempotency_key: idempotencyKey }, "PUT", signal),
+  validateLlmVersion: (versionId: string, body: unknown, signal?: AbortSignal) => writeJson<LlmVersion>(versionActionPath(versionId, "validate"), body, "POST", signal),
+  submitLlmVersion: (versionId: string, body: unknown, signal?: AbortSignal) => writeJson<LlmVersion>(versionActionPath(versionId, "submit-publish"), body, "POST", signal),
+  publishLlmVersion: (versionId: string, body: unknown, signal?: AbortSignal) => writeJson<LlmVersion>(versionActionPath(versionId, "publish"), body, "POST", signal),
+  rollbackLlmVersion: (versionId: string, body: unknown, signal?: AbortSignal) => writeJson<LlmVersion>(versionActionPath(versionId, "rollback"), body, "POST", signal),
+  llmUsageSummary: (filters: LlmUsageFilters, signal?: AbortSignal) => requestJson<LlmUsageSummary>(queryPath(SYSTEM_ADMIN_URLS.llmUsageSummary, filters), { signal }),
+  llmUsageTimeseries: (filters: LlmUsageFilters, signal?: AbortSignal) => requestJson<{ items: LlmUsagePoint[] }>(queryPath(SYSTEM_ADMIN_URLS.llmUsageTimeseries, filters), { signal }),
+  llmUsageBreakdown: (filters: LlmUsageFilters, groupBy: string, signal?: AbortSignal) => requestJson<{ items: LlmBreakdown[] }>(queryPath(SYSTEM_ADMIN_URLS.llmUsageBreakdown, { ...filters, group_by: groupBy }), { signal }),
+  llmInvocations: (filters: LlmUsageFilters, cursor?: string, signal?: AbortSignal) => requestJson<CursorEnvelope<LlmInvocation>>(queryPath(SYSTEM_ADMIN_URLS.llmInvocations, { ...filters, limit: 100, cursor }), { signal })
 };
 
 export function requestFailure(error: unknown): { kind: "forbidden"; message: string } | { kind: "error"; message: string } {

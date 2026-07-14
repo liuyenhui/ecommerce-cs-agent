@@ -12,6 +12,8 @@ import { ReadinessPage } from "./pages/ReadinessPage";
 import { TasksPage } from "./pages/TasksPage";
 import { TenantsPage } from "./pages/TenantsPage";
 import { TracesPage } from "./pages/TracesPage";
+import { LlmGovernancePage } from "./pages/LlmGovernancePage";
+import { ReleasesPage } from "./pages/ReleasesPage";
 import { App } from "./App";
 import { SYSTEM_ADMIN_URLS, systemAdminPaths } from "./system-api";
 import {
@@ -332,6 +334,229 @@ describe("operational pages", () => {
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
     expect(onPageChange.mock.calls).toEqual([[1], [3]]);
     expect(screen.getByText("第 2 / 3 页，共 41 条")).toBeTruthy();
+  });
+});
+
+describe("LLM governance and releases", () => {
+  const provider = {
+    provider_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    name: "Production OpenAI",
+    provider_type: "openai",
+    base_url: "https://api.openai.com/v1",
+    secret_ref: { namespace: "agent", name: "llm-provider", key: "api-key" },
+    enabled: true,
+    status: "active",
+    revision: 2,
+    created_at: "2026-07-15T00:00:00Z",
+    updated_at: "2026-07-15T00:00:00Z"
+  };
+  const version = {
+    version_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    organization_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    version_number: 4,
+    status: "draft",
+    revision: 3,
+    configuration_hash: "sha256:real",
+    created_by_system_admin_user_id: "sys-1",
+    created_at: "2026-07-15T00:00:00Z",
+    published_by_system_admin_user_id: null,
+    published_at: null,
+    rollback_of_version_id: null,
+    release_record_id: null,
+    release_status: null,
+    evaluation_run_id: null,
+    release_record: null,
+    evaluation: null,
+    routes: [{
+      scenario: "reply_generation",
+      primary_provider_config_id: provider.provider_id,
+      primary_model: "gpt-5-mini",
+      fallback_provider_config_id: null,
+      fallback_model: null,
+      enabled: true,
+      temperature: 0.2,
+      max_output_tokens: 1200,
+      timeout_seconds: 18,
+      max_retries: 2,
+      circuit_breaker_threshold: 5,
+      recovery_probe_seconds: 30,
+      revision: 1
+    }]
+  };
+
+  it("separates provider, route and runtime panels and exposes four governance tabs", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes("/providers")) return response({ items: [provider] });
+      if (path.includes("/config-versions?")) return response({ items: [version], page_info: { limit: 50, has_more: false, next_cursor: null } });
+      return response({});
+    }));
+    render(<LlmGovernancePage />);
+    expect(await screen.findByRole("heading", { name: "Provider 连接" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "场景模型路由" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "运行参数" })).toBeTruthy();
+    for (const tab of ["配置与路由", "调用与成本", "版本记录", "变更审计"]) {
+      expect(screen.getByRole("tab", { name: tab })).toBeTruthy();
+    }
+    expect(screen.queryByLabelText(/secret value/i)).toBeNull();
+    expect(screen.queryByDisplayValue(/sk-/i)).toBeNull();
+    expect(screen.getByText(/agent\/llm-provider:api-key/)).toBeTruthy();
+  });
+
+  it("shows real token and cost fields and does not render a chart for zero usage", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes("/usage/summary")) return response({ calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, estimated_cost_micros: null, cost_by_currency: {}, p95_latency_ms: null, error_rate: null, fallback_rate: null });
+      if (path.includes("/usage/timeseries") || path.includes("/usage/breakdown") || path.includes("/usage/invocations")) return response({ items: [], page_info: { limit: 100, has_more: false, next_cursor: null } });
+      if (path.includes("/providers")) return response({ items: [] });
+      return response({ items: [], page_info: { limit: 50, has_more: false, next_cursor: null } });
+    }));
+    render(<LlmGovernancePage />);
+    fireEvent.click(screen.getByRole("tab", { name: "调用与成本" }));
+    expect(await screen.findByText("输入 Token")).toBeTruthy();
+    expect(screen.getByText("输出 Token")).toBeTruthy();
+    expect(screen.getByText("估算成本")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "场景用量分布" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "失败原因分布" })).toBeTruthy();
+    expect(screen.getByText("当前筛选范围内暂无模型调用")).toBeTruthy();
+    expect(screen.queryByTestId("usage-chart")).toBeNull();
+  });
+
+  it("requires confirmation, reason and idempotency key before publishing a passed evaluation", async () => {
+    const published = { ...version, status: "pending_publish", evaluation_run_id: "eval-passed", evaluation: { evaluation_run_id: "eval-passed" } };
+    const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (init?.method === "POST") requests.push({ path, body: JSON.parse(String(init.body)) });
+      if (path.includes("/config-versions?")) return response({ items: [published], page_info: { limit: 50, has_more: false, next_cursor: null } });
+      if (path.endsWith("/publish")) return response({ ...published, status: "running", revision: 4 });
+      return response({ items: [] });
+    }));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<ReleasesPage />);
+    fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: published.organization_id } });
+    fireEvent.click(screen.getByRole("button", { name: "查询版本" }));
+    expect(await screen.findByText("eval-passed")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "发布版本 4" }));
+    fireEvent.change(screen.getByLabelText("发布原因"), { target: { value: "评测通过，批准发布" } });
+    fireEvent.change(screen.getByLabelText("幂等键"), { target: { value: "release-4-approved" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0].path).toContain(`/config-versions/${published.version_id}/publish`);
+    expect(requests[0].body).toMatchObject({ expected_revision: 3, reason: "评测通过，批准发布", idempotency_key: "release-4-approved" });
+  });
+
+  it("creates a provider with Kubernetes Secret references but never accepts a secret value", async () => {
+    const writes: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") { writes.push(JSON.parse(String(init.body))); return response(provider, 201); }
+      return response({ items: [] });
+    }));
+    render(<LlmGovernancePage />);
+    fireEvent.click(await screen.findByRole("button", { name: "新增 Provider" }));
+    fireEvent.change(screen.getByLabelText("Provider 名称"), { target: { value: "Production OpenAI" } });
+    fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "https://api.openai.com/v1" } });
+    fireEvent.change(screen.getByLabelText("Secret namespace"), { target: { value: "agent" } });
+    fireEvent.change(screen.getByLabelText("Secret name"), { target: { value: "llm-provider" } });
+    fireEvent.change(screen.getByLabelText("Secret key"), { target: { value: "api-key" } });
+    fireEvent.change(screen.getByLabelText("变更原因"), { target: { value: "接入生产 Provider" } });
+    fireEvent.change(screen.getByLabelText("创建幂等键"), { target: { value: "provider-production-1" } });
+    expect(screen.queryByLabelText(/secret value/i)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "保存 Provider" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toMatchObject({ secret_ref: { namespace: "agent", name: "llm-provider", key: "api-key" }, reason: "接入生产 Provider", idempotency_key: "provider-production-1" });
+    expect(JSON.stringify(writes[0])).not.toMatch(/secret_value|sk-/i);
+  });
+
+  it("submits a validated version only with an explicit evaluation snapshot", async () => {
+    const validated = { ...version, status: "validated" as const };
+    const writes: Array<{ path: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.includes("/config-versions?") && !init?.method) return response({ items: [validated], page_info: { limit: 50, has_more: false, next_cursor: null } });
+      if (path.endsWith("/submit-publish")) { writes.push({ path, body: JSON.parse(String(init?.body)) }); return response({ ...validated, status: "pending_publish", evaluation_run_id: "eval-gate-4", evaluation: { evaluation_run_id: "eval-gate-4" } }); }
+      return response({ items: [] });
+    }));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<ReleasesPage />);
+    fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: validated.organization_id } });
+    fireEvent.click(screen.getByRole("button", { name: "查询版本" }));
+    fireEvent.click(await screen.findByRole("button", { name: "提交版本 4" }));
+    fireEvent.change(screen.getByLabelText("评测快照 ID"), { target: { value: "eval-gate-4" } });
+    fireEvent.change(screen.getByLabelText("发布原因"), { target: { value: "评测门禁通过" } });
+    fireEvent.change(screen.getByLabelText("幂等键"), { target: { value: "submit-version-4" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认提交" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0].body).toMatchObject({ expected_revision: 3, evaluation_run_id: "eval-gate-4", reason: "评测门禁通过", idempotency_key: "submit-version-4" });
+  });
+
+  it("reports a stale revision when validating a draft", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.includes("/providers")) return response({ items: [provider] });
+      if (path.includes("/config-versions?") && !init?.method) return response({ items: [version], page_info: { limit: 50, has_more: false, next_cursor: null } });
+      if (path.endsWith("/validate")) return response({ error: { message: "stale revision" } }, 409);
+      return response({ items: [] });
+    }));
+    vi.spyOn(window, "prompt").mockReturnValue("验证配置完整性");
+    render(<LlmGovernancePage />);
+    fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } });
+    fireEvent.click(screen.getByRole("button", { name: "加载组织配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "验证草稿" }));
+    expect(await screen.findByText("配置已被其他管理员更新，请重新加载")).toBeTruthy();
+  });
+
+  it("aborts stale usage requests when switching tabs", async () => {
+    let usageSignal: AbortSignal | undefined;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.includes("/providers")) return Promise.resolve(response({ items: [] }));
+      if (path.includes("/usage/")) {
+        usageSignal = init?.signal || undefined;
+        return new Promise<Response>(() => undefined);
+      }
+      return Promise.resolve(response({ items: [] }));
+    }));
+    render(<LlmGovernancePage />);
+    fireEvent.click(screen.getByRole("tab", { name: "调用与成本" }));
+    await waitFor(() => expect(usageSignal).toBeDefined());
+    fireEvent.click(screen.getByRole("tab", { name: "配置与路由" }));
+    expect(usageSignal?.aborted).toBe(true);
+  });
+
+  it("updates only mutable provider fields with expected revision", async () => {
+    const writes: Array<{ method?: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PATCH") { writes.push({ method: init.method, body: JSON.parse(String(init.body)) }); return response({ ...provider, name: "Primary OpenAI", revision: 3 }); }
+      return response({ items: [provider] });
+    }));
+    render(<LlmGovernancePage />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 Production OpenAI" }));
+    fireEvent.change(screen.getByLabelText("编辑 Provider 名称"), { target: { value: "Primary OpenAI" } });
+    fireEvent.change(screen.getByLabelText("编辑原因"), { target: { value: "调整展示名称" } });
+    fireEvent.change(screen.getByLabelText("编辑幂等键"), { target: { value: "provider-rename-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存 Provider 修改" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0].body).toEqual({ expected_revision: 2, name: "Primary OpenAI", enabled: true, reason: "调整展示名称", idempotency_key: "provider-rename-1" });
+  });
+
+  it("creates a real organization draft without changing a running version", async () => {
+    const writes: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith("/drafts") && init?.method === "POST") { writes.push(JSON.parse(String(init.body))); return response(version, 201); }
+      if (path.includes("/providers")) return response({ items: [] });
+      return response({ items: [], page_info: { limit: 50, has_more: false, next_cursor: null } });
+    }));
+    render(<LlmGovernancePage />);
+    fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } });
+    fireEvent.click(screen.getByRole("button", { name: "创建草稿" }));
+    fireEvent.change(screen.getByLabelText("草稿说明"), { target: { value: "路由参数调整" } });
+    fireEvent.change(screen.getByLabelText("草稿原因"), { target: { value: "准备评测" } });
+    fireEvent.change(screen.getByLabelText("草稿幂等键"), { target: { value: "draft-route-4" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认创建草稿" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toEqual({ organization_id: version.organization_id, description: "路由参数调整", reason: "准备评测", idempotency_key: "draft-route-4" });
   });
 });
 

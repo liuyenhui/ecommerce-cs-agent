@@ -1,6 +1,6 @@
 import React from "react";
 import { Activity, Bot, Building2, ClipboardCheck, HeartPulse, ListChecks, Rocket, Search, ShieldCheck } from "lucide-react";
-import { EmptyState, Navigation, SystemUserSummary } from "../../shared/components";
+import { Navigation, SystemUserSummary } from "../../shared/components";
 import type { JsonRecord, NavItem, ToastState } from "../../shared/types";
 import { requestFailure, systemApi } from "./system-api";
 import type { AuditFilters, DashboardData, PageEnvelope, ReadinessRecord, RequestState, SystemHealth, SystemPage, TaskRecord, TenantData, TraceFilters } from "./system-types";
@@ -11,6 +11,8 @@ import { ReadinessPage } from "./pages/ReadinessPage";
 import { TasksPage } from "./pages/TasksPage";
 import { TenantsPage } from "./pages/TenantsPage";
 import { TracesPage } from "./pages/TracesPage";
+import { LlmGovernancePage } from "./pages/LlmGovernancePage";
+import { ReleasesPage } from "./pages/ReleasesPage";
 
 export const RAIL_COLLAPSED_STORAGE_KEY = "system-admin:rail-collapsed";
 
@@ -226,8 +228,8 @@ export function SystemWorkspace({ activePage, session, setToast }: { activePage:
       {activePage === "dashboard" ? <DashboardPage state={dashboard} /> : null}
       {activePage === "tenants" ? <TenantsPage state={tenants} onTenantPageChange={(page) => void loadTenantPage(page)} onStorePageChange={(page) => void loadStorePage(page)} /> : null}
       {activePage === "readiness" ? <ReadinessPage state={readiness} onPageChange={(page) => void loadReadiness(page)} /> : null}
-      {activePage === "llm" ? <Placeholder title="LLM 治理" description="Provider、路由、成本与配置版本的详细工作区由 Task 7 接入；本入口不展示示例数据。" /> : null}
-      {activePage === "releases" ? <Placeholder title="评测与发布" description="评测门禁、发布和回滚的详细工作区由 Task 7 接入；本入口不展示示例数据。" /> : null}
+      {activePage === "llm" ? <LlmGovernancePage /> : null}
+      {activePage === "releases" ? <ReleasesPage /> : null}
       {activePage === "traces" ? <TracesPage state={traces} detail={traceDetail} onSearch={(filters) => void searchTraces({ ...filters, page: 1 })} onPageChange={(page) => void searchTraces({ ...traceQuery.current, page })} onOpen={(id) => void openTrace(id)} onClose={() => { controllers.current.get("trace-detail")?.abort(); setTraceDetail(null); }} /> : null}
       {activePage === "tasks" ? <TasksPage state={tasks} onRetry={(task) => void retryTask(task)} onPageChange={(page) => void loadTasks(page)} /> : null}
       {activePage === "audit" ? <AuditPage state={audit} onSearch={(filters) => void loadAudit({ ...filters, page: 1 })} onPageChange={(page) => void loadAudit({ ...auditQuery.current, page })} /> : null}
@@ -235,8 +237,4 @@ export function SystemWorkspace({ activePage, session, setToast }: { activePage:
     </section>
     {session ? <aside className="systemAccount"><SystemUserSummary user={(session.user as JsonRecord | undefined) || {}} /></aside> : null}
   </div>;
-}
-
-function Placeholder({ title, description }: { title: string; description: string }) {
-  return <section className="tablePanel placeholderPage"><h2>{title}</h2><EmptyState title="工作区入口已就绪" description={description} /></section>;
 }
