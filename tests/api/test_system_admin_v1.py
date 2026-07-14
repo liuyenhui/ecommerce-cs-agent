@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-
-os.environ["APP_ENV"] = "test"
 
 import ecommerce_cs_agent.api.app as app_module
 from ecommerce_cs_agent.api.app import create_app
