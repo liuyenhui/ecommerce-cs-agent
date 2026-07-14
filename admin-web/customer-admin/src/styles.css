@@ -282,9 +282,6 @@
 }
 
 @media (max-width: 720px) {
-  .traceTimeline {
-    min-width: 0;
-  }
   .messageHistoryWorkspace {
     min-height: auto;
     grid-template-columns: 1fr;

@@ -26,3 +26,8 @@ test("authenticated mobile navigation is a collapsible drawer with usable tap ta
   assert.match(cssSource, /@media \(max-width: 900px\)[\s\S]*\.rail\s*\{[\s\S]*position:\s*fixed;[\s\S]*transform:\s*translateX\(-100%\);/);
   assert.match(cssSource, /@media \(max-width: 900px\)[\s\S]*button\s*\{[\s\S]*min-height:\s*44px;/);
 });
+
+test("trace node badges wrap on mobile without horizontal scrolling or full-width items", () => {
+  assert.match(cssSource, /@media \(max-width: 900px\)[\s\S]*\.traceNodeBadges\s*\{[\s\S]*display:\s*flex;[\s\S]*flex-wrap:\s*wrap;[\s\S]*width:\s*100%;[\s\S]*overflow-x:\s*hidden;/);
+  assert.doesNotMatch(cssSource, /@media \(max-width: 900px\)[\s\S]*\.traceNodeBadges li\s*\{[\s\S]*width:\s*100%;/);
+});
