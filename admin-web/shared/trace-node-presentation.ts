@@ -24,7 +24,7 @@ export function presentTraceNode(rawStatus: unknown, current: boolean): TraceNod
 
   return {
     label: current ? `当前 · ${state.label}` : state.label,
-    tone: current ? "current" : state.tone,
+    tone: current && state.tone !== "failed" ? "current" : state.tone,
     raw
   };
 }

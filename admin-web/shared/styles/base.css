@@ -1049,7 +1049,7 @@ tbody tr:hover {
   flex-wrap: wrap;
   gap: 8px;
   margin: 0;
-  padding: 0;
+  padding: 3px;
   list-style: none;
 }
 
@@ -1069,8 +1069,8 @@ tbody tr:hover {
 }
 
 .traceNodeBadge:focus-visible {
-  outline: 3px solid rgba(37, 99, 235, 0.45);
-  outline-offset: 2px;
+  outline: 3px solid #0f62fe;
+  outline-offset: 0;
 }
 
 .traceNodeBadge strong {
@@ -1103,10 +1103,13 @@ tbody tr:hover {
   border-color: #60a5fa;
   background: #eff6ff;
   color: #1d4ed8;
+}
+
+.traceNodeBadge.is-current {
   box-shadow: inset 3px 0 #2563eb;
 }
 
-.traceNodeBadge.current[aria-pressed="true"] {
+.traceNodeBadge.is-current[aria-pressed="true"] {
   box-shadow: inset 3px 0 #2563eb, 0 0 0 2px rgba(37, 99, 235, 0.18);
 }
 
@@ -1126,6 +1129,14 @@ tbody tr:hover {
   border-color: #fca5a5;
   background: #fef2f2;
   color: #b91c1c;
+}
+
+.traceNodeBadge.failed.is-current {
+  box-shadow: inset 3px 0 #2563eb;
+}
+
+.traceNodeBadge.failed.is-current[aria-pressed="true"] {
+  box-shadow: inset 3px 0 #2563eb, 0 0 0 2px rgba(37, 99, 235, 0.18);
 }
 
 .traceNodeDetail {

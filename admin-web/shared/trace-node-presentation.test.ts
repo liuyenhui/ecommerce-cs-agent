@@ -28,6 +28,22 @@ describe("presentTraceNode", () => {
     });
   });
 
+  it("treats an empty raw status as unknown without inventing completion", () => {
+    expect(presentTraceNode("", false)).toEqual({
+      label: "状态未知",
+      tone: "pending",
+      raw: ""
+    });
+  });
+
+  it("keeps a current failed node in the failure tone", () => {
+    expect(presentTraceNode("failed", true)).toEqual({
+      label: "当前 · 处理失败",
+      tone: "failed",
+      raw: "failed"
+    });
+  });
+
   it.each(["constructor", "toString", "__proto__"])("treats prototype key %s as unknown", (rawStatus) => {
     expect(presentTraceNode(rawStatus, false)).toEqual({
       label: "状态未知",
@@ -42,7 +58,8 @@ describe("summarizeTraceProgress", () => {
     expect(summarizeTraceProgress([
       { status: "completed" },
       { status: "skipped" },
-      { status: "completed" }
-    ])).toEqual({ completed: 2, total: 3, label: "2 / 3 已完成" });
+      { status: "completed" },
+      { status: "" }
+    ])).toEqual({ completed: 2, total: 4, label: "2 / 4 已完成" });
   });
 });

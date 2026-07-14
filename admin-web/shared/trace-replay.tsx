@@ -173,12 +173,13 @@ export function DecisionTraceReplay({ trace, action, status, risk, missingContex
       <ol className="traceNodeBadges" aria-label="处理步骤">
         {graphData.nodes.map((node) => {
           const selected = node.id === selectedNode?.id;
-          const nodePresentation = presentTraceNode(node.status || "completed", node.id === currentNodeId);
+          const isCurrent = node.id === currentNodeId;
+          const nodePresentation = presentTraceNode(node.status, isCurrent);
           return (
             <li key={node.id}>
               <button
                 type="button"
-                className={`traceNodeBadge ${nodePresentation.tone}`}
+                className={`traceNodeBadge ${nodePresentation.tone}${isCurrent ? " is-current" : ""}`}
                 aria-pressed={selected}
                 title={`${node.id} · ${nodePresentation.raw}`}
                 onClick={() => handleSelectNode(node.id)}
