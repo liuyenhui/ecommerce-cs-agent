@@ -118,6 +118,32 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
             assert_integrity_error(
                 cursor,
                 """
+                INSERT INTO llm_invocation_metric (
+                    scenario_route_id, route_role, organization_id, store_id,
+                    latency_ms, status, currency
+                ) VALUES (%s, 'primary', %s, %s, 10, 'succeeded', 'USD')
+                """,
+                (scenario_route_id, organization_id, store_id),
+            )
+            cursor.execute(
+                "UPDATE llm_scenario_route SET primary_model = 'edited-draft-model' WHERE id = %s",
+                (scenario_route_id,),
+            )
+            cursor.execute(
+                """
+                INSERT INTO llm_scenario_route (
+                    config_version_id, scenario, primary_provider_config_id, primary_model
+                ) VALUES (%s, 'draft-delete', %s, 'test-model')
+                RETURNING id
+                """,
+                (config_version_id, provider_id),
+            )
+            draft_delete_route_id = cursor.fetchone()[0]
+            cursor.execute("DELETE FROM llm_scenario_route WHERE id = %s", (draft_delete_route_id,))
+
+            assert_integrity_error(
+                cursor,
+                """
                 INSERT INTO llm_config_version (
                     version_number, status, configuration_hash, created_by_system_admin_user_id,
                     published_by_system_admin_user_id, published_at
@@ -144,6 +170,16 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 """,
                 (config_version_id, provider_id),
             )
+            cursor.execute(
+                """
+                UPDATE llm_config_version
+                SET status = 'running',
+                    published_by_system_admin_user_id = %s,
+                    published_at = now()
+                WHERE id = %s
+                """,
+                (system_admin_user_id, config_version_id),
+            )
             assert_integrity_error(
                 cursor,
                 """
@@ -163,6 +199,47 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 ) VALUES (%s, 'primary', %s, %s, 10, 'succeeded', 'USD')
                 """,
                 (scenario_route_id, other_organization_id, store_id),
+            )
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_scenario_route SET primary_model = 'mutated-published-model' WHERE id = %s",
+                (scenario_route_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                "DELETE FROM llm_scenario_route WHERE id = %s",
+                (scenario_route_id,),
+            )
+            cursor.execute(
+                """
+                INSERT INTO llm_invocation_metric (
+                    scenario_route_id, route_role, organization_id, store_id,
+                    latency_ms, status, currency
+                ) VALUES (%s, 'primary', %s, %s, 10, 'succeeded', 'USD')
+                RETURNING id
+                """,
+                (scenario_route_id, organization_id, store_id),
+            )
+            assert cursor.fetchone()[0] is not None
+            cursor.execute(
+                """
+                UPDATE llm_config_version
+                SET status = 'draft',
+                    published_by_system_admin_user_id = NULL,
+                    published_at = NULL
+                WHERE id = %s
+                """,
+                (config_version_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_scenario_route SET primary_model = 'mutated-referenced-model' WHERE id = %s",
+                (scenario_route_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                "DELETE FROM llm_scenario_route WHERE id = %s",
+                (scenario_route_id,),
             )
     finally:
         connection.rollback()

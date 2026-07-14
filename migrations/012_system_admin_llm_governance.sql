@@ -188,6 +188,20 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    PERFORM pg_advisory_xact_lock(hashtextextended(NEW.scenario_route_id::text, 0));
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM llm_scenario_route AS route
+        JOIN llm_config_version AS route_version
+          ON route_version.id = route.config_version_id
+        WHERE route.id = NEW.scenario_route_id
+          AND route_version.status = 'running'
+    ) THEN
+        RAISE EXCEPTION 'invocation metrics require a route from the running config version'
+            USING ERRCODE = '23514';
+    END IF;
+
     IF NEW.route_role = 'fallback' AND NOT EXISTS (
         SELECT 1
         FROM llm_scenario_route AS route
@@ -210,3 +224,56 @@ CREATE TRIGGER trg_validate_llm_invocation_metric_route_role
     ON llm_invocation_metric
     FOR EACH ROW
     EXECUTE FUNCTION validate_llm_invocation_metric_route_role();
+
+CREATE OR REPLACE FUNCTION protect_llm_scenario_route_history()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM pg_advisory_xact_lock(hashtextextended(OLD.id::text, 0));
+
+    IF EXISTS (
+        SELECT 1
+        FROM llm_invocation_metric AS metric
+        WHERE metric.scenario_route_id = OLD.id
+    ) THEN
+        RAISE EXCEPTION 'scenario routes referenced by invocation metrics are immutable'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM llm_config_version AS route_version
+        WHERE route_version.id = OLD.config_version_id
+          AND route_version.status <> 'draft'
+    ) THEN
+        RAISE EXCEPTION 'scenario routes are immutable after their config version leaves draft'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF TG_OP = 'UPDATE' THEN
+        IF EXISTS (
+            SELECT 1
+            FROM llm_config_version AS route_version
+            WHERE route_version.id = NEW.config_version_id
+              AND route_version.status <> 'draft'
+        ) THEN
+            RAISE EXCEPTION 'scenario routes cannot be moved into a non-draft config version'
+                USING ERRCODE = '23514';
+        END IF;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_protect_llm_scenario_route_history
+    ON llm_scenario_route;
+
+CREATE TRIGGER trg_protect_llm_scenario_route_history
+    BEFORE UPDATE OR DELETE ON llm_scenario_route
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_llm_scenario_route_history();

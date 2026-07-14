@@ -306,9 +306,16 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "conrelid = 'llm_invocation_metric'::regclass",
             "create or replace function validate_llm_invocation_metric_route_role()",
             "new.route_role = 'fallback'",
+            "join llm_config_version as route_version",
+            "route_version.status = 'running'",
             "route.fallback_provider_config_id is not null",
             "route.fallback_model is not null",
             "create trigger trg_validate_llm_invocation_metric_route_role",
+            "create or replace function protect_llm_scenario_route_history()",
+            "metric.scenario_route_id = old.id",
+            "route_version.status <> 'draft'",
+            "create trigger trg_protect_llm_scenario_route_history",
+            "before update or delete on llm_scenario_route",
         ]),
     ]
     for scoped_sql, required_snippets in required_by_section:
