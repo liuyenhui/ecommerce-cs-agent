@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "api": {
+      "type": "object",
+      "properties": {
+        "cursorSigningSecretRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "key"],
+          "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "key": {"type": "string", "minLength": 1}
+          }
+        }
+      },
+      "required": ["cursorSigningSecretRef"]
+    }
+  },
+  "required": ["api"]
+}

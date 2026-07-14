@@ -495,6 +495,20 @@ describe("LLM governance and releases", () => {
     fireEvent.click(await screen.findByRole("button", { name: "加载对应版本后回滚" })); expect(await screen.findByRole("button", { name: "回滚到此版本" })).toBeTruthy(); expect(screen.getByText(/已加载发布记录对应版本/)).toBeTruthy();
   });
 
+  it("does not let an off-page version lookup from organization A pollute organization B", async () => {
+    const orgB = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"; let lookupSignal: AbortSignal | undefined; let finishLookup!: (value: Response) => void; const pendingLookup = new Promise<Response>((resolve) => { finishLookup = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => { const path = String(input); if (path.endsWith("/off-page-version")) { lookupSignal = init?.signal || undefined; return pendingLookup; } if (path.includes(`organization_id=${orgB}`)) return response({ items: [], page_info: { limit: 50, has_more: false, next_cursor: null } }); if (path.includes("/config-versions?")) return response({ items: [], page_info: { limit: 50, has_more: false, next_cursor: null } }); return response({ items: [{ release_record_id: "off-page-release", organization_id: version.organization_id, config_version_id: "off-page-version", evaluation_run_id: "eval", evaluation_config_version_id: "off-page-version", status: "superseded", revision: 3, submitted_by_system_admin_user_id: "sys-1", submitted_at: "2026-07-15T00:00:00Z", published_by_system_admin_user_id: "sys-2", published_at: "2026-07-15T00:01:00Z", rollback_of_release_id: null, rollback_of_version_id: null }], page_info: { limit: 50, has_more: false, next_cursor: null } }); }));
+    render(<ReleasesPage roles={["release_admin"]} />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" })); fireEvent.click(await screen.findByRole("button", { name: "加载对应版本后回滚" })); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: orgB } }); expect(lookupSignal?.aborted).toBe(true); fireEvent.click(screen.getByRole("button", { name: "查询版本" }));
+    finishLookup(response({ ...version, version_id: "off-page-version", organization_id: version.organization_id })); await Promise.resolve(); expect(screen.queryByRole("button", { name: "回滚到此版本" })).toBeNull(); expect(screen.queryByText(/对应版本加载失败|已加载发布记录对应版本/)).toBeNull();
+  });
+
+  it("locks a publish intent synchronously and shows its organization scope", async () => {
+    const published = { ...version, status: "pending_publish" as const, evaluation: { evaluation_run_id: "eval-passed" } }; let publishCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => { const path = String(input); if (path.endsWith("/publish") && init?.method === "POST") { publishCalls += 1; return new Promise<Response>(() => undefined); } if (path.includes("/config-versions?")) return response({ items: [published], page_info: { limit: 50, has_more: false, next_cursor: null } }); return response({ items: [], page_info: { limit: 50, has_more: false, next_cursor: null } }); }));
+    vi.spyOn(window, "confirm").mockReturnValue(true); render(<ReleasesPage />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: published.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" })); fireEvent.click(await screen.findByRole("button", { name: "发布版本 4" })); expect(screen.getByText(`组织范围：${published.organization_id}`)).toBeTruthy(); fireEvent.change(screen.getByLabelText("发布原因"), { target: { value: "批准" } }); fireEvent.change(screen.getByLabelText("幂等键"), { target: { value: "publish-once" } });
+    const confirm = screen.getByRole("button", { name: "确认发布" }); fireEvent.click(confirm); fireEvent.click(confirm); expect(publishCalls).toBe(1); expect(screen.getByRole("button", { name: "发布中…" }).hasAttribute("disabled")).toBe(true); expect((screen.getByLabelText("组织 ID") as HTMLInputElement).disabled).toBe(true);
+  });
+
   it("clears old release data and cursors before a different organization finishes loading", async () => {
     let hold = false;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -522,6 +536,16 @@ describe("LLM governance and releases", () => {
     expect(cursorSignal?.aborted).toBe(true); expect(screen.queryByRole("button", { name: "加载更多发布记录" })).toBeNull(); finish(response({ items: [{ release_record_id: "late-release" }], page_info: { limit: 50, has_more: false, next_cursor: null } })); await Promise.resolve(); expect(screen.queryByText(/late-release/)).toBeNull();
   });
 
+  it("keeps release load-more retryable after a scoped request fails", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => { const path = String(input); if (path.includes("cursor=release-next")) return response({ error: { message: "page unavailable" } }, 500); if (path.includes("/config-versions?")) return response({ items: [], page_info: { limit: 50, has_more: false, next_cursor: null } }); return response({ items: [], page_info: { limit: 50, has_more: true, next_cursor: "release-next" } }); }));
+    render(<ReleasesPage />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" })); fireEvent.click(await screen.findByRole("button", { name: "加载更多发布记录" })); expect(await screen.findByText(/发布记录加载失败.*page unavailable/)).toBeTruthy(); expect(screen.getByRole("button", { name: "加载更多发布记录" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("keeps version load-more retryable after a scoped request fails", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => { const path = String(input); if (path.includes("cursor=version-next")) return response({ error: { message: "version page unavailable" } }, 500); if (path.includes("/config-versions?")) return response({ items: [version], page_info: { limit: 50, has_more: true, next_cursor: "version-next" } }); return response({ items: [], page_info: { limit: 50, has_more: false, next_cursor: null } }); }));
+    render(<ReleasesPage />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" })); fireEvent.click(await screen.findByRole("button", { name: "加载更多版本" })); expect(await screen.findByText(/版本加载失败.*version page unavailable/)).toBeTruthy(); expect(screen.getByRole("button", { name: "加载更多版本" }).hasAttribute("disabled")).toBe(false);
+  });
+
   it("confirms rollback and refetches versions plus release records", async () => {
     const reads: string[] = []; const writes: Array<{ path: string; body: Record<string, unknown> }> = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -536,6 +560,12 @@ describe("LLM governance and releases", () => {
     fireEvent.click(await screen.findByRole("button", { name: "回滚到此版本" }));
     await waitFor(() => expect(writes).toHaveLength(1)); expect(writes[0].path).toContain(`/config-versions/${version.version_id}/rollback`); expect(writes[0].body.reason).toBe("生产回归");
     await waitFor(() => expect(reads.filter((path) => path.includes("/config-versions?")).length).toBeGreaterThanOrEqual(2)); expect(reads.filter((path) => path.includes("/llm/releases?")).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("locks rollback synchronously so a double click sends one request with one intent key", async () => {
+    const writes: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => { const path = String(input); if (path.endsWith("/rollback") && init?.method === "POST") { writes.push(JSON.parse(String(init.body))); return new Promise<Response>(() => undefined); } if (path.includes("/config-versions?")) return response({ items: [version], page_info: { limit: 50, has_more: false, next_cursor: null } }); if (path.includes("/llm/releases?")) return response({ items: [{ release_record_id: "rel-running", organization_id: version.organization_id, config_version_id: version.version_id, evaluation_run_id: "eval-real", evaluation_config_version_id: version.version_id, status: "running", revision: 2, submitted_by_system_admin_user_id: "sys-1", submitted_at: "2026-07-15T00:00:00Z", published_by_system_admin_user_id: "sys-2", published_at: "2026-07-15T00:01:00Z", rollback_of_release_id: null, rollback_of_version_id: null }], page_info: { limit: 50, has_more: false, next_cursor: null } }); return response({ items: [] }); }));
+    vi.spyOn(window, "prompt").mockReturnValue("生产回归"); vi.spyOn(window, "confirm").mockReturnValue(true); render(<ReleasesPage roles={["release_admin"]} />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" })); const rollback = await screen.findByRole("button", { name: "回滚到此版本" }); fireEvent.click(rollback); fireEvent.click(rollback); expect(writes).toHaveLength(1); expect(String(writes[0].idempotency_key)).toMatch(/^rollback-/); expect(screen.getByRole("button", { name: "回滚中…" }).hasAttribute("disabled")).toBe(true);
   });
 
   it("reports rollback success truthfully when the post-action refresh fails", async () => {
@@ -804,13 +834,51 @@ describe("LLM governance and releases", () => {
       { timeout_seconds: 301 }, { max_retries: 20.5 }, { circuit_breaker_threshold: 0 }, { recovery_probe_seconds: 86401 }
     ]) expect(validateLlmRoute({ ...version.routes[0], ...patch })).not.toBeNull();
     expect(validateLlmRoute({ ...version.routes[0], temperature: 2, max_output_tokens: 1000000, timeout_seconds: 300, max_retries: 20, circuit_breaker_threshold: 10000, recovery_probe_seconds: 86400 })).toBeNull();
+    expect(validateLlmRoute({ ...version.routes[0], fallback_provider_config_id: provider.provider_id, fallback_model: null })).toMatch(/降级/);
+    expect(validateLlmRoute({ ...version.routes[0], fallback_provider_config_id: null, fallback_model: "gpt-5-mini" })).toMatch(/降级/);
+  });
+
+  it("builds every required scenario from an empty draft and saves provider-model pairs", async () => {
+    const empty = { ...version, routes: [] }; const writes: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input); if (path.includes("/providers")) return response({ items: [provider] });
+      if (path.includes("/config-versions?") && !init?.method) return response({ items: [empty], page_info: { limit: 50, has_more: false, next_cursor: null } });
+      if (path.endsWith("/routes") && init?.method === "PUT") { writes.push(JSON.parse(String(init.body))); return response({ ...empty, revision: 4, routes: (writes[0].routes as unknown[]) }); }
+      return response({ items: [] });
+    }));
+    vi.spyOn(window, "prompt").mockReturnValue("配置必需场景"); render(<LlmGovernancePage />);
+    fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "加载组织配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "补齐必需场景" }));
+    for (const scenario of ["reply_generation", "knowledge_extraction", "blind_test_question_generation"]) expect((await screen.findAllByText(scenario)).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" })); await waitFor(() => expect(writes).toHaveLength(1));
+    expect((writes[0].routes as Array<Record<string, unknown>>).map((route) => route.scenario)).toEqual(["reply_generation", "knowledge_extraction", "blind_test_question_generation"]);
+    for (const route of writes[0].routes as Array<Record<string, unknown>>) expect(route).toMatchObject({ primary_provider_config_id: provider.provider_id, primary_model: "gpt-5-mini", fallback_provider_config_id: null, fallback_model: null, enabled: true });
+  });
+
+  it("derives dirty state by value and disables saving after restoring the original", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("/providers") ? response({ items: [provider] }) : response({ items: [version], page_info: { limit: 50, has_more: false, next_cursor: null } })));
+    render(<LlmGovernancePage />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "加载组织配置" }));
+    const temperature = await screen.findByLabelText("Temperature"); const save = screen.getByRole("button", { name: "保存草稿" });
+    fireEvent.change(temperature, { target: { value: "0.4" } }); expect(save.hasAttribute("disabled")).toBe(false);
+    fireEvent.change(temperature, { target: { value: "0.2" } }); expect(save.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("links tabs to panels and explains locked route fields for read-only roles", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("/providers") ? response({ items: [provider] }) : response({ items: [version], page_info: { limit: 50, has_more: false, next_cursor: null } })));
+    render(<LlmGovernancePage roles={["security_auditor"]} />); const configTab = screen.getByRole("tab", { name: "配置与路由" });
+    expect(configTab.getAttribute("aria-controls")).toBe("llm-panel-config"); expect(document.getElementById("llm-panel-config")?.getAttribute("aria-labelledby")).toBe("llm-tab-config");
+    fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "加载组织配置" }));
+    expect((await screen.findByLabelText("主 Provider")).matches(":disabled")).toBe(true); expect(screen.getByLabelText("Temperature").matches(":disabled")).toBe(true);
+    expect(screen.getByText(/当前角色仅可查看路由配置/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "版本记录" })); expect(document.getElementById("llm-panel-versions")?.getAttribute("aria-labelledby")).toBe("llm-tab-versions");
   });
 
   it("keeps unchanged routes disabled and saves only the dirty draft without changing running", async () => {
-    const running = { ...version, version_id: "running-version", version_number: 3, status: "running" as const, revision: 7 }; const writes: Array<{ path: string; body: Record<string, unknown> }> = [];
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => { const path = String(input); if (path.includes("/providers")) return response({ items: [provider] }); if (path.includes("/config-versions?") && !init?.method) return response({ items: [version, running], page_info: { limit: 50, has_more: false, next_cursor: null } }); if (path.endsWith("/routes") && init?.method === "PUT") { writes.push({ path, body: JSON.parse(String(init.body)) }); return response({ ...version, revision: 4, routes: [{ ...version.routes[0], temperature: 0.4 }] }); } return response({ items: [] }); }));
+    const completeDraft = { ...version, routes: [version.routes[0], { ...version.routes[0], scenario: "knowledge_extraction" }, { ...version.routes[0], scenario: "blind_test_question_generation" }] };
+    const running = { ...completeDraft, version_id: "running-version", version_number: 3, status: "running" as const, revision: 7 }; const writes: Array<{ path: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => { const path = String(input); if (path.includes("/providers")) return response({ items: [provider] }); if (path.includes("/config-versions?") && !init?.method) return response({ items: [completeDraft, running], page_info: { limit: 50, has_more: false, next_cursor: null } }); if (path.endsWith("/routes") && init?.method === "PUT") { writes.push({ path, body: JSON.parse(String(init.body)) }); return response({ ...completeDraft, revision: 4, routes: (JSON.parse(String(init.body)) as { routes: typeof completeDraft.routes }).routes }); } return response({ items: [] }); }));
     vi.spyOn(window, "prompt").mockReturnValue("调整温度"); render(<LlmGovernancePage />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "加载组织配置" }));
-    const temperature = await screen.findByLabelText("Temperature"); const save = screen.getByRole("button", { name: "保存草稿" }); expect(save.hasAttribute("disabled")).toBe(true); fireEvent.change(temperature, { target: { value: "0.4" } }); expect(save.hasAttribute("disabled")).toBe(false); fireEvent.click(save);
+    const temperature = (await screen.findAllByLabelText("Temperature"))[0]; const save = screen.getByRole("button", { name: "保存草稿" }); expect(save.hasAttribute("disabled")).toBe(true); fireEvent.change(temperature, { target: { value: "0.4" } }); expect(save.hasAttribute("disabled")).toBe(false); fireEvent.click(save);
     await waitFor(() => expect(writes).toHaveLength(1)); expect(writes[0].body).toMatchObject({ expected_revision: 3, reason: "调整温度" }); expect((writes[0].body.routes as Array<Record<string, unknown>>)[0].temperature).toBe(0.4); expect(screen.queryByRole("button", { name: /发布/ })).toBeNull();
   });
 

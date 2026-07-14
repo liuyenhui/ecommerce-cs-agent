@@ -66,6 +66,7 @@ def create_app(
         llm_governance = llm_governance_repository
     elif settings.environment.lower() == "test":
         llm_governance = InMemoryLlmGovernanceRepository(
+            cursor_signing_key=settings.llm_cursor_signing_key or "test-only-fixed-llm-cursor-signing-key",
             connection_tester=llm_connection_tester or (
                 lambda _provider, _request: {
                     "status": "failed", "latency_ms": 0, "error_code": "tester_unavailable"
@@ -78,12 +79,15 @@ def create_app(
     else:
         if not settings.database_url:
             raise RuntimeError("DATABASE_URL is required for System Admin LLM governance outside test")
+        if not settings.llm_cursor_signing_key:
+            raise RuntimeError("LLM_CURSOR_SIGNING_KEY is required for System Admin LLM governance outside test")
         connection_tester = llm_connection_tester or KubernetesSecretProviderConnectionTester.from_environment()
         release_gate_checker = llm_release_gate_checker or PostgresEvaluationReleaseGateChecker(
             settings.database_url
         )
         llm_governance = PostgresLlmGovernanceRepository(
             settings.database_url,
+            cursor_signing_key=settings.llm_cursor_signing_key,
             connection_tester=connection_tester,
             release_gate_checker=release_gate_checker,
         )

@@ -4,8 +4,10 @@ import base64
 import binascii
 import copy
 import hashlib
+import hmac
 import json
 import math
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Protocol
@@ -43,6 +45,9 @@ _PUBLIC_INVOCATION_FIELDS = (
     "output_tokens", "latency_ms", "status", "error_code", "estimated_cost_micros",
     "currency",
 )
+_RFC3339_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$"
+)
 
 
 class LlmGovernanceRepository(Protocol):
@@ -79,9 +84,26 @@ def _iso(value: datetime | str | None = None) -> str | None:
     return value.astimezone(timezone.utc).isoformat()
 
 
-def _encode_cursor(payload: dict[str, Any]) -> str:
+def _cursor_key(value: str) -> bytes:
+    key = value.encode()
+    if len(key) < 32:
+        raise ValueError("LLM cursor signing key must contain at least 32 bytes")
+    return key
+
+
+def _b64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode().rstrip("=")
+
+
+def _b64url_decode(value: str) -> bytes:
+    padded = value + "=" * (-len(value) % 4)
+    return base64.b64decode(padded.encode(), altchars=b"-_", validate=True)
+
+
+def _encode_cursor(payload: dict[str, Any], *, signing_key: bytes) -> str:
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    signature = hmac.new(signing_key, raw, hashlib.sha256).digest()
+    return f"{_b64url_encode(raw)}.{_b64url_encode(signature)}"
 
 
 def _cursor_scope_hash(kind: str, scope: dict[str, Any]) -> str:
@@ -120,12 +142,17 @@ def _invocation_cursor_scope(filters: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _decode_cursor(value: str | None, *, kind: str, scope_hash: str) -> dict[str, Any] | None:
+def _decode_cursor(value: str | None, *, kind: str, scope_hash: str, signing_key: bytes) -> dict[str, Any] | None:
     if value is None:
         return None
     try:
-        padded = value + "=" * (-len(value) % 4)
-        data = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+        encoded, encoded_signature = value.split(".")
+        raw = _b64url_decode(encoded)
+        supplied_signature = _b64url_decode(encoded_signature)
+        expected_signature = hmac.new(signing_key, raw, hashlib.sha256).digest()
+        if not hmac.compare_digest(supplied_signature, expected_signature):
+            raise ValueError
+        data = json.loads(raw.decode())
         if (
             not isinstance(data, dict)
             or data.get("version") != 1
@@ -137,10 +164,21 @@ def _decode_cursor(value: str | None, *, kind: str, scope_hash: str) -> dict[str
             if not isinstance(data.get("version_number"), int) or data["version_number"] <= 0:
                 raise ValueError
         elif kind == "invocations":
+            if not _RFC3339_PATTERN.fullmatch(str(data.get("occurred_at", ""))):
+                raise ValueError
             occurred_at = datetime.fromisoformat(
                 str(data.get("occurred_at", "")).replace("Z", "+00:00")
             )
             if occurred_at.tzinfo is None or occurred_at.utcoffset() != timezone.utc.utcoffset(occurred_at):
+                raise ValueError
+            uuid.UUID(str(data.get("id")))
+        elif kind == "release_records":
+            if not _RFC3339_PATTERN.fullmatch(str(data.get("submitted_at", ""))):
+                raise ValueError
+            submitted_at = datetime.fromisoformat(
+                str(data.get("submitted_at", "")).replace("Z", "+00:00")
+            )
+            if submitted_at.tzinfo is None or submitted_at.utcoffset() is None:
                 raise ValueError
             uuid.UUID(str(data.get("id")))
         return data
@@ -325,6 +363,7 @@ def _bounded_snapshot(response: dict[str, Any]) -> dict[str, Any]:
 class InMemoryLlmGovernanceRepository:
     def __init__(
         self,
+        cursor_signing_key: str,
         connection_tester: Callable[[dict[str, Any], dict[str, int]], dict[str, Any]] | None = None,
         release_gate_checker: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
     ) -> None:
@@ -335,6 +374,7 @@ class InMemoryLlmGovernanceRepository:
         self.invocation_metrics: list[dict[str, Any]] = []
         self.audit_logs: list[dict[str, Any]] = []
         self._idempotency: dict[tuple[str, str], dict[str, Any]] = {}
+        self._cursor_signing_key = _cursor_key(cursor_signing_key)
         self._connection_tester = connection_tester or (lambda _provider, _request: {"status": "passed", "latency_ms": 0})
         self._release_gate_checker = release_gate_checker or (
             lambda _version, _evaluation_run_id: {"status": "failed", "error_code": "release_gate_unavailable"}
@@ -461,7 +501,7 @@ class InMemoryLlmGovernanceRepository:
             "config_versions",
             {"organization_id": organization_id, "sort": ["version_number:desc"]},
         )
-        decoded = _decode_cursor(cursor, kind="config_versions", scope_hash=scope_hash)
+        decoded = _decode_cursor(cursor, kind="config_versions", scope_hash=scope_hash, signing_key=self._cursor_signing_key)
         before = int(decoded["version_number"]) if decoded else None
         candidates = [
             item for item in sorted(self.versions.values(), key=lambda value: int(value["version_number"]), reverse=True)
@@ -471,7 +511,7 @@ class InMemoryLlmGovernanceRepository:
         selected = candidates[: limit + 1]
         has_more = len(selected) > limit
         items = selected[:limit]
-        next_cursor = _encode_cursor({"version": 1, "kind": "config_versions", "scope_hash": scope_hash, "version_number": items[-1]["version_number"]}) if has_more else None
+        next_cursor = _encode_cursor({"version": 1, "kind": "config_versions", "scope_hash": scope_hash, "version_number": items[-1]["version_number"]}, signing_key=self._cursor_signing_key) if has_more else None
         return {"items": [copy.deepcopy(item) for item in items], "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
 
     def get_version(self, session: SystemAdminSession, version_id: str) -> dict[str, Any]:
@@ -485,7 +525,7 @@ class InMemoryLlmGovernanceRepository:
         _require_role(session, _READ_ROLES)
         limit = min(max(int(limit), 1), 100)
         scope_hash = _cursor_scope_hash("release_records", {"organization_id": organization_id, "sort": ["submitted_at:desc", "release_record_id:desc"]})
-        decoded = _decode_cursor(cursor, kind="release_records", scope_hash=scope_hash)
+        decoded = _decode_cursor(cursor, kind="release_records", scope_hash=scope_hash, signing_key=self._cursor_signing_key)
         boundary = (str(decoded["submitted_at"]), str(decoded["id"])) if decoded else None
         candidates = sorted(
             (copy.deepcopy(item) for item in self.release_records.values() if item["organization_id"] == organization_id),
@@ -499,7 +539,7 @@ class InMemoryLlmGovernanceRepository:
         next_cursor = None
         if has_more:
             last = items[-1]
-            next_cursor = _encode_cursor({"version": 1, "kind": "release_records", "scope_hash": scope_hash, "submitted_at": last["submitted_at"], "id": last["release_record_id"]})
+            next_cursor = _encode_cursor({"version": 1, "kind": "release_records", "scope_hash": scope_hash, "submitted_at": last["submitted_at"], "id": last["release_record_id"]}, signing_key=self._cursor_signing_key)
         self.audit_logs.insert(0, {
             "audit_log_id": f"audit-{uuid.uuid4().hex}", "actor_system_user_id": session.user_id,
             "organization_id": organization_id, "action": "llm.release.list", "object_type": "llm_release_record",
@@ -693,9 +733,11 @@ class InMemoryLlmGovernanceRepository:
             p95 = None
         costs: dict[str, int] = {}
         for item in items:
+            if item.get("estimated_cost_micros") is None:
+                continue
             currency = str(item.get("currency") or "USD")
-            costs[currency] = costs.get(currency, 0) + int(item.get("estimated_cost_micros", 0))
-        estimated_cost = 0 if not costs else next(iter(costs.values())) if len(costs) == 1 else None
+            costs[currency] = costs.get(currency, 0) + int(item["estimated_cost_micros"])
+        estimated_cost = next(iter(costs.values())) if len(costs) == 1 else None
         return {"calls": calls, "input_tokens": sum(int(item.get("input_tokens", 0)) for item in items), "output_tokens": sum(int(item.get("output_tokens", 0)) for item in items), "total_tokens": sum(int(item.get("input_tokens", 0)) + int(item.get("output_tokens", 0)) for item in items), "estimated_cost_micros": estimated_cost, "cost_by_currency": costs, "p95_latency_ms": p95, "error_rate": sum(item.get("status") != "succeeded" for item in items) / calls if calls else None, "fallback_rate": sum(item.get("route_role") == "fallback" for item in items) / calls if calls else None}
 
     def usage_timeseries(self, session: SystemAdminSession, filters: dict[str, Any]) -> list[dict[str, Any]]:
@@ -724,7 +766,7 @@ class InMemoryLlmGovernanceRepository:
     def list_invocations_page(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         limit = min(max(int(filters.get("limit", 100)), 1), 500)
         scope_hash = _cursor_scope_hash("invocations", _invocation_cursor_scope(filters))
-        decoded = _decode_cursor(filters.get("cursor"), kind="invocations", scope_hash=scope_hash)
+        decoded = _decode_cursor(filters.get("cursor"), kind="invocations", scope_hash=scope_hash, signing_key=self._cursor_signing_key)
         items = sorted(
             self._filtered_metrics(session, filters),
             key=lambda item: (str(_iso(item.get("occurred_at"))), str(item.get("invocation_id"))),
@@ -739,7 +781,7 @@ class InMemoryLlmGovernanceRepository:
         next_cursor = None
         if has_more:
             last = page_items[-1]
-            next_cursor = _encode_cursor({"version": 1, "kind": "invocations", "scope_hash": scope_hash, "occurred_at": _iso(last.get("occurred_at")), "id": last.get("invocation_id")})
+            next_cursor = _encode_cursor({"version": 1, "kind": "invocations", "scope_hash": scope_hash, "occurred_at": _iso(last.get("occurred_at")), "id": last.get("invocation_id")}, signing_key=self._cursor_signing_key)
         return {"items": [_public_invocation(item) for item in page_items], "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
 
 
@@ -747,12 +789,14 @@ class PostgresLlmGovernanceRepository:
     def __init__(
         self,
         database_url: str,
+        cursor_signing_key: str,
         connection_tester: Callable[[dict[str, Any], dict[str, int]], dict[str, Any]] | None = None,
         release_gate_checker: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
     ) -> None:
         import psycopg
         self._connect = psycopg.connect
         self._database_url = database_url
+        self._cursor_signing_key = _cursor_key(cursor_signing_key)
         self._connection_tester = connection_tester or (
             lambda _provider, _request: {
                 "status": "failed",
@@ -998,7 +1042,7 @@ class PostgresLlmGovernanceRepository:
             "config_versions",
             {"organization_id": organization_id, "sort": ["version_number:desc"]},
         )
-        decoded = _decode_cursor(cursor, kind="config_versions", scope_hash=scope_hash)
+        decoded = _decode_cursor(cursor, kind="config_versions", scope_hash=scope_hash, signing_key=self._cursor_signing_key)
         before = int(decoded["version_number"]) if decoded else None
         def op(cur: Any) -> dict[str, Any]:
             cur.execute(
@@ -1010,7 +1054,7 @@ class PostgresLlmGovernanceRepository:
             has_more = len(rows) > limit
             rows = rows[:limit]
             items = [self._fetch_version(cur, str(row[0])) for row in rows]
-            next_cursor = _encode_cursor({"version": 1, "kind": "config_versions", "scope_hash": scope_hash, "version_number": int(rows[-1][1])}) if has_more else None
+            next_cursor = _encode_cursor({"version": 1, "kind": "config_versions", "scope_hash": scope_hash, "version_number": int(rows[-1][1])}, signing_key=self._cursor_signing_key) if has_more else None
             return {"items": items, "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
         return self._read(op)
 
@@ -1022,7 +1066,7 @@ class PostgresLlmGovernanceRepository:
         _require_role(session, _READ_ROLES)
         limit = min(max(int(limit), 1), 100)
         scope_hash = _cursor_scope_hash("release_records", {"organization_id": organization_id, "sort": ["submitted_at:desc", "release_record_id:desc"]})
-        decoded = _decode_cursor(cursor, kind="release_records", scope_hash=scope_hash)
+        decoded = _decode_cursor(cursor, kind="release_records", scope_hash=scope_hash, signing_key=self._cursor_signing_key)
         boundary_at = decoded.get("submitted_at") if decoded else None
         boundary_id = decoded.get("id") if decoded else None
         def op(cur: Any) -> dict[str, Any]:
@@ -1045,7 +1089,7 @@ class PostgresLlmGovernanceRepository:
             next_cursor = None
             if has_more:
                 last = items[-1]
-                next_cursor = _encode_cursor({"version": 1, "kind": "release_records", "scope_hash": scope_hash, "submitted_at": last["submitted_at"], "id": last["release_record_id"]})
+                next_cursor = _encode_cursor({"version": 1, "kind": "release_records", "scope_hash": scope_hash, "submitted_at": last["submitted_at"], "id": last["release_record_id"]}, signing_key=self._cursor_signing_key)
             cur.execute(
                 "INSERT INTO system_admin_audit_log (id, system_admin_user_id, organization_id, action, object_type, object_id, diff_summary) VALUES (%s,%s,%s,%s,%s,%s,%s)",
                 (str(uuid.uuid4()), session.user_id, organization_id, "llm.release.list", "llm_release_record", organization_id,
@@ -1263,7 +1307,7 @@ class PostgresLlmGovernanceRepository:
             row = cur.fetchone()
             cur.execute("SELECT metric.currency, SUM(metric.estimated_cost_micros)" + self._usage_from() + where + " GROUP BY metric.currency ORDER BY metric.currency", tuple(params))
             costs = {str(cost[0]): int(cost[1]) for cost in cur.fetchall()}
-            estimated_cost = 0 if not costs else next(iter(costs.values())) if len(costs) == 1 else None
+            estimated_cost = next(iter(costs.values())) if len(costs) == 1 else None
             return {"calls": int(row[0]), "input_tokens": int(row[1]), "output_tokens": int(row[2]), "total_tokens": int(row[3]), "estimated_cost_micros": estimated_cost, "cost_by_currency": costs, "p95_latency_ms": float(row[4]) if row[4] is not None else None, "error_rate": float(row[5]) if row[5] is not None else None, "fallback_rate": float(row[6]) if row[6] is not None else None}
         return self._read(op)
 
@@ -1295,7 +1339,7 @@ class PostgresLlmGovernanceRepository:
         where, params = self._usage_where(filters)
         limit = min(max(int(filters.get("limit", 100)), 1), 500)
         scope_hash = _cursor_scope_hash("invocations", _invocation_cursor_scope(filters))
-        decoded = _decode_cursor(filters.get("cursor"), kind="invocations", scope_hash=scope_hash)
+        decoded = _decode_cursor(filters.get("cursor"), kind="invocations", scope_hash=scope_hash, signing_key=self._cursor_signing_key)
         if decoded:
             cursor_clause = "(metric.occurred_at, metric.id) < (%s::timestamptz, %s::uuid)"
             where += (" AND " if where else " WHERE ") + cursor_clause
@@ -1312,7 +1356,7 @@ class PostgresLlmGovernanceRepository:
             next_cursor = None
             if has_more:
                 last = rows[-1]
-                next_cursor = _encode_cursor({"version": 1, "kind": "invocations", "scope_hash": scope_hash, "occurred_at": last["occurred_at"], "id": last["invocation_id"]})
+                next_cursor = _encode_cursor({"version": 1, "kind": "invocations", "scope_hash": scope_hash, "occurred_at": last["occurred_at"], "id": last["invocation_id"]}, signing_key=self._cursor_signing_key)
             return {"items": rows, "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
         return self._read(op)
 

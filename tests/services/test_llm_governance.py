@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 import copy
+import hashlib
+import hmac
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -15,8 +18,8 @@ from psycopg import sql
 from ecommerce_cs_agent.db.migrations import load_migrations
 from ecommerce_cs_agent.services.admin_auth import SystemAdminSession
 from ecommerce_cs_agent.services.llm_governance import (
-    InMemoryLlmGovernanceRepository,
-    PostgresLlmGovernanceRepository,
+    InMemoryLlmGovernanceRepository as _InMemoryLlmGovernanceRepository,
+    PostgresLlmGovernanceRepository as _PostgresLlmGovernanceRepository,
     _bounded_snapshot,
     _fingerprint,
 )
@@ -24,6 +27,31 @@ from ecommerce_cs_agent.services.llm_governance_adapters import PostgresEvaluati
 
 
 ORG_ID = "11111111-1111-1111-1111-111111111111"
+CURSOR_SIGNING_KEY = "test-only-fixed-llm-cursor-signing-key"
+
+
+class InMemoryLlmGovernanceRepository(_InMemoryLlmGovernanceRepository):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(cursor_signing_key=CURSOR_SIGNING_KEY, **kwargs)
+
+
+class PostgresLlmGovernanceRepository(_PostgresLlmGovernanceRepository):
+    def __init__(self, database_url: str, **kwargs: Any) -> None:
+        super().__init__(database_url, cursor_signing_key=CURSOR_SIGNING_KEY, **kwargs)
+
+
+def _cursor_payload(cursor: str) -> dict[str, Any]:
+    encoded, _signature = cursor.split(".", 1)
+    return json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+
+
+def _signed_cursor(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    encoded = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    signature = hmac.new(CURSOR_SIGNING_KEY.encode(), raw, hashlib.sha256).digest()
+    return f"{encoded}.{base64.urlsafe_b64encode(signature).decode().rstrip('=')}"
+
+
 PROVIDER_PAYLOAD = {
     "name": "primary",
     "provider_type": "openai_compatible",
@@ -133,6 +161,45 @@ def test_release_records_are_real_cursor_paginated_history() -> None:
     assert audits[0]["organization_id"] == ORG_ID
     assert audits[0]["diff_summary"]["cursor_present"] is True
     assert "secret" not in json.dumps(audits).lower()
+
+
+def test_llm_cursors_are_hmac_authenticated_and_unsigned_cursors_are_rejected() -> None:
+    service = InMemoryLlmGovernanceRepository()
+    for index in range(3):
+        service.create_draft(_session(), {"organization_id": ORG_ID, "reason": "page", "idempotency_key": f"signed-page-{index}"})
+    cursor = service.list_versions_page(_session(), ORG_ID, limit=2)["page_info"]["next_cursor"]
+    payload = _cursor_payload(cursor)
+    assert payload["kind"] == "config_versions"
+    encoded, signature = cursor.split(".", 1)
+    payload["version_number"] -= 1
+    tampered_raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    tampered = f"{base64.urlsafe_b64encode(tampered_raw).decode().rstrip('=')}.{signature}"
+    with pytest.raises(HTTPException) as changed:
+        service.list_versions_page(_session(), ORG_ID, limit=2, cursor=tampered)
+    assert changed.value.status_code == 422
+    with pytest.raises(HTTPException) as unsigned:
+        service.list_versions_page(_session(), ORG_ID, limit=2, cursor=encoded)
+    assert unsigned.value.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("submitted_at", "2026-07-15 00:00:00"), ("id", "not-a-uuid")],
+)
+def test_release_cursor_requires_strict_rfc3339_and_uuid_boundary(field: str, value: str) -> None:
+    service = InMemoryLlmGovernanceRepository(
+        connection_tester=lambda _provider, _request: {"status": "passed", "latency_ms": 4},
+        release_gate_checker=lambda _version, _run_id: {"status": "passed"},
+    )
+    provider = _create_provider(service, name="cursor-boundary", idem="cursor-boundary-provider")
+    _release(service, _all_routes(provider["provider_id"]), suffix="cursor-boundary-one")
+    _release(service, _all_routes(provider["provider_id"]), suffix="cursor-boundary-two")
+    cursor = service.list_release_records_page(_session(), ORG_ID, limit=1)["page_info"]["next_cursor"]
+    payload = _cursor_payload(cursor)
+    payload[field] = value
+    with pytest.raises(HTTPException) as invalid:
+        service.list_release_records_page(_session(), ORG_ID, limit=1, cursor=_signed_cursor(payload))
+    assert invalid.value.status_code == 422
 
 
 def test_all_writes_require_live_system_session_role_reason_and_idempotency_key() -> None:
@@ -408,7 +475,7 @@ def test_usage_filters_summary_rates_groups_trends_and_metadata_without_content(
 
 def test_zero_usage_has_nullable_rates_and_empty_collections() -> None:
     service = InMemoryLlmGovernanceRepository()
-    assert service.usage_summary(_session(), {}) == {"calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "estimated_cost_micros": 0, "cost_by_currency": {}, "p95_latency_ms": None, "error_rate": None, "fallback_rate": None}
+    assert service.usage_summary(_session(), {}) == {"calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "estimated_cost_micros": None, "cost_by_currency": {}, "p95_latency_ms": None, "error_rate": None, "fallback_rate": None}
     assert service.usage_timeseries(_session(), {}) == []
     assert service.usage_breakdown(_session(), {}, "provider") == []
     assert service.list_invocations(_session(), {}) == []

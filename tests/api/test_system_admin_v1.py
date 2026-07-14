@@ -549,7 +549,7 @@ def test_system_admin_dashboard_summary_uses_postgres_total_aggregates(monkeypat
     monkeypatch.setattr(PostgresSystemAdminRepository, "__init__", fake_repo_init)
 
     client = TestClient(create_app(
-        Settings(database_url="postgresql://example", environment="development"),
+        Settings(database_url="postgresql://example", environment="development", llm_cursor_signing_key="test-only-fixed-llm-cursor-signing-key"),
         llm_connection_tester=lambda _provider, _request: {"status": "failed", "latency_ms": 0, "error_code": "tester_unavailable"},
         llm_release_gate_checker=lambda _version, _run_id: {"status": "failed", "error_code": "release_gate_unavailable"},
     ))
@@ -739,7 +739,7 @@ def test_system_admin_api_uses_postgres_repository_when_database_url_is_configur
     monkeypatch.setattr(PostgresSystemAdminRepository, "__init__", fake_repo_init)
 
     client = TestClient(create_app(
-        Settings(database_url="postgresql://example", environment="development"),
+        Settings(database_url="postgresql://example", environment="development", llm_cursor_signing_key="test-only-fixed-llm-cursor-signing-key"),
         llm_connection_tester=lambda _provider, _request: {"status": "failed", "latency_ms": 0, "error_code": "tester_unavailable"},
         llm_release_gate_checker=lambda _version, _run_id: {"status": "failed", "error_code": "release_gate_unavailable"},
     ))
@@ -783,7 +783,7 @@ def test_system_admin_message_traces_use_postgres_repository_when_database_url_i
     monkeypatch.setattr(PostgresSystemAdminRepository, "__init__", fake_repo_init)
 
     client = TestClient(create_app(
-        Settings(database_url="postgresql://example", environment="development"),
+        Settings(database_url="postgresql://example", environment="development", llm_cursor_signing_key="test-only-fixed-llm-cursor-signing-key"),
         llm_connection_tester=lambda _provider, _request: {"status": "failed", "latency_ms": 0, "error_code": "tester_unavailable"},
         llm_release_gate_checker=lambda _version, _run_id: {"status": "failed", "error_code": "release_gate_unavailable"},
     ))

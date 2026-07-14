@@ -2342,7 +2342,7 @@ paths:
           schema: {type: integer, minimum: 1, maximum: 100, default: 50}
         - name: cursor
           in: query
-          description: Opaque cursor for the exclusive page boundary. Reuse only with the same organization_id; changing the organization or supplying an invalid or mismatched scope returns 422.
+          description: HMAC-SHA256 signed opaque cursor for the exclusive page boundary. Reuse only with the same organization_id and resource type; unsigned, tampered, cross-resource, invalid, or mismatched-scope cursors return 422.
           schema: {type: string, minLength: 1, maxLength: 1024}
       responses:
         "200":
@@ -2379,7 +2379,7 @@ paths:
           schema: {type: integer, minimum: 1, maximum: 100, default: 50}
         - name: cursor
           in: query
-          description: Opaque exclusive cursor；只能在相同 organization_id 下复用，无下一页时为 null。
+          description: HMAC-SHA256 签名的不透明排他 cursor；只能在相同 organization_id 与发布记录资源类型下复用。无签名、篡改、跨资源或 scope 不匹配返回 422；无下一页时为 null。
           schema: {type: string, minLength: 1, maxLength: 1024}
       responses:
         "200":
@@ -2867,7 +2867,7 @@ paths:
           schema: {type: integer, minimum: 1, maximum: 500, default: 100}
         - name: cursor
           in: query
-          description: Opaque cursor for the exclusive page boundary. Reuse only with the same normalized usage filters; changing any filter or supplying an invalid or mismatched scope returns 422.
+          description: HMAC-SHA256 signed opaque cursor for the exclusive page boundary. Reuse only for invocation records with the same normalized usage filters; unsigned, tampered, cross-resource, invalid, or mismatched-scope cursors return 422.
           schema: {type: string, minLength: 1, maxLength: 1024}
       responses:
         "200":
@@ -3417,7 +3417,7 @@ components:
     LlmPageInfo:
       type: object
       additionalProperties: false
-      description: Cursor pagination metadata. A cursor resumes after an exclusive boundary and must be reused with the same organization for configuration versions or the same filters for invocation usage.
+      description: Cursor pagination metadata. next_cursor resumes after an exclusive boundary and is an HMAC-SHA256 signed opaque token bound to its resource type and normalized scope. Reuse requires the same organization for configuration versions or release records and the same filters for invocation usage; callers must not decode or modify it. Unsigned, tampered, cross-resource, invalid, or mismatched-scope reuse returns 422.
       required: [limit, has_more, next_cursor]
       properties:
         limit: {type: integer, minimum: 1, maximum: 500}

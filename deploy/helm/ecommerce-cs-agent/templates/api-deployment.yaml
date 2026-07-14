@@ -51,6 +51,11 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.api.runtimeLlmSecretRef.name }}
                   key: {{ .Values.api.runtimeLlmSecretRef.key }}
+            - name: LLM_CURSOR_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.cursorSigningSecretRef.name }}
+                  key: {{ .Values.api.cursorSigningSecretRef.key }}
             {{- if .Values.proxy.enabled }}
             - name: HTTP_PROXY
               value: {{ .Values.proxy.httpProxy | quote }}

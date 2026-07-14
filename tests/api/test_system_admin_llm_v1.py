@@ -13,7 +13,7 @@ from ecommerce_cs_agent.api import app as app_module
 from ecommerce_cs_agent.api.app import create_app
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.admin_auth import InMemorySystemAdminAuthService, SystemAdminSession
-from ecommerce_cs_agent.services.llm_governance import InMemoryLlmGovernanceRepository
+from ecommerce_cs_agent.services.llm_governance import InMemoryLlmGovernanceRepository as _InMemoryLlmGovernanceRepository
 
 
 ORG_ID = "11111111-1111-1111-1111-111111111111"
@@ -23,6 +23,14 @@ STORE_A_ID = "44444444-4444-4444-4444-444444444444"
 STORE_B_ID = "55555555-5555-5555-5555-555555555555"
 SYSTEM_HEADERS = {"Cookie": "agent_system_admin_session=test-system-session"}
 OTHER_ORG_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+CURSOR_SIGNING_KEY = "test-only-fixed-llm-cursor-signing-key"
+
+
+class InMemoryLlmGovernanceRepository(_InMemoryLlmGovernanceRepository):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(cursor_signing_key=CURSOR_SIGNING_KEY, **kwargs)
+
+
 PROVIDER = {
     "name": "primary",
     "provider_type": "openai_compatible",
@@ -58,7 +66,8 @@ def _routes(provider_id: str) -> list[dict[str, Any]]:
 
 
 def _decode_cursor_payload(cursor: str) -> dict[str, Any]:
-    return json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+    encoded, _signature = cursor.split(".", 1)
+    return json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
 
 
 def _encode_cursor_payload(payload: dict[str, Any]) -> str:
@@ -387,7 +396,7 @@ def test_usage_endpoints_return_empty_and_mixed_currency_real_aggregates(monkeyp
 
     assert empty.status_code == 200
     assert empty.json()["calls"] == 0
-    assert empty.json()["estimated_cost_micros"] == 0
+    assert empty.json()["estimated_cost_micros"] is None
     assert empty.json()["cost_by_currency"] == {}
     assert summary.status_code == 200
     assert summary.json()["calls"] == 2
@@ -690,7 +699,7 @@ def test_non_test_app_selects_postgres_llm_repository(monkeypatch: pytest.Monkey
         lambda _database_url: (lambda _version, _run_id: {"status": "passed"}),
     )
 
-    create_app(Settings(environment="development", database_url="postgresql://db.example.test/app"))
+    create_app(Settings(environment="development", database_url="postgresql://db.example.test/app", llm_cursor_signing_key=CURSOR_SIGNING_KEY))
 
     assert captured["database_url"] == "postgresql://db.example.test/app"
     assert callable(captured["kwargs"]["connection_tester"])
@@ -712,4 +721,4 @@ def test_non_test_app_fails_fast_without_kubernetes_secret_prerequisites(monkeyp
     monkeypatch.delenv("LLM_GOVERNANCE_SECRET_NAMESPACE", raising=False)
     monkeypatch.delenv("LLM_GOVERNANCE_ALLOWED_SECRET_REFS", raising=False)
     with pytest.raises(RuntimeError, match="Kubernetes in-cluster"):
-        create_app(Settings(environment="development", database_url="postgresql://db.example.test/app"))
+        create_app(Settings(environment="development", database_url="postgresql://db.example.test/app", llm_cursor_signing_key=CURSOR_SIGNING_KEY))

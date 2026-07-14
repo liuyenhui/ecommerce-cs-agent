@@ -12,6 +12,9 @@ api:
   runtimeLlmSecretRef:
     name: ecommerce-cs-agent-llm-provider
     key: api-key
+  cursorSigningSecretRef:
+    name: ecommerce-cs-agent-llm-cursor
+    key: signing-key
   serviceAccount:
     create: true
     name: ""

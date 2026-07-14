@@ -262,6 +262,7 @@ def test_production_settings_accept_existing_runtime_secret_keys(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://example")
     monkeypatch.setenv("OPEN_ERP_INTEGRATION_TOKEN", "open-erp-token")
     monkeypatch.setenv("OPEN_ERP_BILLING_LEASE_SECRET", "billing-secret")
+    monkeypatch.setenv("LLM_CURSOR_SIGNING_KEY", "test-only-fixed-llm-cursor-signing-key")
     for key in (
         "ADMIN_SESSION_SECRET",
         "SYSTEM_ADMIN_SESSION_SECRET",
@@ -271,6 +272,7 @@ def test_production_settings_accept_existing_runtime_secret_keys(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
     settings = load_settings()
+    assert settings.llm_cursor_signing_key == "test-only-fixed-llm-cursor-signing-key"
 
     assert settings.admin_session == "admin-session"
     assert settings.system_admin_session == "system-session"

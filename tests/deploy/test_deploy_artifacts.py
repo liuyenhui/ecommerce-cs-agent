@@ -134,6 +134,13 @@ def test_helm_api_uses_dedicated_service_account_and_secret_allowlist() -> None:
         "name": "ecommerce-cs-agent-llm-provider",
         "key": "api-key",
     }
+    assert api["cursorSigningSecretRef"] == {
+        "name": "ecommerce-cs-agent-llm-cursor",
+        "key": "signing-key",
+    }
+    schema = json.loads((chart_dir / "values.schema.json").read_text(encoding="utf-8"))
+    cursor_schema = schema["properties"]["api"]["properties"]["cursorSigningSecretRef"]
+    assert cursor_schema["required"] == ["name", "key"]
     assert api["secretAccess"]["allowedSecretRefs"][0]["name"] != api["envFromSecret"]
 
     deployment = (chart_dir / "templates/api-deployment.yaml").read_text(encoding="utf-8")
@@ -146,6 +153,7 @@ def test_helm_api_uses_dedicated_service_account_and_secret_allowlist() -> None:
     assert "LLM_GOVERNANCE_SECRET_NAMESPACE" in deployment
     assert "fieldPath: metadata.namespace" in deployment
     assert "LLM_GOVERNANCE_ALLOWED_SECRET_REFS" in deployment
+    assert "LLM_CURSOR_SIGNING_KEY" in deployment
     assert "kind: ServiceAccount" in service_account
     assert "kind: Role" in rbac
     assert "kind: RoleBinding" in rbac
@@ -194,6 +202,15 @@ def test_helm_rendered_secret_access_is_dedicated_and_key_scoped() -> None:
             "secretKeyRef": {
                 "name": "ecommerce-cs-agent-llm-provider",
                 "key": "api-key",
+            }
+        },
+    }
+    assert env["LLM_CURSOR_SIGNING_KEY"] == {
+        "name": "LLM_CURSOR_SIGNING_KEY",
+        "valueFrom": {
+            "secretKeyRef": {
+                "name": "ecommerce-cs-agent-llm-cursor",
+                "key": "signing-key",
             }
         },
     }
