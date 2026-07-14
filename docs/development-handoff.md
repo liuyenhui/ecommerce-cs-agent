@@ -4,6 +4,10 @@
 
 ## 最近文档更新
 
+### 2026-07-14
+
+- Customer Admin 的 `auto_reply` 动作 Badge 明确为“允许自动回复”：该状态仅授权外部客服系统发送，不代表 Agent 已经完成发送。
+
 ### 2026-07-11
 
 - Customer Admin 模拟咨询的动作、风险与处理状态改为中文业务 Badge；共享决策回放底部节点导航改为紧凑、可换行且保留节点详情联动的阶段 Badge，原始后端枚举仅通过 `title` 保留，详见 [决策状态 Badge 与节点导航优化设计](superpowers/specs/2026-07-11-decision-status-badges-design.md)。

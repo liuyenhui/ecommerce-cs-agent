@@ -11,7 +11,7 @@ describe("presentDecisionBadges", () => {
   });
 
   it.each([
-    ["auto_reply", "已自动回复", "success"],
+    ["auto_reply", "允许自动回复", "success"],
     ["handoff", "转人工处理", "danger"]
   ])("presents action %s with the approved label and semantic tone", (action, label, tone) => {
     expect(presentDecisionBadges({ action })).toEqual([

@@ -85,7 +85,7 @@ const badgeActionLabels: Record<string, string> = {
   context_request: "补充资料",
   action_request: "执行外部操作",
   handoff: "转人工处理",
-  auto_reply: "已自动回复",
+  auto_reply: "允许自动回复",
   answer_ready: "回复已就绪",
   candidate: "建议回复"
 };
