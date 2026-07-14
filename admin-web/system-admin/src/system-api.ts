@@ -59,31 +59,31 @@ function normalizePage<T extends JsonRecord>(response: RawPage<T>): PageEnvelope
   };
 }
 
-async function pageRequest<T extends JsonRecord>(path: string, filters: Record<string, string | number | boolean | undefined> = {}) {
-  return normalizePage(await requestJson<RawPage<T>>(queryPath(path, filters)));
+async function pageRequest<T extends JsonRecord>(path: string, filters: Record<string, string | number | boolean | undefined> = {}, signal?: AbortSignal) {
+  return normalizePage(await requestJson<RawPage<T>>(queryPath(path, filters), { signal }));
 }
 
 export const systemApi = {
-  login: async (email: string, password: string) => {
-    await requestJson(SYSTEM_ADMIN_URLS.login, { method: "POST", body: JSON.stringify({ email, password }) });
-    return requestJson<JsonRecord>(SYSTEM_ADMIN_URLS.me);
+  login: async (email: string, password: string, signal?: AbortSignal) => {
+    await requestJson(SYSTEM_ADMIN_URLS.login, { method: "POST", body: JSON.stringify({ email, password }), signal });
+    return requestJson<JsonRecord>(SYSTEM_ADMIN_URLS.me, { signal });
   },
-  me: () => requestJson<JsonRecord>(SYSTEM_ADMIN_URLS.me),
-  logout: () => requestJson(SYSTEM_ADMIN_URLS.logout, { method: "POST" }),
-  dashboardSummary: () => requestJson<DashboardSummary>(SYSTEM_ADMIN_URLS.dashboardSummary),
-  tenants: (filters: Record<string, string | number | boolean | undefined> = {}) => pageRequest(SYSTEM_ADMIN_URLS.tenants, filters),
-  stores: (filters: Record<string, string | number | boolean | undefined> = {}) => pageRequest(SYSTEM_ADMIN_URLS.stores, filters),
-  readiness: (filters: Record<string, string | number | boolean | undefined> = {}) => pageRequest(SYSTEM_ADMIN_URLS.readiness, filters),
-  traces: (filters: TraceFilters | Record<string, string>) => pageRequest(SYSTEM_ADMIN_URLS.traces, filters),
-  trace: (decisionId: string) => requestJson<JsonRecord>(traceDetailPath(decisionId)),
-  tasks: (filters: Record<string, string | number | boolean | undefined> = {}) => pageRequest(SYSTEM_ADMIN_URLS.tasks, filters),
+  me: (signal?: AbortSignal) => requestJson<JsonRecord>(SYSTEM_ADMIN_URLS.me, { signal }),
+  logout: (signal?: AbortSignal) => requestJson(SYSTEM_ADMIN_URLS.logout, { method: "POST", signal }),
+  dashboardSummary: (signal?: AbortSignal) => requestJson<DashboardSummary>(SYSTEM_ADMIN_URLS.dashboardSummary, { signal }),
+  tenants: (filters: Record<string, string | number | boolean | undefined> = {}, signal?: AbortSignal) => pageRequest(SYSTEM_ADMIN_URLS.tenants, filters, signal),
+  stores: (filters: Record<string, string | number | boolean | undefined> = {}, signal?: AbortSignal) => pageRequest(SYSTEM_ADMIN_URLS.stores, filters, signal),
+  readiness: (filters: Record<string, string | number | boolean | undefined> = {}, signal?: AbortSignal) => pageRequest(SYSTEM_ADMIN_URLS.readiness, filters, signal),
+  traces: (filters: TraceFilters | Record<string, string | number>, signal?: AbortSignal) => pageRequest(SYSTEM_ADMIN_URLS.traces, filters, signal),
+  trace: (decisionId: string, signal?: AbortSignal) => requestJson<JsonRecord>(traceDetailPath(decisionId), { signal }),
+  tasks: (filters: Record<string, string | number | boolean | undefined> = {}, signal?: AbortSignal) => pageRequest(SYSTEM_ADMIN_URLS.tasks, filters, signal),
   retryTask: (taskId: string, reason: string) => requestJson(taskRetryPath(taskId), {
     method: "POST",
     body: JSON.stringify({ idempotency_key: `system-admin-${crypto.randomUUID()}`, reason })
   }),
-  audit: (filters: AuditFilters | Record<string, string>) => pageRequest(SYSTEM_ADMIN_URLS.audit, filters),
-  health: () => requestJson<SystemHealth>(SYSTEM_ADMIN_URLS.health),
-  releases: (filters: Record<string, string | number | boolean | undefined> = {}) => pageRequest(SYSTEM_ADMIN_URLS.releases, filters)
+  audit: (filters: AuditFilters | Record<string, string | number>, signal?: AbortSignal) => pageRequest(SYSTEM_ADMIN_URLS.audit, filters, signal),
+  health: (signal?: AbortSignal) => requestJson<SystemHealth>(SYSTEM_ADMIN_URLS.health, { signal }),
+  releases: (filters: Record<string, string | number | boolean | undefined> = {}, signal?: AbortSignal) => pageRequest(SYSTEM_ADMIN_URLS.releases, filters, signal)
 };
 
 export function requestFailure(error: unknown): { kind: "forbidden"; message: string } | { kind: "error"; message: string } {

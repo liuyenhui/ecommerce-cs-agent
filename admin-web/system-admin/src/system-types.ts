@@ -28,6 +28,8 @@ export type DashboardSummary = {
   pending_tasks: number;
   critical_alerts: number;
   recent_releases: SystemRecentRelease[];
+  recent_releases_status: "available" | "unavailable";
+  recent_releases_error: "release_data_unavailable" | null;
   generated_at: string;
 };
 

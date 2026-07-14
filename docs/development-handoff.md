@@ -6,6 +6,7 @@
 
 ### 2026-07-15
 
+- System Admin 质量门禁补齐真实服务端分页与请求所有权：组织、店铺、完成度、任务、审计、决策均按独立 `page/page_size/total` 翻页，筛选重置第一页；前端后发请求中止先发请求并在退出时失效旧 `/auth/me`。移动导航在窄屏作为焦点受控模态抽屉，桌面保持非模态。任务重试输入收紧为去空白后的 1–128 字符幂等键与 1–512 字符原因，入队即不可再次重试且不覆盖任务原业务幂等键；Dashboard 最近发布查询失败时显式标记局部不可用，不伪装为空数据。
 - System Admin 组织边界统一使用 `/v1/system-admin/organizations`、`organization_id` 和 `organization` 响应字段，OpenAPI 不再保留未实现的 `/tenants` 或 SystemTenant 模型；任务重试幂等键按 System Admin + 任务校验，锁等待后的同键并发安全重放首次结果，跨操作者、跨任务或不同键竞争返回 409。
 - System Admin 运营契约收口：总览聚合接口返回真实最近发布；任务列表持久化并显式返回 `retryable`，重试端点只接受服务端标记的失败任务；审计查询支持 actor、组织、店铺、action、敏感访问与 `[time_from, time_to)` 半开时间范围并统一校验。前端总览、任务重试、审计筛选和折叠导航只消费这些真实服务端契约。
 - LLM 连接测试安全边界收紧：每个允许的 `(Secret name, key)` 绑定精确 Provider HTTPS origins，runtime tuple 自动绑定 `LLM_BASE_URL`；拒绝内部/Kubernetes/混合 DNS、重定向和 DNS rebinding，Provider 使用验证后固定 IP + 原始 SNI/Host。DNS 改为进程级固定 daemon worker 与有界 outstanding 队列；Kubernetes Service host 必须是 IP literal，TCP 固定该 IP、TLS 使用 `kubernetes.default.svc` 与集群 CA；HTTP CONNECT 代理同样在绝对 Deadline 内解析并固定 IP。DNS、Secret、TCP/CONNECT、TLS、HTTP 与分块响应体共享同一 20 秒绝对 Deadline，socket guard 到期即中止，TLS 初始化失败也清理 raw socket。用量分页 cursor 同时绑定版本、资源类型、组织与规范化筛选；OpenAPI 明确同 scope 复用、排他边界、无下一页为 null 及 scope 变化返回 422，四个用量接口复用同一组查询参数组件。

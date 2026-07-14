@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 import pytest
+from psycopg import OperationalError, ProgrammingError
 from fastapi.testclient import TestClient
 
 import ecommerce_cs_agent.api.app as app_module
@@ -62,12 +63,16 @@ def test_system_admin_dashboard_summary_contract() -> None:
         "pending_tasks",
         "critical_alerts",
         "recent_releases",
+        "recent_releases_status",
+        "recent_releases_error",
         "generated_at",
     }
     assert response.json()["auto_reply_rate"] is None
     assert response.json()["handoff_rate"] is None
     assert response.json()["error_rate"] is None
     assert response.json()["recent_releases"] == []
+    assert response.json()["recent_releases_status"] == "available"
+    assert response.json()["recent_releases_error"] is None
 
     customer_session = client.get(
         "/v1/system-admin/dashboard-summary",
@@ -212,6 +217,28 @@ def test_system_admin_task_retry_rejects_unknown_or_non_retryable_task() -> None
     assert response.json()["error"]["code"] == "not_found"
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"idempotency_key": "   ", "reason": "manual"},
+        {"idempotency_key": "retry-valid", "reason": "   "},
+        {"idempotency_key": "x" * 129, "reason": "manual"},
+        {"idempotency_key": "retry-valid", "reason": "x" * 513},
+        {"idempotency_key": 123, "reason": "manual"},
+        {"idempotency_key": "retry-valid", "reason": ["manual"]},
+    ],
+)
+def test_system_admin_task_retry_rejects_invalid_trimmed_input(payload: dict[str, Any]) -> None:
+    response = TestClient(_test_app()).post(
+        "/v1/system-admin/tasks/task-missing/retry",
+        headers={"Cookie": "agent_system_admin_session=test-system-session"},
+        json=payload,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+
+
 def test_in_memory_system_admin_tasks_return_persisted_retryable_flag() -> None:
     repository = InMemorySystemAdminRepository()
     repository.tasks = {
@@ -244,6 +271,7 @@ def test_in_memory_task_retry_replays_only_for_same_task_and_actor() -> None:
 
     assert second == first
     assert repository.tasks["task-1"]["retry_count"] == 1
+    assert repository.tasks["task-1"]["retryable"] is False
     with pytest.raises(Exception, match="different task or system admin"):
         repository.retry_task(session, "task-2", payload)
     with pytest.raises(Exception, match="different task or system admin"):
@@ -322,6 +350,29 @@ def test_in_memory_system_admin_audit_filters_actor_scope_action_sensitive_and_h
 
     assert response["page_info"]["total"] == 1
     assert [item["audit_log_id"] for item in response["items"]] == ["audit-match"]
+
+
+def test_in_memory_audit_list_excludes_its_own_read_audit_from_items_and_total() -> None:
+    repository = InMemorySystemAdminRepository()
+    repository.audit_logs = [{
+        "audit_log_id": "audit-existing",
+        "actor_system_user_id": "sysadmin-001",
+        "organization_id": None,
+        "store_id": None,
+        "action": "system_admin.health.get",
+        "object_type": "system_health",
+        "object_id": "summary",
+        "reason": None,
+        "diff_summary": {},
+        "sensitive_access": False,
+        "created_at": "2026-07-15T08:30:00Z",
+    }]
+
+    response = repository.list_audit_logs(_system_session(), {})
+
+    assert response["page_info"]["total"] == 1
+    assert [item["audit_log_id"] for item in response["items"]] == ["audit-existing"]
+    assert len(repository.audit_logs) == 2
 
 
 @pytest.mark.parametrize(
@@ -456,6 +507,8 @@ def test_system_admin_dashboard_summary_uses_postgres_total_aggregates(monkeypat
             "published_at": "2026-07-14T07:30:00Z",
             "submitted_at": "2026-07-14T07:00:00Z",
         }],
+        "recent_releases_status": "available",
+        "recent_releases_error": None,
         "generated_at": "2026-07-14T08:00:00Z",
     }
     assert "FROM organization" in executed_sql
@@ -479,7 +532,52 @@ def test_system_admin_dashboard_summary_uses_postgres_total_aggregates(monkeypat
     assert "created_at <= CURRENT_TIMESTAMP" in normalized_sql
     assert normalized_sql.count("created_at >=") == 1
     assert normalized_sql.count("created_at < (") == 1
-    assert "FROM today_decisions" in normalized_sql
+
+
+def test_postgres_dashboard_degrades_only_recent_releases_on_operational_failure(monkeypatch) -> None:
+    class ReleaseFailureCursor(_FakeCursor):
+        def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+            if "FROM llm_release_record" in sql:
+                raise OperationalError("release storage temporarily unavailable")
+            super().execute(sql, params)
+
+    class ReleaseFailureConnection(_FakeConnection):
+        def cursor(self) -> ReleaseFailureCursor:
+            return ReleaseFailureCursor(self)
+
+    connection = ReleaseFailureConnection(fetch_rows=[(
+        2, 3, 4, 0.5, 0.25, 0.0, 1, 2, 0, "2026-07-15T08:00:00Z",
+    )])
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    response = repository.dashboard_summary(_system_session())
+
+    assert response["active_organizations"] == 2
+    assert response["recent_releases"] == []
+    assert response["recent_releases_status"] == "unavailable"
+    assert response["recent_releases_error"] == "release_data_unavailable"
+
+
+def test_postgres_dashboard_does_not_hide_unexpected_release_query_programming_errors() -> None:
+    class BrokenReleaseCursor(_FakeCursor):
+        def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+            if "FROM llm_release_record" in sql:
+                raise ProgrammingError("invalid release query")
+            super().execute(sql, params)
+
+    class BrokenReleaseConnection(_FakeConnection):
+        def cursor(self) -> BrokenReleaseCursor:
+            return BrokenReleaseCursor(self)
+
+    connection = BrokenReleaseConnection(fetch_rows=[(
+        2, 3, 4, 0.5, 0.25, 0.0, 1, 2, 0, "2026-07-15T08:00:00Z",
+    )])
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    with pytest.raises(ProgrammingError, match="invalid release query"):
+        repository.dashboard_summary(_system_session())
 
 
 def test_postgres_system_admin_dashboard_summary_maps_zero_denominator_rates_to_none() -> None:

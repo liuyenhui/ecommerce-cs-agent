@@ -270,6 +270,9 @@ class OpenApiContractTest(unittest.TestCase):
         self.assertIn("organization_id", task["required"])
         self.assertNotIn("tenant_id", task["properties"])
         self.assertEqual(task["properties"]["retryable"]["type"], "boolean")
+        retry_request = self.document["components"]["schemas"]["TaskRetryRequest"]
+        self.assertEqual(retry_request["properties"]["idempotency_key"]["maxLength"], 128)
+        self.assertEqual(retry_request["properties"]["reason"]["maxLength"], 512)
         assert_schema_valid(
             {
                 "task_id": "task-example",
@@ -324,6 +327,8 @@ class OpenApiContractTest(unittest.TestCase):
     def test_system_dashboard_contract_contains_real_recent_release_summaries(self):
         schema = self.document["components"]["schemas"]["SystemDashboardSummary"]
         self.assertIn("recent_releases", schema["required"])
+        self.assertIn("recent_releases_status", schema["required"])
+        self.assertIn("recent_releases_error", schema["required"])
         release_ref = schema["properties"]["recent_releases"]["items"]["$ref"]
         self.assertEqual(release_ref, "#/components/schemas/SystemRecentRelease")
 

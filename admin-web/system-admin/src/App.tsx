@@ -22,17 +22,53 @@ export function App() {
   const [systemSession, setSystemSession] = React.useState<JsonRecord | null>(null);
   const [toast, setToast] = React.useState<ToastState>(null);
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
+  const [loggingOut, setLoggingOut] = React.useState(false);
   const [railCollapsed, setRailCollapsed] = React.useState(() => {
     try { return readRailCollapsed(window.localStorage); } catch { return false; }
   });
+  const authGeneration = React.useRef(0);
+  const authController = React.useRef<AbortController | null>(null);
   const closeNav = React.useCallback(() => setMobileNavOpen(false), []);
   useCloseOnEscape(mobileNavOpen, closeNav);
 
-  React.useEffect(() => { void systemApi.me().then(setSystemSession).catch(() => undefined); }, []);
+  React.useEffect(() => {
+    const generation = ++authGeneration.current;
+    const controller = new AbortController();
+    authController.current = controller;
+    void systemApi.me(controller.signal).then((session) => {
+      if (!controller.signal.aborted && authGeneration.current === generation) setSystemSession(session);
+    }).catch(() => undefined);
+    return () => { controller.abort(); authGeneration.current += 1; };
+  }, []);
+
+  function loggedIn(session: JsonRecord) {
+    authController.current?.abort();
+    authGeneration.current += 1;
+    setLoggingOut(false);
+    setSystemSession(session);
+  }
+
+  async function login(email: string, password: string) {
+    authController.current?.abort();
+    const generation = ++authGeneration.current;
+    const controller = new AbortController();
+    authController.current = controller;
+    setLoggingOut(false);
+    const session = await systemApi.login(email, password, controller.signal);
+    if (controller.signal.aborted || authGeneration.current !== generation) throw new DOMException("Superseded authentication request", "AbortError");
+    return session;
+  }
 
   async function logout() {
-    try { await systemApi.logout(); } catch { /* The server session may already be gone. */ }
+    authController.current?.abort();
+    const generation = ++authGeneration.current;
+    const controller = new AbortController();
+    authController.current = controller;
+    setLoggingOut(true);
     setSystemSession(null);
+    try { await systemApi.logout(controller.signal); } catch { /* The server session may already be gone. */ }
+    if (controller.signal.aborted || authGeneration.current !== generation) return;
+    setLoggingOut(false);
     setToast({ tone: "info", text: "已退出系统后台" });
   }
 
@@ -60,6 +96,8 @@ export function App() {
   >
     {systemSession
       ? <SystemWorkspace session={systemSession} activePage={activePage} setToast={setToast} />
-      : <LoginPanelBase title="系统后台登录" onSubmit={systemApi.login} onLoggedIn={setSystemSession} setToast={setToast} />}
+      : loggingOut
+        ? <section className="loginSurface"><p className="inlineStatus" role="status">正在退出系统后台</p></section>
+        : <LoginPanelBase title="系统后台登录" onSubmit={login} onLoggedIn={loggedIn} setToast={setToast} />}
   </AdminFrame>;
 }

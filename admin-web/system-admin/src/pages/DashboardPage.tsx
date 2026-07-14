@@ -35,7 +35,9 @@ export function DashboardPage({ state }: { state: RequestState<DashboardData> })
       </section>
       <div className="twoColumns dashboardLists">
         <DataTable title="最近任务" rows={data.tasks.items} fields={["task_id", "task_type", "status", "updated_at"]} emptyState={{ title: "暂无最近任务", description: "服务端没有返回最近任务记录。" }} />
-        <DataTable title="最近发布" rows={summary.recent_releases} fields={["release_id", "organization_id", "version_number", "status", "published_at"]} emptyState={{ title: "暂无最近发布", description: "服务端没有返回发布记录。" }} />
+        {summary.recent_releases_status === "unavailable"
+          ? <section className="tablePanel"><h3>最近发布</h3><EmptyState title="发布数据暂不可用" description="聚合指标仍可使用，请稍后重试发布记录查询。" /></section>
+          : <DataTable title="最近发布" rows={summary.recent_releases} fields={["release_id", "organization_id", "version_number", "status", "published_at"]} emptyState={{ title: "暂无最近发布", description: "服务端没有返回发布记录。" }} />}
         <DataTable title="最近决策" rows={data.decisions.items} fields={["decision_id", "action", "status", "created_at"]} emptyState={{ title: "暂无最近决策", description: "当前时间范围内没有决策记录。" }} />
         {data.readiness.items.length
           ? <DataTable title="上线阻断摘要" rows={data.readiness.items} fields={["organization_id", "store_id", "status", "updated_at"]} />

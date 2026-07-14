@@ -5041,6 +5041,7 @@ components:
         reason:
           type: string
           minLength: 1
+          maxLength: 512
 
     TaskRetryResponse:
       type: object
@@ -5949,7 +5950,7 @@ components:
 
     SystemDashboardSummary:
       type: object
-      required: [active_organizations, active_stores, decisions_today, auto_reply_rate, handoff_rate, error_rate, readiness_blockers, pending_tasks, critical_alerts, recent_releases, generated_at]
+      required: [active_organizations, active_stores, decisions_today, auto_reply_rate, handoff_rate, error_rate, readiness_blockers, pending_tasks, critical_alerts, recent_releases, recent_releases_status, recent_releases_error, generated_at]
       properties:
         active_organizations: {type: integer, minimum: 0}
         active_stores: {type: integer, minimum: 0}
@@ -5974,6 +5975,12 @@ components:
           maxItems: 5
           items:
             $ref: "#/components/schemas/SystemRecentRelease"
+        recent_releases_status:
+          type: string
+          enum: [available, unavailable]
+        recent_releases_error:
+          type: [string, "null"]
+          enum: [release_data_unavailable, null]
         generated_at:
           type: string
           format: date-time

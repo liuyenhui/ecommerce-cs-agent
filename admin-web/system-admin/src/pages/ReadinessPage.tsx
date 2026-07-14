@@ -1,6 +1,7 @@
 import React from "react";
 import { RequestStateView, SectionHeader } from "../../../shared/components";
 import type { PageEnvelope, ReadinessCheck, ReadinessRecord, RequestState } from "../system-types";
+import { PaginationControls } from "./PaginationControls";
 
 const checkGuidance: Record<string, { impact: string; next: string }> = {
   product_content: { impact: "AI 无法可靠识别商品与回答商品问题。", next: "导入并确认商品资料。" },
@@ -23,7 +24,7 @@ function BlockedCheck({ check }: { check: ReadinessCheck }) {
   </li>;
 }
 
-export function ReadinessPage({ state }: { state: RequestState<PageEnvelope<ReadinessRecord>> }) {
+export function ReadinessPage({ state, onPageChange = () => undefined }: { state: RequestState<PageEnvelope<ReadinessRecord>>; onPageChange?: (page: number) => void }) {
   return <RequestStateView state={state}>{(data) => <>
     <SectionHeader label="READINESS" title="配置完成度" />
     <p className="pageTotal">共 {data.page.total} 家店铺</p>
@@ -35,5 +36,6 @@ export function ReadinessPage({ state }: { state: RequestState<PageEnvelope<Read
           : <p className="healthyNotice">所有上线检查均已通过。</p>}
       </article>)}
     </div>
+    <PaginationControls page={data.page} onPageChange={onPageChange} />
   </>}</RequestStateView>;
 }

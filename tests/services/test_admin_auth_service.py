@@ -548,6 +548,9 @@ def test_postgres_system_admin_repository_lists_tasks_and_retries_failed_task() 
     assert "pg_advisory_xact_lock" in executed_sql
     assert "FOR UPDATE" in executed_sql
     assert "UPDATE background_task" in executed_sql
+    assert "retryable = false" in executed_sql
+    update_sql = next(sql for sql, _params in connection.executed if "UPDATE background_task" in sql)
+    assert "idempotency_key = %s" not in update_sql
     assert "retry-001" in str(connection.executed)
 
 

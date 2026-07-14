@@ -131,6 +131,19 @@
 
 .placeholderPage { min-height: 320px; padding: 18px; }
 
+.paginationControls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 10px;
+  color: #525252;
+  font-size: 12px;
+}
+
+.paginationControls button { min-height: 36px; }
+.paginationControls button:disabled { cursor: not-allowed; opacity: .45; }
+
 @media (max-width: 1180px) {
   .systemWorkspace { grid-template-columns: 1fr; }
   .systemAccount { position: static; }

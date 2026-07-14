@@ -48,10 +48,59 @@ export function AdminFrame({
   railCollapsed?: boolean;
   onToggleRail?: () => void;
 }) {
+  const railRef = React.useRef<HTMLElement>(null);
+  const mainPaneRef = React.useRef<HTMLElement>(null);
+  const restoreFocusRef = React.useRef<HTMLElement | null>(null);
+  const [mobileModal, setMobileModal] = React.useState(false);
+
+  React.useEffect(() => {
+    if (typeof window.matchMedia !== "function") { setMobileModal(false); return undefined; }
+    const query = window.matchMedia("(max-width: 900px)");
+    const update = () => setMobileModal(mobileNavOpen && query.matches);
+    update();
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, [mobileNavOpen]);
+
+  React.useEffect(() => {
+    const mainPane = mainPaneRef.current;
+    const rail = railRef.current;
+    if (!mobileModal || !mobileNavOpen || !mainPane || !rail) {
+      mainPane?.removeAttribute("inert");
+      mainPane?.removeAttribute("aria-hidden");
+      if (!mobileNavOpen && restoreFocusRef.current) {
+        restoreFocusRef.current.focus();
+        restoreFocusRef.current = null;
+      }
+      return undefined;
+    }
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    mainPane.setAttribute("inert", "");
+    mainPane.setAttribute("aria-hidden", "true");
+    const focusable = () => Array.from(rail.querySelectorAll<HTMLElement>('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'));
+    focusable()[0]?.focus();
+    const trap = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); onCloseNav(); return; }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", trap);
+    return () => {
+      document.removeEventListener("keydown", trap);
+      mainPane.removeAttribute("inert");
+      mainPane.removeAttribute("aria-hidden");
+    };
+  }, [mobileModal, mobileNavOpen, onCloseNav]);
+
   return (
     <main className={`appShell ${isAuthenticated ? "isAuthed" : "isGuest"} ${mobileNavOpen ? "navOpen" : ""} ${railCollapsed ? "railCollapsed" : ""}`}>
       {isAuthenticated ? (
-        <aside className="rail">
+        <aside className="rail" ref={railRef} role={mobileModal ? "dialog" : undefined} aria-modal={mobileModal ? "true" : undefined} aria-label={mobileModal ? "后台导航" : undefined}>
           <div className="brandMark">
             <ShieldCheck size={22} />
             <span>{brand}</span>
@@ -65,7 +114,7 @@ export function AdminFrame({
       ) : null}
       {isAuthenticated ? <button className="navBackdrop" aria-label="关闭导航" onClick={onCloseNav} /> : null}
 
-      <section className="mainPane">
+      <section ref={mainPaneRef} className="mainPane">
         {topBar}
         {children}
       </section>

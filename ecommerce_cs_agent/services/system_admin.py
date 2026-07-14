@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from threading import RLock
 from typing import Any, Protocol
 
+from psycopg import OperationalError
+from psycopg.errors import UndefinedTable
 from psycopg.types.json import Jsonb
 
 from ecommerce_cs_agent.api.errors import api_error
@@ -127,6 +129,8 @@ class InMemorySystemAdminRepository:
                 key=lambda item: str(item.get("published_at") or item.get("submitted_at") or ""),
                 reverse=True,
             )[:5],
+            "recent_releases_status": "available",
+            "recent_releases_error": None,
             "generated_at": _now(),
         }
 
@@ -281,6 +285,7 @@ class InMemorySystemAdminRepository:
         return _page_response(*_slice_page(persisted_items, filters))
 
     def retry_task(self, session: SystemAdminSession, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        payload = normalize_task_retry_payload(payload)
         self._require_any_role(session, {"super_admin", "technical_support", "platform_operator"})
         with self._mutation_lock:
             task = self.tasks.get(task_id)
@@ -292,13 +297,13 @@ class InMemorySystemAdminRepository:
             if task["status"] != "failed" or task.get("retryable") is not True:
                 raise api_error(409, "idempotency_conflict", f"task {task_id} is not retryable from status {task['status']}")
             task["status"] = "queued"
+            task["retryable"] = False
             task["retry_count"] = int(task.get("retry_count", 0)) + 1
             audit_id = self._audit(session, "system_admin.task.retry", "background_task", task_id, payload)
             return {"task_id": task_id, "status": "queued", "audit_log_id": audit_id}
 
     def list_audit_logs(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         filters = _normalize_audit_filters(filters)
-        self._audit(session, "system_admin.audit.list", "system_admin_audit_log", "list", filters)
         items = list(self.audit_logs)
         for key, item_key in (
             ("actor_user_id", "actor_system_user_id"),
@@ -320,7 +325,9 @@ class InMemorySystemAdminRepository:
         if filters.get("time_to"):
             upper = _parse_filter_datetime(filters["time_to"], "time_to")
             items = [item for item in items if _parse_filter_datetime(item.get("created_at"), "created_at") < upper]
-        return _page_response(*_slice_page(items, filters))
+        response = _page_response(*_slice_page(items, filters))
+        self._audit(session, "system_admin.audit.list", "system_admin_audit_log", "list", filters)
+        return response
 
     def system_health(self, session: SystemAdminSession) -> dict[str, Any]:
         self._audit(session, "system_admin.health.get", "system_health", "summary", {})
@@ -488,19 +495,29 @@ class PostgresSystemAdminRepository:
                     """
                 )
                 row = cur.fetchone()
-                cur.execute(
-                    """
-                    SELECT release.id::text, org.external_organization_id,
-                           release.config_version_id::text, version.version_number,
-                           release.status, release.published_at, release.submitted_at
-                    FROM llm_release_record release
-                    JOIN organization org ON org.id = release.organization_id
-                    JOIN llm_config_version version ON version.id = release.config_version_id
-                    ORDER BY COALESCE(release.published_at, release.submitted_at) DESC, release.id DESC
-                    LIMIT 5
-                    """
-                )
-                recent_releases = [_recent_release_from_row(item) for item in cur.fetchall()]
+
+        recent_releases: list[dict[str, Any]] = []
+        recent_releases_status = "available"
+        recent_releases_error = None
+        try:
+            with self._connect(self._database_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT release.id::text, org.external_organization_id,
+                               release.config_version_id::text, version.version_number,
+                               release.status, release.published_at, release.submitted_at
+                        FROM llm_release_record release
+                        JOIN organization org ON org.id = release.organization_id
+                        JOIN llm_config_version version ON version.id = release.config_version_id
+                        ORDER BY COALESCE(release.published_at, release.submitted_at) DESC, release.id DESC
+                        LIMIT 5
+                        """
+                    )
+                    recent_releases = [_recent_release_from_row(item) for item in cur.fetchall()]
+        except (OperationalError, UndefinedTable):
+            recent_releases_status = "unavailable"
+            recent_releases_error = "release_data_unavailable"
         return {
             "active_organizations": int(row[0] or 0),
             "active_stores": int(row[1] or 0),
@@ -512,6 +529,8 @@ class PostgresSystemAdminRepository:
             "pending_tasks": int(row[7] or 0),
             "critical_alerts": int(row[8] or 0),
             "recent_releases": recent_releases,
+            "recent_releases_status": recent_releases_status,
+            "recent_releases_error": recent_releases_error,
             "generated_at": row[9],
         }
 
@@ -1074,6 +1093,7 @@ class PostgresSystemAdminRepository:
                 return _page_response([_task_from_row(row) for row in cur.fetchall()], page["page"], page["page_size"], total)
 
     def retry_task(self, session: SystemAdminSession, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        payload = normalize_task_retry_payload(payload)
         self._require_any_role(session, {"super_admin", "technical_support", "platform_operator"})
         with self._connect(self._database_url) as conn:
             with conn.cursor() as cur:
@@ -1104,14 +1124,14 @@ class PostgresSystemAdminRepository:
                     """
                     UPDATE background_task
                     SET status = 'queued',
+                        retryable = false,
                         retry_count = retry_count + 1,
-                        idempotency_key = %s,
                         next_retry_at = NULL,
                         metadata = metadata || %s,
                         updated_at = now()
                     WHERE task_id = %s
                     """,
-                    (payload["idempotency_key"], Jsonb({"retry_reason": payload.get("reason")}), task_id),
+                    (Jsonb({"retry_reason": payload.get("reason")}), task_id),
                 )
                 audit_id = self._audit(cur, session, row[2], row[3], "system_admin.task.retry", "background_task", task_id, payload)
                 return {"task_id": task_id, "status": "queued", "audit_log_id": audit_id}
@@ -1652,6 +1672,23 @@ def _task_retry_replay_response(
     if str(replay.get("object_id") or "") != task_id or actor_user_id != session.user_id:
         raise api_error(409, "idempotency_conflict", "idempotency key belongs to a different task or system admin")
     return {"task_id": task_id, "status": "queued", "audit_log_id": str(replay["audit_log_id"])}
+
+
+def normalize_task_retry_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    raw_idempotency_key = normalized.get("idempotency_key")
+    raw_reason = normalized.get("reason")
+    if not isinstance(raw_idempotency_key, str) or not isinstance(raw_reason, str):
+        raise api_error(422, "validation_error", "idempotency_key and reason must be strings")
+    idempotency_key = raw_idempotency_key.strip()
+    reason = raw_reason.strip()
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise api_error(422, "validation_error", "idempotency_key must contain 1 to 128 characters")
+    if not reason or len(reason) > 512:
+        raise api_error(422, "validation_error", "reason must contain 1 to 512 characters")
+    normalized["idempotency_key"] = idempotency_key
+    normalized["reason"] = reason
+    return normalized
 
 
 def _parse_filter_datetime(value: Any, field: str) -> datetime:

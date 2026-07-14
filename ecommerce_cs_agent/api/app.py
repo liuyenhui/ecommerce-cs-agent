@@ -33,7 +33,7 @@ from ecommerce_cs_agent.services.decision import DecisionService
 from ecommerce_cs_agent.services.object_storage import ObjectStorageUnavailable, ObjectStorageValidationError
 from ecommerce_cs_agent.services.open_erp_integration import BillingLeaseError, OpenErpIntegrationService
 from ecommerce_cs_agent.services.product_analysis import product_document_analyzer_for
-from ecommerce_cs_agent.services.system_admin import system_admin_repository_for
+from ecommerce_cs_agent.services.system_admin import normalize_task_retry_payload, system_admin_repository_for
 from ecommerce_cs_agent.services.llm_governance import (
     InMemoryLlmGovernanceRepository,
     LlmGovernanceRepository,
@@ -698,6 +698,7 @@ def create_app(
     async def retry_system_task(task_id: str, _request: Request, session: Any = Depends(system_session)) -> JSONResponse:
         payload = await _request.json()
         _require_fields(payload, ["idempotency_key", "reason"])
+        payload = normalize_task_retry_payload(payload)
         return JSONResponse(status_code=202, content=system_admin_data.retry_task(session, task_id, payload))
 
     @app.get("/v1/system-admin/audit-logs")

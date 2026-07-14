@@ -43,13 +43,13 @@ const emptyPage = (): PageEnvelope => ({ items: [], page: { page: 1, page_size: 
 const empty = <T,>(title: string, description: string): RequestState<T> => ({ kind: "empty", title, description });
 const failed = <T,>(error: unknown): RequestState<T> => requestFailure(error);
 
-export async function loadDashboardSupportingData(api: Pick<typeof systemApi, "readiness" | "tasks" | "traces">, now = new Date()) {
+export async function loadDashboardSupportingData(api: Pick<typeof systemApi, "readiness" | "tasks" | "traces">, now = new Date(), signal?: AbortSignal) {
   const today = new Date(now);
   today.setUTCHours(0, 0, 0, 0);
   const results = await Promise.allSettled([
-    api.readiness({ status: "blocked", page_size: 5 }),
-    api.tasks({ page_size: 5 }),
-    api.traces({ time_from: today.toISOString(), page_size: "5" })
+    api.readiness({ status: "blocked", page_size: 5 }, signal),
+    api.tasks({ page_size: 5 }, signal),
+    api.traces({ time_from: today.toISOString(), page_size: 5 }, signal)
   ]);
   const labels = ["配置完成度", "任务", "决策"];
   return {
@@ -67,20 +67,45 @@ export function SystemWorkspace({ activePage, session, setToast }: { activePage:
   const [tasks, setTasks] = React.useState<RequestState<PageEnvelope<TaskRecord>>>(loading);
   const [audit, setAudit] = React.useState<RequestState<PageEnvelope>>(loading);
   const [health, setHealth] = React.useState<RequestState<SystemHealth>>(loading);
+  const controllers = React.useRef(new Map<string, AbortController>());
+  const tenantPages = React.useRef({ tenants: 1, stores: 1 });
+  const auditQuery = React.useRef<Record<string, string | number>>({ page: 1, page_size: 20 });
+  const traceQuery = React.useRef<Record<string, string | number>>({ page: 1, page_size: 20 });
 
-  async function loadDashboard() {
-    setDashboard(loading());
-    try {
-      const summary = await systemApi.dashboardSummary();
-      const { failures, pages } = await loadDashboardSupportingData(systemApi);
-      const data: DashboardData = { summary, readiness: pages[0], tasks: pages[1], decisions: pages[2] };
-      setDashboard(failures.length ? { kind: "partial", data, failures } : { kind: "success", data });
-    } catch (error) { setDashboard(failed(error)); }
+  function beginRequest(key: string) {
+    controllers.current.get(key)?.abort();
+    const controller = new AbortController();
+    controllers.current.set(key, controller);
+    return controller;
   }
 
-  async function loadTenants() {
+  React.useEffect(() => () => {
+    controllers.current.forEach((controller) => controller.abort());
+    controllers.current.clear();
+  }, []);
+
+  async function loadDashboard() {
+    const controller = beginRequest("dashboard");
+    setDashboard(loading());
+    try {
+      const summary = await systemApi.dashboardSummary(controller.signal);
+      const { failures, pages } = await loadDashboardSupportingData(systemApi, new Date(), controller.signal);
+      if (controller.signal.aborted) return;
+      const data: DashboardData = { summary, readiness: pages[0], tasks: pages[1], decisions: pages[2] };
+      setDashboard(failures.length ? { kind: "partial", data, failures } : { kind: "success", data });
+    } catch (error) { if (!controller.signal.aborted) setDashboard(failed(error)); }
+  }
+
+  async function loadTenants(tenantPage = tenantPages.current.tenants, storePage = tenantPages.current.stores) {
+    const organizationController = beginRequest("organizations");
+    const storeController = beginRequest("stores");
+    tenantPages.current = { tenants: tenantPage, stores: storePage };
     setTenants(loading());
-    const results = await Promise.allSettled([systemApi.tenants(), systemApi.stores()]);
+    const results = await Promise.allSettled([
+      systemApi.tenants({ page: tenantPage, page_size: 20 }, organizationController.signal),
+      systemApi.stores({ page: storePage, page_size: 20 }, storeController.signal)
+    ]);
+    if (organizationController.signal.aborted || storeController.signal.aborted) return;
     const failures = results.flatMap((result, index) => result.status === "rejected" ? [`${index ? "店铺" : "租户"}数据暂不可用`] : []);
     if (results.every((result) => result.status === "rejected")) {
       setTenants(failed((results[0] as PromiseRejectedResult).reason));
@@ -90,33 +115,69 @@ export function SystemWorkspace({ activePage, session, setToast }: { activePage:
     setTenants(failures.length ? { kind: "partial", data, failures } : { kind: "success", data });
   }
 
-  async function loadReadiness() {
+  async function loadTenantPage(page: number) {
+    const controller = beginRequest("organizations");
+    try {
+      const data = await systemApi.tenants({ page, page_size: 20 }, controller.signal);
+      if (controller.signal.aborted) return;
+      tenantPages.current.tenants = page;
+      setTenants((current) => current.kind === "success" || current.kind === "partial"
+        ? { ...current, data: { ...current.data, tenants: data } }
+        : current);
+    } catch (error) { if (!controller.signal.aborted) setTenants(failed(error)); }
+  }
+
+  async function loadStorePage(page: number) {
+    const controller = beginRequest("stores");
+    try {
+      const data = await systemApi.stores({ page, page_size: 20 }, controller.signal);
+      if (controller.signal.aborted) return;
+      tenantPages.current.stores = page;
+      setTenants((current) => current.kind === "success" || current.kind === "partial"
+        ? { ...current, data: { ...current.data, stores: data } }
+        : current);
+    } catch (error) { if (!controller.signal.aborted) setTenants(failed(error)); }
+  }
+
+  async function loadReadiness(page = 1) {
+    const controller = beginRequest("readiness");
     setReadiness(loading());
     try {
-      const data = await systemApi.readiness() as PageEnvelope<ReadinessRecord>;
+      const data = await systemApi.readiness({ page, page_size: 20 }, controller.signal) as PageEnvelope<ReadinessRecord>;
+      if (controller.signal.aborted) return;
       setReadiness(data.page.total ? { kind: "success", data } : empty("暂无配置完成度记录", "服务端未返回店铺上线检查。"));
-    } catch (error) { setReadiness(failed(error)); }
+    } catch (error) { if (!controller.signal.aborted) setReadiness(failed(error)); }
   }
 
-  async function loadTasks() {
+  async function loadTasks(page = 1) {
+    const controller = beginRequest("tasks");
     setTasks(loading());
     try {
-      const data = await systemApi.tasks() as PageEnvelope<TaskRecord>;
+      const data = await systemApi.tasks({ page, page_size: 20 }, controller.signal) as PageEnvelope<TaskRecord>;
+      if (controller.signal.aborted) return;
       setTasks(data.page.total ? { kind: "success", data } : empty("暂无后台任务", "服务端未返回任务记录。"));
-    } catch (error) { setTasks(failed(error)); }
+    } catch (error) { if (!controller.signal.aborted) setTasks(failed(error)); }
   }
 
-  async function loadAudit(filters: AuditFilters | Record<string, string> = {}) {
+  async function loadAudit(filters: AuditFilters | Record<string, string | number> = {}) {
+    const query = { ...filters, page: Number("page" in filters ? filters.page || 1 : 1), page_size: 20 };
+    auditQuery.current = query;
+    const controller = beginRequest("audit");
     setAudit(loading());
     try {
-      const data = await systemApi.audit(filters);
+      const data = await systemApi.audit(query, controller.signal);
+      if (controller.signal.aborted) return;
       setAudit(data.page.total ? { kind: "success", data } : empty("暂无审计记录", "服务端未返回符合条件的审计记录。"));
-    } catch (error) { setAudit(failed(error)); }
+    } catch (error) { if (!controller.signal.aborted) setAudit(failed(error)); }
   }
 
   async function loadHealth() {
+    const controller = beginRequest("health");
     setHealth(loading());
-    try { setHealth({ kind: "success", data: await systemApi.health() }); } catch (error) { setHealth(failed(error)); }
+    try {
+      const data = await systemApi.health(controller.signal);
+      if (!controller.signal.aborted) setHealth({ kind: "success", data });
+    } catch (error) { if (!controller.signal.aborted) setHealth(failed(error)); }
   }
 
   React.useEffect(() => {
@@ -128,17 +189,25 @@ export function SystemWorkspace({ activePage, session, setToast }: { activePage:
     if (activePage === "health") void loadHealth();
   }, [activePage]);
 
-  async function searchTraces(filters: TraceFilters) {
+  async function searchTraces(filters: TraceFilters | Record<string, string | number>) {
+    const query = { ...filters, page: Number("page" in filters ? filters.page || 1 : 1), page_size: 20 };
+    traceQuery.current = query;
+    const controller = beginRequest("traces");
     setTraces(loading());
     try {
-      const data = await systemApi.traces(filters);
+      const data = await systemApi.traces(query, controller.signal);
+      if (controller.signal.aborted) return;
       setTraces(data.page.total ? { kind: "success", data } : empty("暂无决策记录", "服务端未返回符合查询范围的决策记录。"));
-    } catch (error) { setTraces(failed(error)); }
+    } catch (error) { if (!controller.signal.aborted) setTraces(failed(error)); }
   }
 
   async function openTrace(decisionId: string) {
     if (!decisionId) return;
-    try { setTraceDetail(await systemApi.trace(decisionId)); } catch (error) { setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) }); }
+    const controller = beginRequest("trace-detail");
+    try {
+      const detail = await systemApi.trace(decisionId, controller.signal);
+      if (!controller.signal.aborted) setTraceDetail(detail);
+    } catch (error) { if (!controller.signal.aborted) setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) }); }
   }
 
   async function retryTask(task: TaskRecord) {
@@ -148,20 +217,20 @@ export function SystemWorkspace({ activePage, session, setToast }: { activePage:
     try {
       await systemApi.retryTask(task.task_id, reason.trim());
       setToast({ tone: "success", text: "任务重试已提交" });
-      await loadTasks();
+      await loadTasks(tasks.kind === "success" ? tasks.data.page.page : 1);
     } catch (error) { setToast({ tone: "error", text: error instanceof Error ? error.message : String(error) }); }
   }
 
   return <div className="systemWorkspace">
     <section className="contentPane">
       {activePage === "dashboard" ? <DashboardPage state={dashboard} /> : null}
-      {activePage === "tenants" ? <TenantsPage state={tenants} /> : null}
-      {activePage === "readiness" ? <ReadinessPage state={readiness} /> : null}
+      {activePage === "tenants" ? <TenantsPage state={tenants} onTenantPageChange={(page) => void loadTenantPage(page)} onStorePageChange={(page) => void loadStorePage(page)} /> : null}
+      {activePage === "readiness" ? <ReadinessPage state={readiness} onPageChange={(page) => void loadReadiness(page)} /> : null}
       {activePage === "llm" ? <Placeholder title="LLM 治理" description="Provider、路由、成本与配置版本的详细工作区由 Task 7 接入；本入口不展示示例数据。" /> : null}
       {activePage === "releases" ? <Placeholder title="评测与发布" description="评测门禁、发布和回滚的详细工作区由 Task 7 接入；本入口不展示示例数据。" /> : null}
-      {activePage === "traces" ? <TracesPage state={traces} detail={traceDetail} onSearch={(filters) => void searchTraces(filters)} onOpen={(id) => void openTrace(id)} onClose={() => setTraceDetail(null)} /> : null}
-      {activePage === "tasks" ? <TasksPage state={tasks} onRetry={(task) => void retryTask(task)} /> : null}
-      {activePage === "audit" ? <AuditPage state={audit} onSearch={(filters) => void loadAudit(filters)} /> : null}
+      {activePage === "traces" ? <TracesPage state={traces} detail={traceDetail} onSearch={(filters) => void searchTraces({ ...filters, page: 1 })} onPageChange={(page) => void searchTraces({ ...traceQuery.current, page })} onOpen={(id) => void openTrace(id)} onClose={() => { controllers.current.get("trace-detail")?.abort(); setTraceDetail(null); }} /> : null}
+      {activePage === "tasks" ? <TasksPage state={tasks} onRetry={(task) => void retryTask(task)} onPageChange={(page) => void loadTasks(page)} /> : null}
+      {activePage === "audit" ? <AuditPage state={audit} onSearch={(filters) => void loadAudit({ ...filters, page: 1 })} onPageChange={(page) => void loadAudit({ ...auditQuery.current, page })} /> : null}
       {activePage === "health" ? <HealthPage state={health} /> : null}
     </section>
     {session ? <aside className="systemAccount"><SystemUserSummary user={(session.user as JsonRecord | undefined) || {}} /></aside> : null}

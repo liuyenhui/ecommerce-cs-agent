@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-import { RequestStateView } from "../../shared/components";
+import { AdminFrame, RequestStateView } from "../../shared/components";
 import { DashboardPage } from "./pages/DashboardPage";
 import { AuditPage } from "./pages/AuditPage";
 import { HealthPage } from "./pages/HealthPage";
@@ -17,11 +17,13 @@ import { SYSTEM_ADMIN_URLS, systemAdminPaths } from "./system-api";
 import {
   RAIL_COLLAPSED_STORAGE_KEY,
   SystemNavigation,
+  SystemWorkspace,
   loadDashboardSupportingData,
   persistRailCollapsed,
   readRailCollapsed,
   systemNavigationItems
 } from "./SystemWorkspace";
+import { PaginationControls } from "./pages/PaginationControls";
 
 const markup = (node: React.ReactNode) => renderToStaticMarkup(<>{node}</>);
 
@@ -105,6 +107,8 @@ describe("System Admin operations shell", () => {
         pending_tasks: 0,
         critical_alerts: 0,
         recent_releases: [],
+        recent_releases_status: "available",
+        recent_releases_error: null,
         generated_at: "2026-07-15T00:00:00Z"
       });
       return response({ items: [], page_info: { page: 1, page_size: 5, total: 0 } });
@@ -164,6 +168,8 @@ describe("DashboardPage", () => {
           pending_tasks: 9,
           critical_alerts: 2,
           recent_releases: [{ release_id: "release-real", organization_id: "org-1", config_version_id: "version-1", version_number: 1, status: "running", published_at: "2026-07-15T00:00:00Z", submitted_at: "2026-07-14T23:00:00Z" }],
+          recent_releases_status: "available",
+          recent_releases_error: null,
           generated_at: "2026-07-15T00:00:00Z"
         },
         readiness: { items: [{ store_id: "store-1" }], page: { page: 1, page_size: 20, total: 999 } },
@@ -179,6 +185,15 @@ describe("DashboardPage", () => {
     expect(html).toContain("release-real");
     expect(html).not.toContain("999");
     expect(html).not.toContain("888");
+  });
+
+  it("shows an explicit partial failure instead of pretending releases are empty", () => {
+    const html = markup(<DashboardPage state={{ kind: "success", data: {
+      summary: { active_organizations: 1, active_stores: 1, decisions_today: 1, auto_reply_rate: 1, handoff_rate: 0, error_rate: 0, readiness_blockers: 0, pending_tasks: 0, critical_alerts: 0, recent_releases: [], recent_releases_status: "unavailable", recent_releases_error: "release_data_unavailable", generated_at: "2026-07-15T00:00:00Z" },
+      readiness: { items: [], page: { page: 1, page_size: 5, total: 0 } }, tasks: { items: [], page: { page: 1, page_size: 5, total: 0 } }, decisions: { items: [], page: { page: 1, page_size: 5, total: 0 } }
+    } }} />);
+    expect(html).toContain("发布数据暂不可用");
+    expect(html).not.toContain("暂无最近发布");
   });
 });
 
@@ -240,9 +255,10 @@ describe("operational pages", () => {
       data: {
         items: [
           { task_id: "task-safe", task_type: "embedding", status: "failed", retryable: true },
-          { task_id: "task-unsafe", task_type: "bulk_import", status: "failed", retryable: false }
+          { task_id: "task-unsafe", task_type: "bulk_import", status: "failed", retryable: false },
+          { task_id: "task-queued", task_type: "embedding", status: "queued", retryable: true }
         ],
-        page: { page: 1, page_size: 20, total: 2 }
+        page: { page: 1, page_size: 20, total: 3 }
       }
     }} onRetry={() => undefined} />);
 
@@ -295,5 +311,125 @@ describe("operational pages", () => {
 
     expect(releaseCalled).toBe(false);
     expect(result.pages).toHaveLength(3);
+  });
+
+  it("removes the retry control after the task is queued", () => {
+    function RetryHarness() {
+      const [task, setTask] = React.useState({ task_id: "task-1", status: "failed", retryable: true });
+      return <TasksPage state={{ kind: "success", data: { items: [task], page: { page: 1, page_size: 20, total: 1 } } }} onRetry={() => setTask({ ...task, status: "queued", retryable: false })} />;
+    }
+    render(<RetryHarness />);
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(screen.queryByRole("button", { name: "重试" })).toBeNull();
+  });
+
+  it("uses server totals and enforces pagination bounds", () => {
+    const onPageChange = vi.fn();
+    render(<PaginationControls page={{ page: 2, page_size: 20, total: 41 }} onPageChange={onPageChange} />);
+    fireEvent.click(screen.getByRole("button", { name: "上一页" }));
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    expect(onPageChange.mock.calls).toEqual([[1], [3]]);
+    expect(screen.getByText("第 2 / 3 页，共 41 条")).toBeTruthy();
+  });
+});
+
+describe("async request ownership", () => {
+  it("requests page two for more than twenty server tasks", async () => {
+    const paths: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      paths.push(String(input));
+      const page = String(input).includes("page=2") ? 2 : 1;
+      return response({ items: [{ task_id: `task-${page}`, status: "queued", retryable: false }], page_info: { page, page_size: 20, total: 25 } });
+    }));
+    render(<SystemWorkspace activePage="tasks" setToast={() => undefined} />);
+    await screen.findByText("task-1");
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await screen.findByText("task-2");
+    expect(paths.some((path) => path.includes("page=2") && path.includes("page_size=20"))).toBe(true);
+  });
+
+  it("never lets an older audit response overwrite the latest filter", async () => {
+    let resolveFirst!: (value: Response) => void;
+    const first = new Promise<Response>((resolve) => { resolveFirst = resolve; });
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      calls += 1;
+      if (calls === 1) return first;
+      expect(String(input)).toContain("action=newest");
+      return Promise.resolve(response({ items: [{ audit_log_id: "new-record" }], page_info: { page: 1, page_size: 20, total: 1 } }));
+    }));
+    render(<SystemWorkspace activePage="audit" setToast={() => undefined} />);
+    fireEvent.change(screen.getByLabelText("action"), { target: { value: "newest" } });
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    await screen.findByText("new-record");
+    resolveFirst(response({ items: [{ audit_log_id: "old-record" }], page_info: { page: 1, page_size: 20, total: 1 } }));
+    await Promise.resolve();
+    expect(screen.queryByText("old-record")).toBeNull();
+  });
+
+  it("does not restore a late auth me response after logout", async () => {
+    let resolveInitialMe!: (value: Response) => void;
+    const initialMe = new Promise<Response>((resolve) => { resolveInitialMe = resolve; });
+    let resolveLogout!: (value: Response) => void;
+    const pendingLogout = new Promise<Response>((resolve) => { resolveLogout = resolve; });
+    let meCalls = 0;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === SYSTEM_ADMIN_URLS.me && ++meCalls === 1) return initialMe;
+      if (path === SYSTEM_ADMIN_URLS.me) return Promise.resolve(response({ user: { display_name: "Operator" } }));
+      if (path === SYSTEM_ADMIN_URLS.login) return Promise.resolve(response({}));
+      if (path === SYSTEM_ADMIN_URLS.logout) return pendingLogout;
+      if (path === SYSTEM_ADMIN_URLS.dashboardSummary) return Promise.resolve(response({ active_organizations: 0, active_stores: 0, decisions_today: 0, auto_reply_rate: null, handoff_rate: null, error_rate: null, readiness_blockers: 0, pending_tasks: 0, critical_alerts: 0, recent_releases: [], recent_releases_status: "available", recent_releases_error: null, generated_at: "2026-07-15T00:00:00Z" }));
+      return Promise.resolve(response({ items: [], page_info: { page: 1, page_size: 5, total: 0 } }));
+    }));
+    render(<App />);
+    fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "operator@example.com" } });
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "password" } });
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    const logout = await screen.findByRole("button", { name: "退出" });
+    fireEvent.click(logout);
+    await screen.findByText("正在退出系统后台");
+    expect(screen.queryByRole("heading", { name: "系统后台登录" })).toBeNull();
+    resolveInitialMe(response({ user: { display_name: "Late user" } }));
+    await Promise.resolve();
+    expect(screen.queryByText("Late user")).toBeNull();
+    resolveLogout(response({}));
+    await screen.findByRole("heading", { name: "系统后台登录" });
+  });
+});
+
+describe("shared mobile navigation focus", () => {
+  it("traps mobile focus, closes on Escape, and restores the menu trigger", async () => {
+    Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: true, addEventListener: () => undefined, removeEventListener: () => undefined }) });
+    function FrameHarness() {
+      const [open, setOpen] = React.useState(false);
+      return <AdminFrame isAuthenticated mobileNavOpen={open} brand="Admin" navigation={<><button>第一项</button><button>最后一项</button></>} topBar={<button onClick={() => setOpen(true)}>菜单</button>} toast={null} onCloseNav={() => setOpen(false)} onCloseToast={() => undefined}>内容</AdminFrame>;
+    }
+    render(<FrameHarness />);
+    const menu = screen.getByRole("button", { name: "菜单" });
+    menu.focus();
+    fireEvent.click(menu);
+    const dialog = await screen.findByRole("dialog", { name: "后台导航" });
+    const first = screen.getByRole("button", { name: "第一项" });
+    const last = screen.getByRole("button", { name: "最后一项" });
+    expect(document.activeElement).toBe(first);
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(document.querySelector(".mainPane")?.getAttribute("inert")).toBe("");
+    expect(document.querySelector(".mainPane")?.getAttribute("aria-hidden")).toBe("true");
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(document.activeElement).toBe(menu);
+  });
+
+  it("keeps the shared customer/system shell non-modal on desktop", async () => {
+    Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: false, addEventListener: () => undefined, removeEventListener: () => undefined }) });
+    render(<AdminFrame isAuthenticated mobileNavOpen brand="Admin" navigation={<button>导航</button>} topBar={<button>菜单</button>} toast={null} onCloseNav={() => undefined} onCloseToast={() => undefined}>内容</AdminFrame>);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(document.querySelector(".mainPane")?.hasAttribute("inert")).toBe(false);
+    expect(document.querySelector(".mainPane")?.hasAttribute("aria-hidden")).toBe(false);
   });
 });
