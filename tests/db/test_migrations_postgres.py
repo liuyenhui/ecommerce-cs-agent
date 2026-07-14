@@ -155,10 +155,11 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 cursor,
                 """
                 INSERT INTO llm_config_version (
-                    version_number, status, configuration_hash, created_by_system_admin_user_id
-                ) VALUES (3, 'running', 'invalid-unpublished-running', %s)
+                    version_number, status, configuration_hash, created_by_system_admin_user_id,
+                    published_by_system_admin_user_id, published_at
+                ) VALUES (3, 'running', 'invalid-direct-running', %s, %s, now())
                 """,
-                (system_admin_user_id,),
+                (system_admin_user_id, system_admin_user_id),
             )
             assert_integrity_error(
                 cursor,
@@ -173,12 +174,66 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
             cursor.execute(
                 """
                 UPDATE llm_config_version
-                SET status = 'running',
+                SET status = 'validated', revision = revision + 1
+                WHERE id = %s
+                """,
+                (config_version_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                UPDATE llm_config_version
+                SET status = 'draft', revision = revision + 1
+                WHERE id = %s
+                """,
+                (config_version_id,),
+            )
+            cursor.execute(
+                """
+                UPDATE llm_config_version
+                SET status = 'pending_publish', revision = revision + 1
+                WHERE id = %s
+                """,
+                (config_version_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                UPDATE llm_config_version
+                SET status = 'draft', revision = revision + 1
+                WHERE id = %s
+                """,
+                (config_version_id,),
+            )
+            cursor.execute(
+                """
+                UPDATE llm_config_version
+                SET status = 'running', revision = revision + 1,
                     published_by_system_admin_user_id = %s,
                     published_at = now()
                 WHERE id = %s
                 """,
                 (system_admin_user_id, config_version_id),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                UPDATE llm_config_version
+                SET status = 'draft', revision = revision + 1,
+                    published_by_system_admin_user_id = NULL,
+                    published_at = NULL
+                WHERE id = %s
+                """,
+                (config_version_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_scenario_route (
+                    config_version_id, scenario, primary_provider_config_id, primary_model
+                ) VALUES (%s, 'running-insert', %s, 'test-model')
+                """,
+                (config_version_id, provider_id),
             )
             assert_integrity_error(
                 cursor,
@@ -224,7 +279,21 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
             cursor.execute(
                 """
                 UPDATE llm_config_version
-                SET status = 'draft',
+                SET status = 'superseded', revision = revision + 1
+                WHERE id = %s
+                """,
+                (config_version_id,),
+            )
+            cursor.execute(
+                "SELECT count(*) FROM llm_invocation_metric WHERE scenario_route_id = %s",
+                (scenario_route_id,),
+            )
+            assert cursor.fetchone() == (1,)
+            assert_integrity_error(
+                cursor,
+                """
+                UPDATE llm_config_version
+                SET status = 'draft', revision = revision + 1,
                     published_by_system_admin_user_id = NULL,
                     published_at = NULL
                 WHERE id = %s

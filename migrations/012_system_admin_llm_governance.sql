@@ -230,6 +230,20 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF TG_OP = 'INSERT' THEN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.id::text, 0));
+        IF NOT EXISTS (
+            SELECT 1
+            FROM llm_config_version AS route_version
+            WHERE route_version.id = NEW.config_version_id
+              AND route_version.status = 'draft'
+        ) THEN
+            RAISE EXCEPTION 'scenario routes can only be added to draft config versions'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END IF;
+
     PERFORM pg_advisory_xact_lock(hashtextextended(OLD.id::text, 0));
 
     IF EXISTS (
@@ -274,6 +288,67 @@ DROP TRIGGER IF EXISTS trg_protect_llm_scenario_route_history
     ON llm_scenario_route;
 
 CREATE TRIGGER trg_protect_llm_scenario_route_history
-    BEFORE UPDATE OR DELETE ON llm_scenario_route
+    BEFORE INSERT OR UPDATE OR DELETE ON llm_scenario_route
     FOR EACH ROW
     EXECUTE FUNCTION protect_llm_scenario_route_history();
+
+CREATE OR REPLACE FUNCTION validate_llm_config_version_transition()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.status <> 'draft' OR NEW.revision <> 1
+            OR NEW.published_by_system_admin_user_id IS NOT NULL
+            OR NEW.published_at IS NOT NULL
+            OR NEW.rollback_of_version_id IS NOT NULL
+        THEN
+            RAISE EXCEPTION 'config versions must start as unpublished revision-one drafts'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF NEW.revision <> OLD.revision + 1 THEN
+        RAISE EXCEPTION 'config version updates must increment revision by exactly one'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF NOT (
+        (NEW.status = OLD.status
+            AND OLD.status IN ('draft', 'validated', 'pending_publish'))
+        OR (OLD.status = 'draft' AND NEW.status = 'validated')
+        OR (OLD.status = 'validated' AND NEW.status = 'pending_publish')
+        OR (OLD.status = 'pending_publish' AND NEW.status = 'running')
+        OR (OLD.status = 'running' AND NEW.status IN ('superseded', 'rolled_back'))
+    ) THEN
+        RAISE EXCEPTION 'invalid config version lifecycle transition: % to %', OLD.status, NEW.status
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF NEW.version_number IS DISTINCT FROM OLD.version_number
+        OR NEW.created_by_system_admin_user_id IS DISTINCT FROM OLD.created_by_system_admin_user_id
+        OR NEW.created_at IS DISTINCT FROM OLD.created_at
+    THEN
+        RAISE EXCEPTION 'config version identity and creation metadata are immutable'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF OLD.rollback_of_version_id IS NOT NULL
+        AND NEW.rollback_of_version_id IS DISTINCT FROM OLD.rollback_of_version_id
+    THEN
+        RAISE EXCEPTION 'rollback source metadata is immutable once set'
+            USING ERRCODE = '23514';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validate_llm_config_version_transition
+    ON llm_config_version;
+
+CREATE TRIGGER trg_validate_llm_config_version_transition
+    BEFORE INSERT OR UPDATE ON llm_config_version
+    FOR EACH ROW
+    EXECUTE FUNCTION validate_llm_config_version_transition();
