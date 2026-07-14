@@ -67,7 +67,10 @@ CREATE TABLE IF NOT EXISTS llm_release_record (
     organization_id uuid NOT NULL REFERENCES organization(id) ON DELETE RESTRICT,
     config_version_id uuid NOT NULL,
     evaluation_run_id varchar(128) NOT NULL
-        CHECK (length(btrim(evaluation_run_id)) BETWEEN 1 AND 128),
+        CHECK (
+            length(evaluation_run_id) <= 128
+            AND evaluation_run_id ~ '[^[:space:]]'
+        ),
     status text NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'running', 'superseded', 'rolled_back')),
     submitted_by_system_admin_user_id uuid NOT NULL
@@ -576,6 +579,16 @@ BEGIN
         ) THEN
             RAISE EXCEPTION 'release config version does not exist'
                 USING ERRCODE = '23503';
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1
+            FROM llm_config_version AS target_version
+            WHERE target_version.id = NEW.config_version_id
+              AND target_version.rollback_of_version_id
+                  IS NOT DISTINCT FROM NEW.rollback_of_version_id
+        ) THEN
+            RAISE EXCEPTION 'release rollback source must match its config version rollback source'
+                USING ERRCODE = '23514';
         END IF;
         IF NEW.rollback_of_version_id IS NULL THEN
             PERFORM lock_llm_config_versions(NEW.config_version_id);

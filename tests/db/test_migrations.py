@@ -296,7 +296,9 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "create index if not exists idx_llm_connection_test_version_checked on llm_connection_test (config_version_id, checked_at desc)",
         ]),
         (release_sql, [
-            "evaluation_run_id varchar(128) not null check (length(btrim(evaluation_run_id)) between 1 and 128)",
+            "evaluation_run_id varchar(128) not null",
+            "length(evaluation_run_id) <= 128",
+            "evaluation_run_id ~ '[^[:space:]]'",
             "unique (config_version_id)",
             "foreign key (config_version_id, organization_id)",
             "check (status in ('pending', 'running', 'superseded', 'rolled_back'))",
@@ -380,6 +382,7 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
     assert "terminal release records are immutable" in compact_sql
     assert "source.config_version_id = new.rollback_of_version_id" in compact_sql
     assert "source.status in ('superseded', 'rolled_back')" in compact_sql
+    assert "target_version.rollback_of_version_id is not distinct from new.rollback_of_version_id" in compact_sql
     assert "perform lock_llm_config_versions(new.config_version_id)" in compact_sql
     assert "perform lock_llm_config_versions(old.config_version_id)" in compact_sql
     assert "create or replace function validate_llm_release_version_consistency()" in compact_sql

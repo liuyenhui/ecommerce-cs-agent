@@ -871,6 +871,22 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                 """,
                 (organization_id, draft_id, admin_id),
             )
+            for whitespace_only_evaluation_id in ("\t", "\n", "\r\n\t"):
+                assert_integrity_error(
+                    cursor,
+                    """
+                    INSERT INTO llm_release_record (
+                        organization_id, config_version_id, evaluation_run_id,
+                        submitted_by_system_admin_user_id
+                    ) VALUES (%s, %s, %s, %s)
+                    """,
+                    (
+                        organization_id,
+                        draft_id,
+                        whitespace_only_evaluation_id,
+                        admin_id,
+                    ),
+                )
 
             assert_deferred_integrity_error(
                 cursor,
@@ -976,7 +992,24 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                 terminal_pairs.append((version_id, release_id))
 
             first_version_id, first_release_id = terminal_pairs[0]
-            second_version_id, _second_release_id = terminal_pairs[1]
+            second_version_id, second_release_id = terminal_pairs[1]
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    submitted_by_system_admin_user_id,
+                    rollback_of_release_id, rollback_of_version_id
+                ) VALUES (%s, %s, 'ordinary-with-rollback-links', %s, %s, %s)
+                """,
+                (
+                    organization_id,
+                    draft_id,
+                    admin_id,
+                    first_release_id,
+                    first_version_id,
+                ),
+            )
             cursor.execute(
                 """
                 INSERT INTO llm_config_version (
@@ -988,6 +1021,16 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                 (organization_id, admin_id, first_version_id),
             )
             rollback_version_id = cursor.fetchone()[0]
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    submitted_by_system_admin_user_id
+                ) VALUES (%s, %s, 'rollback-without-links', %s)
+                """,
+                (organization_id, rollback_version_id, admin_id),
+            )
             assert_integrity_error(
                 cursor,
                 """
@@ -1022,6 +1065,23 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                     rollback_version_id,
                     admin_id,
                     first_release_id,
+                    second_version_id,
+                ),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    submitted_by_system_admin_user_id,
+                    rollback_of_release_id, rollback_of_version_id
+                ) VALUES (%s, %s, 'target-source-mismatch', %s, %s, %s)
+                """,
+                (
+                    organization_id,
+                    rollback_version_id,
+                    admin_id,
+                    second_release_id,
                     second_version_id,
                 ),
             )
