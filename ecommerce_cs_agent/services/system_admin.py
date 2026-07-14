@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from psycopg.types.json import Jsonb
@@ -91,12 +91,19 @@ class InMemorySystemAdminRepository:
                 "created_at": _now(),
             }
         }
+        self.product_store_ids: set[str] = set()
+        self.price_snapshot_store_ids: set[str] = set()
+        self.approved_knowledge_store_ids: set[str] = set()
+        self.active_integration_store_ids: set[str] = set()
         self.decisions: dict[str, dict[str, Any]] = {}
         self.tasks: dict[str, dict[str, Any]] = {}
         self.audit_logs: list[dict[str, Any]] = []
 
     def dashboard_summary(self, session: SystemAdminSession) -> dict[str, Any]:
-        decisions_today = [item for item in self.decisions.values() if _is_today(item.get("created_at"))]
+        now = datetime.now(timezone.utc)
+        decisions_today = [
+            item for item in self.decisions.values() if _is_in_current_utc_day(item.get("created_at"), now)
+        ]
         decision_count = len(decisions_today)
         self._audit(session, "system_admin.dashboard.get", "system_dashboard", "summary", {})
         return {
@@ -106,7 +113,10 @@ class InMemorySystemAdminRepository:
             "auto_reply_rate": _rate(sum(item.get("decision_type") == "auto_reply" for item in decisions_today), decision_count),
             "handoff_rate": _rate(sum(item.get("decision_type") == "handoff" for item in decisions_today), decision_count),
             "error_rate": _rate(sum(item.get("status") in {"error", "failed"} for item in decisions_today), decision_count),
-            "readiness_blockers": sum(item.get("readiness_status") == "blocked" for item in self.stores.values()),
+            "readiness_blockers": sum(
+                item.get("status") == "active" and not self._store_is_ready(str(item["id"]))
+                for item in self.stores.values()
+            ),
             "pending_tasks": sum(item.get("status") in {"queued", "running"} for item in self.tasks.values()),
             "critical_alerts": sum(item.get("status") == "failed" for item in self.tasks.values()),
             "generated_at": _now(),
@@ -199,12 +209,35 @@ class InMemorySystemAdminRepository:
 
     def store_readiness(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         self._audit(session, "system_admin.readiness.list", "store_readiness", "list", filters)
-        items = [
-            _readiness_item(item["organization_id"], item["id"], "blocked", False, False, False, False)
-            for item in self.stores.values()
-            if not filters.get("organization_id") or item["organization_id"] == filters["organization_id"]
-        ]
+        items = []
+        for item in self.stores.values():
+            if filters.get("organization_id") and item["organization_id"] != filters["organization_id"]:
+                continue
+            store_id = str(item["id"])
+            has_product, has_price, has_knowledge, has_api_integration = self._store_readiness_inputs(store_id)
+            items.append(
+                _readiness_item(
+                    item["organization_id"],
+                    store_id,
+                    _readiness_status(has_product, has_price, has_knowledge, has_api_integration),
+                    has_product,
+                    has_price,
+                    has_knowledge,
+                    has_api_integration,
+                )
+            )
         return _page_response(*_slice_page(items, filters))
+
+    def _store_readiness_inputs(self, store_id: str) -> tuple[bool, bool, bool, bool]:
+        return (
+            store_id in self.product_store_ids,
+            store_id in self.price_snapshot_store_ids,
+            store_id in self.approved_knowledge_store_ids,
+            store_id in self.active_integration_store_ids,
+        )
+
+    def _store_is_ready(self, store_id: str) -> bool:
+        return all(self._store_readiness_inputs(store_id))
 
     def list_message_traces(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         self._require_trace_read(session)
@@ -359,37 +392,52 @@ class PostgresSystemAdminRepository:
                             count(*) FILTER (WHERE status = 'active') AS active_stores,
                             count(*) FILTER (
                                 WHERE status = 'active'
-                                  AND NOT EXISTS (SELECT 1 FROM product WHERE product.store_id = store.id)
+                                  AND (
+                                      NOT EXISTS (SELECT 1 FROM product WHERE product.store_id = store.id)
+                                      OR NOT EXISTS (
+                                          SELECT 1 FROM product_price_snapshot price WHERE price.store_id = store.id
+                                      )
+                                      OR NOT EXISTS (
+                                          SELECT 1 FROM knowledge_entry knowledge
+                                          WHERE knowledge.store_id::text = store.id::text
+                                            AND knowledge.status = 'approved'
+                                      )
+                                      OR NOT (
+                                          EXISTS (
+                                              SELECT 1 FROM platform_account account
+                                              WHERE account.store_id = store.id AND account.status = 'active'
+                                          )
+                                          OR EXISTS (
+                                              SELECT 1 FROM external_api_token token
+                                              WHERE token.store_id = store.id AND token.status = 'active'
+                                          )
+                                      )
+                                  )
                             ) AS readiness_blockers
                         FROM store
                     ),
+                    today_decisions AS (
+                        SELECT decision_type, status
+                        FROM decision_record
+                        WHERE created_at >= (
+                            date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                        )
+                          AND created_at < (
+                              (date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') + INTERVAL '1 day')
+                              AT TIME ZONE 'UTC'
+                          )
+                          AND created_at <= CURRENT_TIMESTAMP
+                    ),
                     decision_totals AS (
                         SELECT
-                            count(*) FILTER (
-                                WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP)
-                            ) AS decisions_today,
-                            count(*) FILTER (
-                                WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP)
-                                  AND decision_type = 'auto_reply'
-                            )::double precision
-                                / NULLIF(count(*) FILTER (
-                                    WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP)
-                                ), 0) AS auto_reply_rate,
-                            count(*) FILTER (
-                                WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP)
-                                  AND decision_type = 'handoff'
-                            )::double precision
-                                / NULLIF(count(*) FILTER (
-                                    WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP)
-                                ), 0) AS handoff_rate,
-                            count(*) FILTER (
-                                WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP)
-                                  AND status IN ('error', 'failed')
-                            )::double precision
-                                / NULLIF(count(*) FILTER (
-                                    WHERE created_at >= date_trunc('day', CURRENT_TIMESTAMP)
-                                ), 0) AS error_rate
-                        FROM decision_record
+                            count(*) AS decisions_today,
+                            count(*) FILTER (WHERE decision_type = 'auto_reply')::double precision
+                                / NULLIF(count(*), 0) AS auto_reply_rate,
+                            count(*) FILTER (WHERE decision_type = 'handoff')::double precision
+                                / NULLIF(count(*), 0) AS handoff_rate,
+                            count(*) FILTER (WHERE status IN ('error', 'failed'))::double precision
+                                / NULLIF(count(*), 0) AS error_rate
+                        FROM today_decisions
                     ),
                     task_totals AS (
                         SELECT
@@ -1216,7 +1264,7 @@ def _rate(numerator: int, denominator: int) -> float | None:
     return numerator / denominator if denominator else None
 
 
-def _is_today(value: Any) -> bool:
+def _is_in_current_utc_day(value: Any, now: datetime) -> bool:
     if isinstance(value, datetime):
         timestamp = value
     elif isinstance(value, str):
@@ -1228,7 +1276,11 @@ def _is_today(value: Any) -> bool:
         return False
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=timezone.utc)
-    return timestamp.astimezone(timezone.utc).date() == datetime.now(timezone.utc).date()
+    timestamp = timestamp.astimezone(timezone.utc)
+    now = now.astimezone(timezone.utc)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    next_day_start = day_start + timedelta(days=1)
+    return day_start <= timestamp < next_day_start and timestamp <= now
 
 
 def _system_user(user_id: str, email: str, display_name: str, roles: list[str], status: str = "active") -> dict[str, Any]:

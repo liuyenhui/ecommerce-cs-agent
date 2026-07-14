@@ -81,15 +81,24 @@ def test_in_memory_system_admin_dashboard_summary_uses_explicit_fixture_collecti
         "org-suspended": {"status": "suspended"},
     }
     repository.stores = {
-        "store-ready": {"status": "active", "readiness_status": "ready"},
-        "store-blocked": {"status": "active", "readiness_status": "blocked"},
-        "store-inactive": {"status": "inactive", "readiness_status": "ready"},
+        "store-ready": {"id": "store-ready", "organization_id": "org-active", "status": "active"},
+        "store-product-only": {"id": "store-product-only", "organization_id": "org-active", "status": "active"},
+        "store-inactive": {"id": "store-inactive", "organization_id": "org-active", "status": "inactive"},
     }
+    repository.product_store_ids = {"store-ready", "store-product-only"}
+    repository.price_snapshot_store_ids = {"store-ready"}
+    repository.approved_knowledge_store_ids = {"store-ready"}
+    repository.active_integration_store_ids = {"store-ready"}
     repository.decisions = {
         "auto": {"decision_type": "auto_reply", "status": "completed", "created_at": now},
         "handoff": {"decision_type": "handoff", "status": "completed", "created_at": now},
         "error": {"decision_type": "candidate", "status": "failed", "created_at": now},
         "old": {"decision_type": "auto_reply", "status": "completed", "created_at": now - timedelta(days=1)},
+        "future": {
+            "decision_type": "candidate",
+            "status": "completed",
+            "created_at": now.replace(hour=23, minute=59, second=59, microsecond=999999),
+        },
     }
     repository.tasks = {
         "queued": {"status": "queued"},
@@ -109,6 +118,35 @@ def test_in_memory_system_admin_dashboard_summary_uses_explicit_fixture_collecti
     assert response["readiness_blockers"] == 1
     assert response["pending_tasks"] == 2
     assert response["critical_alerts"] == 1
+
+    repository.price_snapshot_store_ids.add("store-product-only")
+    repository.approved_knowledge_store_ids.add("store-product-only")
+    repository.active_integration_store_ids.add("store-product-only")
+
+    assert repository.dashboard_summary(_system_session())["readiness_blockers"] == 0
+
+
+@pytest.mark.parametrize(
+    "missing_fixture",
+    [
+        "product_store_ids",
+        "price_snapshot_store_ids",
+        "approved_knowledge_store_ids",
+        "active_integration_store_ids",
+    ],
+)
+def test_in_memory_system_admin_dashboard_requires_every_readiness_input(missing_fixture: str) -> None:
+    repository = InMemorySystemAdminRepository()
+    repository.stores = {"store-check": {"id": "store-check", "status": "active"}}
+    repository.product_store_ids = {"store-check"}
+    repository.price_snapshot_store_ids = {"store-check"}
+    repository.approved_knowledge_store_ids = {"store-check"}
+    repository.active_integration_store_ids = {"store-check"}
+    getattr(repository, missing_fixture).clear()
+
+    response = repository.dashboard_summary(_system_session())
+
+    assert response["readiness_blockers"] == 1
 
 
 def test_system_admin_message_traces_require_scope_and_use_repository_policy() -> None:
@@ -226,6 +264,7 @@ def test_system_admin_dashboard_summary_uses_postgres_total_aggregates(monkeypat
     )
 
     executed_sql = "\n".join(sql for sql, _params in connection.executed)
+    normalized_sql = " ".join(executed_sql.split())
     assert response.status_code == 200
     assert response.json() == {
         "active_organizations": 123,
@@ -241,12 +280,24 @@ def test_system_admin_dashboard_summary_uses_postgres_total_aggregates(monkeypat
     }
     assert "FROM organization" in executed_sql
     assert "FROM store" in executed_sql
+    assert "FROM product_price_snapshot" in executed_sql
+    assert "FROM knowledge_entry" in executed_sql
+    assert "FROM platform_account" in executed_sql
+    assert "FROM external_api_token" in executed_sql
     assert "FROM decision_record" in executed_sql
     assert "FROM background_task" in executed_sql
     assert "NULLIF" in executed_sql
     assert "LIMIT" not in executed_sql
     assert "OFFSET" not in executed_sql
     assert executed_sql.count("INSERT INTO system_admin_audit_log") == 1
+    assert "CURRENT_TIMESTAMP AT TIME ZONE 'UTC'" in normalized_sql
+    assert "created_at >=" in normalized_sql
+    assert "created_at <" in normalized_sql
+    assert "INTERVAL '1 day'" in normalized_sql
+    assert "created_at <= CURRENT_TIMESTAMP" in normalized_sql
+    assert normalized_sql.count("created_at >=") == 1
+    assert normalized_sql.count("created_at < (") == 1
+    assert "FROM today_decisions" in normalized_sql
 
 
 def test_postgres_system_admin_dashboard_summary_maps_zero_denominator_rates_to_none() -> None:
