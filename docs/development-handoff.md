@@ -9,6 +9,7 @@
 - 确认系统后台采用任务导向完整重构：9 个可达页面、可收缩 Lucide 图标导航、移动抽屉、统一状态组件和真实数据空态；development/production 禁止回退 In-memory demo 仓库，系统指标必须来自服务端总量/聚合 API。
 - LLM 治理纳入第一版完整范围：Provider 与 Kubernetes Secret 引用、场景主/降级模型、运行参数、连接测试、草稿、发布/回滚、用量成本、版本和审计；不展示完整 Prompt、客户消息、模型回复或密钥。
 - 新增 [系统后台重设计与 LLM 治理规格](superpowers/specs/2026-07-14-system-admin-redesign-and-llm-governance-design.md)，作为本轮实现与验收入口；详细长期约束继续归入 [System Admin Design](system-admin-design.md)。
+- 新增 [系统后台重设计与 LLM 治理实施计划](superpowers/plans/2026-07-14-system-admin-redesign-and-llm-governance.md)，按真实数据边界、聚合 API、LLM 数据库与服务、API/OpenAPI、九页前端、边界回归、文档和端到端发布验证顺序实施。
 
 ### 2026-07-10
 
