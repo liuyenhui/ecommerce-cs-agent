@@ -600,7 +600,37 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 """,
                 (scenario_route_id, organization_id, store_id),
             )
-            assert cursor.fetchone()[0] is not None
+            metric_id = cursor.fetchone()[0]
+            cursor.execute("SELECT * FROM llm_invocation_metric WHERE id = %s", (metric_id,))
+            metric_snapshot = cursor.fetchone()
+            assert metric_snapshot is not None
+            assert_integrity_error(
+                cursor,
+                """
+                UPDATE llm_invocation_metric
+                SET organization_id = %s, store_id = %s
+                WHERE id = %s
+                """,
+                (other_organization_id, other_store_id, metric_id),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                UPDATE llm_invocation_metric
+                SET input_tokens = input_tokens + 1,
+                    output_tokens = output_tokens + 1,
+                    estimated_cost_micros = estimated_cost_micros + 1
+                WHERE id = %s
+                """,
+                (metric_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                "DELETE FROM llm_invocation_metric WHERE id = %s",
+                (metric_id,),
+            )
+            cursor.execute("SELECT * FROM llm_invocation_metric WHERE id = %s", (metric_id,))
+            assert cursor.fetchone() == metric_snapshot
             cursor.execute(
                 """
                 UPDATE llm_config_version

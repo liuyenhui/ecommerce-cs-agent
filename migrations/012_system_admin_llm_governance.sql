@@ -291,10 +291,29 @@ DROP TRIGGER IF EXISTS trg_validate_llm_invocation_metric_route_role
     ON llm_invocation_metric;
 
 CREATE TRIGGER trg_validate_llm_invocation_metric_route_role
-    BEFORE INSERT OR UPDATE OF scenario_route_id, route_role
+    BEFORE INSERT
     ON llm_invocation_metric
     FOR EACH ROW
     EXECUTE FUNCTION validate_llm_invocation_metric_route_role();
+
+CREATE OR REPLACE FUNCTION protect_llm_invocation_metric_history()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'invocation metrics are append-only'
+        USING ERRCODE = '23514';
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_protect_llm_invocation_metric_history
+    ON llm_invocation_metric;
+
+CREATE TRIGGER trg_protect_llm_invocation_metric_history
+    BEFORE UPDATE OR DELETE ON llm_invocation_metric
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_llm_invocation_metric_history();
 
 CREATE OR REPLACE FUNCTION protect_llm_scenario_route_history()
 RETURNS trigger
