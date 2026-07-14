@@ -170,8 +170,10 @@
 .llmPanel table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .llmPanel th, .llmPanel td { border-bottom: 1px solid #c6c6c6; padding: 10px; text-align: left; vertical-align: top; }
 .llmPanel th { background: #f4f4f4; color: #262626; }
-.monoField, .llmPage code, .wrapId { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.wrapId { overflow-wrap: anywhere; word-break: break-all; }
+.modelId, .secretRef { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; word-break: break-word; }
+.wrapId, .llmPanel td { overflow-wrap: anywhere; word-break: break-word; }
+.llmPanel { min-width: 0; overflow: hidden; }
+.modelCostTable { max-width: 100%; overflow-x: auto; }
 .gatePassed { color: #0e6027; font-weight: 700; }
 .gateBlocked { color: #a2191f; font-weight: 700; }
 .releaseDialog { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 18px; background: rgba(22,22,22,.55); }

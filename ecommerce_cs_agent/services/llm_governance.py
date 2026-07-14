@@ -500,6 +500,13 @@ class InMemoryLlmGovernanceRepository:
         if has_more:
             last = items[-1]
             next_cursor = _encode_cursor({"version": 1, "kind": "release_records", "scope_hash": scope_hash, "submitted_at": last["submitted_at"], "id": last["release_record_id"]})
+        self.audit_logs.insert(0, {
+            "audit_log_id": f"audit-{uuid.uuid4().hex}", "actor_system_user_id": session.user_id,
+            "organization_id": organization_id, "action": "llm.release.list", "object_type": "llm_release_record",
+            "object_id": organization_id, "reason": "release records read",
+            "diff_summary": {"organization_id": organization_id, "limit": limit, "cursor_present": cursor is not None, "has_more": has_more},
+            "created_at": _iso(_now_dt()),
+        })
         return {"items": items, "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
 
     def replace_routes(self, session: SystemAdminSession, version_id: str, routes: list[dict[str, Any]], *, expected_revision: int, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1039,8 +1046,13 @@ class PostgresLlmGovernanceRepository:
             if has_more:
                 last = items[-1]
                 next_cursor = _encode_cursor({"version": 1, "kind": "release_records", "scope_hash": scope_hash, "submitted_at": last["submitted_at"], "id": last["release_record_id"]})
+            cur.execute(
+                "INSERT INTO system_admin_audit_log (id, system_admin_user_id, organization_id, action, object_type, object_id, diff_summary) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                (str(uuid.uuid4()), session.user_id, organization_id, "llm.release.list", "llm_release_record", organization_id,
+                 Jsonb({"organization_id": organization_id, "limit": limit, "cursor_present": cursor is not None, "has_more": has_more})),
+            )
             return {"items": items, "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
-        return self._read(op)
+        return self._transaction(op)
 
     def _fetch_version(self, cur: Any, version_id: str, *, lock: bool = False) -> dict[str, Any]:
         cur.execute("SELECT id::text, organization_id::text, version_number, status, revision, description, configuration_hash, created_by_system_admin_user_id::text, created_at, published_by_system_admin_user_id::text, published_at, rollback_of_version_id::text FROM llm_config_version WHERE id=%s" + (" FOR UPDATE" if lock else ""), (version_id,))

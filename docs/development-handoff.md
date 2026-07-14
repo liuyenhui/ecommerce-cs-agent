@@ -6,6 +6,7 @@
 
 ### 2026-07-15
 
+- System Admin LLM 治理分页与状态进一步收紧：版本、调用与发布记录的 cursor 加载使用各自 AbortController、generation/scope ownership 和同步 in-flight 锁，切换组织、筛选、页签或卸载时不得追加迟到响应；失败原因分别查询 `failed`、`timed_out`、`rejected` 后按错误码和币种合并。用量 loading/error/empty/success 严格互斥。发布、提交或回滚成功但列表刷新失败时必须明确提示操作已成功且数据已 stale，不得声称已刷新；跨页发布记录通过真实单版本 GET 加载对应版本后再开放回滚。每次成功读取 `/v1/system-admin/llm/releases` 都写入不含原始 cursor、Prompt、消息或 Secret 的 `llm.release.list` 审计。
 - System Admin LLM 治理返修补齐真实数据契约：审计查询新增服务端 `action_prefix=llm.` 过滤并在计数、分页前生效；新增 `/v1/system-admin/llm/releases` 真实发布记录游标接口。前端从当前 System Admin session 读取角色，只有 `super_admin` / `release_admin` 可写，`technical_support` 仅额外允许连接测试；用量区分加载、失败、空与成功状态并展示混合币种、完整调用维度和仅失败调用的错误分布，版本、调用、发布记录均按服务端游标继续加载，发布与回滚后重新获取真实版本和发布记录。
 - System Admin 质量门禁补齐真实服务端分页与请求所有权：组织、店铺、完成度、任务、审计、决策均按独立 `page/page_size/total` 翻页，筛选重置第一页；完成度的 `ready/warning/blocked` 状态必须先作用于完整结果集，再计算全局 `total` 和分页。前端后发请求中止先发请求并在退出时失效旧 `/auth/me`。移动导航在窄屏作为焦点受控模态抽屉，桌面保持非模态。任务重试输入收紧为去空白后的 1–128 字符幂等键与 1–512 字符原因，入队即不可再次重试且不覆盖任务原业务幂等键；Dashboard 最近发布查询失败时显式标记局部不可用，不伪装为空数据，OpenAPI 示例必须通过含格式校验的响应 schema 验证。客户管理员邀请、重发邀请和禁用/恢复账号不属于当前 System Admin API 或 UI 能力，文档统一标为后续候选；当前只展示、核验经批准部署流程配置的初始账号准备状态。
 - System Admin 组织边界统一使用 `/v1/system-admin/organizations`、`organization_id` 和 `organization` 响应字段，OpenAPI 不再保留未实现的 `/tenants` 或 SystemTenant 模型；任务重试幂等键按 System Admin + 任务校验，锁等待后的同键并发安全重放首次结果，跨操作者、跨任务或不同键竞争返回 409。

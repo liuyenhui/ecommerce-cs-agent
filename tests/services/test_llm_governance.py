@@ -127,6 +127,12 @@ def test_release_records_are_real_cursor_paginated_history() -> None:
     assert second_page["items"][0]["config_version_id"] == first["version_id"]
     assert second_page["items"][0]["status"] == "superseded"
     assert second_page["page_info"]["next_cursor"] is None
+    audits = [item for item in service.audit_logs if item["action"] == "llm.release.list"]
+    assert len(audits) == 2
+    assert audits[0]["actor_system_user_id"] == _session().user_id
+    assert audits[0]["organization_id"] == ORG_ID
+    assert audits[0]["diff_summary"]["cursor_present"] is True
+    assert "secret" not in json.dumps(audits).lower()
 
 
 def test_all_writes_require_live_system_session_role_reason_and_idempotency_key() -> None:
@@ -670,6 +676,16 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
         assert running["status"] == "running"
         assert running["evaluation_run_id"] == "integration-eval"
         assert running["release_status"] == "running"
+        release_page = service.list_release_records_page(session, organization_id, limit=1)
+        assert release_page["items"][0]["config_version_id"] == running["version_id"]
+        with psycopg.connect(scoped_url) as verify_release_read_audit:
+            with verify_release_read_audit.cursor() as cur:
+                cur.execute("SELECT system_admin_user_id::text, organization_id::text, diff_summary FROM system_admin_audit_log WHERE action='llm.release.list' ORDER BY created_at DESC LIMIT 1")
+                audit_row = cur.fetchone()
+                assert audit_row[0] == user_id
+                assert audit_row[1] == organization_id
+                assert audit_row[2]["limit"] == 1
+                assert "cursor" not in json.dumps(audit_row[2]).lower().replace("cursor_present", "")
         second_draft = service.create_draft(session, {"organization_id": organization_id, "reason": "integration", "idempotency_key": "integration-draft-two"})
         second_changed = service.replace_routes(session, second_draft["version_id"], _all_routes(provider["provider_id"]), expected_revision=1, payload={"reason": "integration", "idempotency_key": "integration-routes-two"})
         service.test_connection(session, provider["provider_id"], {"config_version_id": second_draft["version_id"], "reason": "integration", "idempotency_key": "integration-test-two"})

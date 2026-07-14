@@ -2365,7 +2365,7 @@ paths:
       tags: [System Admin LLM Governance]
       operationId: listSystemAdminLlmReleaseRecords
       summary: 按组织查询真实 LLM 发布记录
-      description: super_admin、release_admin、technical_support 和 security_auditor 可读；返回 llm_release_record 持久化记录，不从配置版本状态推断。
+      description: super_admin、release_admin、technical_support 和 security_auditor 可读；返回 llm_release_record 持久化记录，不从配置版本状态推断。每次成功读取写入安全的 `llm.release.list` 审计，记录操作者、组织、分页范围和是否有下一页，不记录 Prompt、消息、Secret 或原始 cursor。
       x-roles: [super_admin, release_admin, technical_support, security_auditor]
       security:
         - SystemAdminSession: []

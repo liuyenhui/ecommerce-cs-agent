@@ -210,7 +210,7 @@ def test_technical_support_can_only_run_draft_connection_test(monkeypatch: pytes
 
 
 def test_draft_routes_validate_submit_publish_and_rollback_flow(monkeypatch: pytest.MonkeyPatch) -> None:
-    client, _service = _client(monkeypatch, role="release_admin")
+    client, service = _client(monkeypatch, role="release_admin")
     provider = client.post("/v1/system-admin/llm/providers", headers=SYSTEM_HEADERS, json=PROVIDER).json()
     draft = client.post(
         "/v1/system-admin/llm/config-versions/drafts",
@@ -274,6 +274,9 @@ def test_draft_routes_validate_submit_publish_and_rollback_flow(monkeypatch: pyt
     assert releases.json()["items"][0]["release_record_id"] == rolled_back.json()["release_record_id"]
     assert releases.json()["items"][0]["rollback_of_version_id"] == draft.json()["version_id"]
     assert releases.json()["page_info"]["has_more"] is True
+    release_audit = next(item for item in service.audit_logs if item["action"] == "llm.release.list")
+    assert release_audit["actor_system_user_id"] == "system-user-1"
+    assert release_audit["organization_id"] == ORG_ID
 
 
 def test_incomplete_routes_stale_revision_and_release_gate_have_exact_conflicts(monkeypatch: pytest.MonkeyPatch) -> None:

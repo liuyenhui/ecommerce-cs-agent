@@ -108,6 +108,7 @@ export const systemApi = {
   updateLlmProvider: (providerId: string, body: unknown, signal?: AbortSignal) => writeJson<LlmProvider>(`${SYSTEM_ADMIN_URLS.llmProviders}/${encodeURIComponent(providerId)}`, body, "PATCH", signal),
   testLlmProvider: (providerId: string, body: unknown, signal?: AbortSignal) => writeJson<JsonRecord>(`${SYSTEM_ADMIN_URLS.llmProviders}/${encodeURIComponent(providerId)}/connection-tests`, body, "POST", signal),
   llmVersions: (organizationId: string, cursor?: string, signal?: AbortSignal) => requestJson<CursorEnvelope<LlmVersion>>(queryPath(SYSTEM_ADMIN_URLS.releases, { organization_id: organizationId, limit: 50, cursor }), { signal }),
+  llmVersion: (versionId: string, signal?: AbortSignal) => requestJson<LlmVersion>(`${SYSTEM_ADMIN_URLS.releases}/${encodeURIComponent(versionId)}`, { signal }),
   llmReleaseRecords: (organizationId: string, cursor?: string, signal?: AbortSignal) => requestJson<CursorEnvelope<LlmReleaseRecord>>(queryPath(SYSTEM_ADMIN_URLS.llmReleaseRecords, { organization_id: organizationId, limit: 50, cursor }), { signal }),
   createLlmDraft: (body: unknown, signal?: AbortSignal) => writeJson<LlmVersion>(SYSTEM_ADMIN_URLS.llmDrafts, body, "POST", signal),
   replaceLlmRoutes: (versionId: string, routes: LlmRoute[], expectedRevision: number, reason: string, idempotencyKey: string, signal?: AbortSignal) => writeJson<LlmVersion>(versionActionPath(versionId, "routes"), { routes, expected_revision: expectedRevision, reason, idempotency_key: idempotencyKey }, "PUT", signal),

@@ -404,6 +404,13 @@ describe("LLM governance and releases", () => {
     expect(screen.getByText(/agent\/llm-provider:api-key/)).toBeTruthy();
   });
 
+  it("uses monospace styling only for model identifiers and Secret references", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("/providers") ? response({ items: [provider] }) : response({ items: [] })));
+    render(<LlmGovernancePage />); fireEvent.click(await screen.findByRole("button", { name: "编辑 Production OpenAI" }));
+    expect(screen.getByLabelText("编辑幂等键").classList.contains("monoField")).toBe(false); expect(screen.getByText(/agent\/llm-provider:api-key/).classList.contains("secretRef")).toBe(true);
+    fireEvent.click(screen.getByRole("tab", { name: "调用与成本" })); expect(screen.getByLabelText("Provider ID").classList.contains("monoField")).toBe(false); expect(screen.getByLabelText("模型").classList.contains("modelId")).toBe(true);
+  });
+
   it("shows real token and cost fields and does not render a chart for zero usage", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -417,8 +424,8 @@ describe("LLM governance and releases", () => {
     expect(await screen.findByText("输入 Token")).toBeTruthy();
     expect(screen.getByText("输出 Token")).toBeTruthy();
     expect(screen.getByText("估算成本")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "场景用量分布" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "失败原因分布" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "场景用量分布" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "失败原因分布" })).toBeNull();
     expect(screen.getByText("当前筛选范围内暂无模型调用")).toBeTruthy();
     expect(screen.queryByTestId("usage-chart")).toBeNull();
   });
@@ -450,6 +457,20 @@ describe("LLM governance and releases", () => {
     expect(reads.filter((path) => path.includes("/llm/releases?")).length).toBeGreaterThanOrEqual(2);
   });
 
+  it("reports publish success truthfully when the post-action refresh fails", async () => {
+    const published = { ...version, status: "pending_publish", evaluation: { evaluation_run_id: "eval-passed" } }; let actionDone = false;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => { const path = String(input); if (path.endsWith("/publish") && init?.method === "POST") { actionDone = true; return response({ ...published, status: "running" }); } if (actionDone) return response({ error: { message: "refresh down" } }, 500); if (path.includes("/config-versions?")) return response({ items: [published], page_info: { limit: 50, has_more: false, next_cursor: null } }); return response({ items: [], page_info: { limit: 50, has_more: false, next_cursor: null } }); }));
+    vi.spyOn(window, "confirm").mockReturnValue(true); render(<ReleasesPage />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: published.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" })); fireEvent.click(await screen.findByRole("button", { name: "发布版本 4" })); fireEvent.change(screen.getByLabelText("发布原因"), { target: { value: "批准" } }); fireEvent.change(screen.getByLabelText("幂等键"), { target: { value: "publish-refresh-fail" } }); fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
+    expect(await screen.findByText("发布已成功，但列表刷新失败，请重试")).toBeTruthy(); expect(screen.queryByText(/已从服务端刷新/)).toBeNull();
+  });
+
+  it("reports submit success truthfully when the post-action refresh fails", async () => {
+    const validated = { ...version, status: "validated" as const }; let actionDone = false;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => { const path = String(input); if (path.endsWith("/submit-publish") && init?.method === "POST") { actionDone = true; return response({ ...validated, status: "pending_publish" }); } if (actionDone) return response({ error: { message: "refresh down" } }, 500); if (path.includes("/config-versions?")) return response({ items: [validated], page_info: { limit: 50, has_more: false, next_cursor: null } }); return response({ items: [], page_info: { limit: 50, has_more: false, next_cursor: null } }); }));
+    vi.spyOn(window, "confirm").mockReturnValue(true); render(<ReleasesPage />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: validated.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" })); fireEvent.click(await screen.findByRole("button", { name: "提交版本 4" })); fireEvent.change(screen.getByLabelText("评测快照 ID"), { target: { value: "eval-submit" } }); fireEvent.change(screen.getByLabelText("发布原因"), { target: { value: "提交评测" } }); fireEvent.change(screen.getByLabelText("幂等键"), { target: { value: "submit-refresh-fail" } }); fireEvent.click(screen.getByRole("button", { name: "确认提交" }));
+    expect(await screen.findByText("提交已成功，但列表刷新失败，请重试")).toBeTruthy(); expect(screen.queryByText(/已从服务端刷新/)).toBeNull();
+  });
+
   it("keeps Releases read-only for auditors and follows the real release cursor", async () => {
     const paths: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
@@ -462,8 +483,16 @@ describe("LLM governance and releases", () => {
     fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" }));
     expect(await screen.findByText("发布记录：rel-1")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /发布版本|回滚到此版本/ })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "加载更多发布记录" }));
+    const moreRecords = screen.getByRole("button", { name: "加载更多发布记录" }); fireEvent.click(moreRecords); fireEvent.click(moreRecords);
     await waitFor(() => expect(paths.some((path) => path.includes("/llm/releases?") && path.includes("cursor=release-next"))).toBe(true));
+    expect(paths.filter((path) => path.includes("/llm/releases?") && path.includes("cursor=release-next"))).toHaveLength(1);
+  });
+
+  it("loads a release record's off-page version before offering rollback", async () => {
+    const offPage = { ...version, version_id: "off-page-version", version_number: 1, status: "superseded" as const };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => { const path = String(input); if (path.endsWith("/off-page-version")) return response(offPage); if (path.includes("/config-versions?")) return response({ items: [], page_info: { limit: 50, has_more: true, next_cursor: "more" } }); return response({ items: [{ release_record_id: "off-page-release", organization_id: version.organization_id, config_version_id: offPage.version_id, evaluation_run_id: "eval", evaluation_config_version_id: offPage.version_id, status: "superseded", revision: 3, submitted_by_system_admin_user_id: "sys-1", submitted_at: "2026-07-15T00:00:00Z", published_by_system_admin_user_id: "sys-2", published_at: "2026-07-15T00:01:00Z", rollback_of_release_id: null, rollback_of_version_id: null }], page_info: { limit: 50, has_more: false, next_cursor: null } }); }));
+    render(<ReleasesPage roles={["release_admin"]} />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" }));
+    fireEvent.click(await screen.findByRole("button", { name: "加载对应版本后回滚" })); expect(await screen.findByRole("button", { name: "回滚到此版本" })).toBeTruthy(); expect(screen.getByText(/已加载发布记录对应版本/)).toBeTruthy();
   });
 
   it("clears old release data and cursors before a different organization finishes loading", async () => {
@@ -477,6 +506,20 @@ describe("LLM governance and releases", () => {
     render(<ReleasesPage />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" })); expect(await screen.findByText("发布记录：old-release")).toBeTruthy();
     hold = true; fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" }));
     expect(screen.queryByText("发布记录：old-release")).toBeNull(); expect(screen.queryByRole("button", { name: "加载更多发布记录" })).toBeNull();
+  });
+
+  it("aborts an in-flight release cursor as soon as its organization scope changes", async () => {
+    let cursorSignal: AbortSignal | undefined; let finish!: (value: Response) => void; const pending = new Promise<Response>((resolve) => { finish = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.includes("cursor=release-next")) { cursorSignal = init?.signal || undefined; return pending; }
+      if (path.includes("/config-versions?")) return response({ items: [version], page_info: { limit: 50, has_more: false, next_cursor: null } });
+      return response({ items: [], page_info: { limit: 50, has_more: true, next_cursor: "release-next" } });
+    }));
+    render(<ReleasesPage />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" }));
+    fireEvent.click(await screen.findByRole("button", { name: "加载更多发布记录" })); expect(cursorSignal?.aborted).toBe(false);
+    fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" } });
+    expect(cursorSignal?.aborted).toBe(true); expect(screen.queryByRole("button", { name: "加载更多发布记录" })).toBeNull(); finish(response({ items: [{ release_record_id: "late-release" }], page_info: { limit: 50, has_more: false, next_cursor: null } })); await Promise.resolve(); expect(screen.queryByText(/late-release/)).toBeNull();
   });
 
   it("confirms rollback and refetches versions plus release records", async () => {
@@ -493,6 +536,13 @@ describe("LLM governance and releases", () => {
     fireEvent.click(await screen.findByRole("button", { name: "回滚到此版本" }));
     await waitFor(() => expect(writes).toHaveLength(1)); expect(writes[0].path).toContain(`/config-versions/${version.version_id}/rollback`); expect(writes[0].body.reason).toBe("生产回归");
     await waitFor(() => expect(reads.filter((path) => path.includes("/config-versions?")).length).toBeGreaterThanOrEqual(2)); expect(reads.filter((path) => path.includes("/llm/releases?")).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("reports rollback success truthfully when the post-action refresh fails", async () => {
+    let actionDone = false;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => { const path = String(input); if (path.endsWith("/rollback") && init?.method === "POST") { actionDone = true; return response({ ...version, status: "running" }); } if (actionDone) return response({ error: { message: "refresh down" } }, 500); if (path.includes("/config-versions?")) return response({ items: [version], page_info: { limit: 50, has_more: false, next_cursor: null } }); if (path.includes("/llm/releases?")) return response({ items: [{ release_record_id: "rel-running", organization_id: version.organization_id, config_version_id: version.version_id, evaluation_run_id: "eval-real", evaluation_config_version_id: version.version_id, status: "running", revision: 2, submitted_by_system_admin_user_id: "sys-1", submitted_at: "2026-07-15T00:00:00Z", published_by_system_admin_user_id: "sys-2", published_at: "2026-07-15T00:01:00Z", rollback_of_release_id: null, rollback_of_version_id: null }], page_info: { limit: 50, has_more: false, next_cursor: null } }); return response({ items: [] }); }));
+    vi.spyOn(window, "prompt").mockReturnValue("生产回归"); vi.spyOn(window, "confirm").mockReturnValue(true); render(<ReleasesPage roles={["release_admin"]} />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" })); fireEvent.click(await screen.findByRole("button", { name: "回滚到此版本" }));
+    expect(await screen.findByText("回滚已成功，但列表刷新失败，请重试")).toBeTruthy(); expect(screen.queryByText(/已从服务端刷新/)).toBeNull();
   });
 
   it("creates a provider with Kubernetes Secret references but never accepts a secret value", async () => {
@@ -656,10 +706,66 @@ describe("LLM governance and releases", () => {
       return response({ items: [] });
     }));
     render(<LlmGovernancePage roles={["technical_support"]} />); fireEvent.click(screen.getByRole("tab", { name: "调用与成本" }));
-    fireEvent.click(await screen.findByRole("button", { name: "加载更多调用" }));
+    const moreCalls = await screen.findByRole("button", { name: "加载更多调用" }); fireEvent.click(moreCalls); fireEvent.click(moreCalls);
     await waitFor(() => expect(paths.some((path) => path.includes("/usage/invocations") && path.includes("cursor=inv-next"))).toBe(true));
+    expect(paths.filter((path) => path.includes("/usage/invocations") && path.includes("cursor=inv-next"))).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "查询用量" }));
     expect(screen.queryByRole("button", { name: "加载更多调用" })).toBeNull();
+  });
+
+  it("queries and merges failed, timed_out and rejected reasons with identical filters", async () => {
+    const paths: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => { const path = String(input); paths.push(path); if (path.includes("/providers")) return response({ items: [] }); if (path.includes("/usage/summary")) return response({ calls: 1, input_tokens: 1, output_tokens: 1, total_tokens: 2, estimated_cost_micros: 1, cost_by_currency: { USD: 1 }, p95_latency_ms: 1, error_rate: 1, fallback_rate: 0 }); if (path.includes("group_by=error_code")) return response({ items: [{ key: "timeout", currency: "USD", calls: 1, total_tokens: 2, estimated_cost_micros: 1 }] }); if (path.includes("/usage/invocations")) return response({ items: [], page_info: { limit: 100, has_more: false, next_cursor: null } }); return response({ items: [] }); }));
+    render(<LlmGovernancePage />); fireEvent.click(screen.getByRole("tab", { name: "调用与成本" })); await screen.findByRole("heading", { name: "失败原因分布" });
+    for (const status of ["failed", "timed_out", "rejected"]) expect(paths.some((path) => path.includes("group_by=error_code") && path.includes(`status=${status}`))).toBe(true);
+    const failureSection = screen.getByRole("heading", { name: "失败原因分布" }).closest("section") as HTMLElement; expect(failureSection.textContent).toContain("3");
+  });
+
+  it("renders only the usage error state when summary loading fails", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("/providers") ? response({ items: [] }) : response({ error: { message: "usage unavailable" } }, 500)));
+    render(<LlmGovernancePage />); fireEvent.click(screen.getByRole("tab", { name: "调用与成本" })); expect(await screen.findByText(/用量数据加载失败/)).toBeTruthy();
+    for (const heading of ["模型成本分布", "场景用量分布", "失败原因分布", "调用明细"]) expect(screen.queryByRole("heading", { name: heading })).toBeNull();
+  });
+
+  it("does not let an older usage failure overwrite the latest successful query", async () => {
+    let rejectOld!: (reason: Error) => void; let summaryCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input); if (path.includes("/providers")) return response({ items: [] });
+      if (path.includes("/usage/summary")) { summaryCalls += 1; if (summaryCalls === 1) return new Promise<Response>((_resolve, reject) => { rejectOld = reject; }); return response({ calls: 2, input_tokens: 1, output_tokens: 1, total_tokens: 2, estimated_cost_micros: 1, cost_by_currency: { USD: 1 }, p95_latency_ms: 1, error_rate: 0, fallback_rate: 0 }); }
+      if (path.includes("/usage/invocations")) return response({ items: [], page_info: { limit: 100, has_more: false, next_cursor: null } });
+      return response({ items: [] });
+    }));
+    render(<LlmGovernancePage />); fireEvent.click(screen.getByRole("tab", { name: "调用与成本" })); await screen.findByText("正在加载用量与成本数据"); const reload = screen.getByRole("button", { name: "重新查询" }); expect(reload.hasAttribute("disabled")).toBe(false); fireEvent.click(reload);
+    const totalLabel = await screen.findByText("总请求数"); expect(totalLabel.closest("article")?.textContent).toContain("2"); rejectOld(new Error("late old failure")); await Promise.resolve();
+    expect(screen.queryByText(/late old failure/)).toBeNull(); expect(screen.getByText("总请求数")).toBeTruthy();
+  });
+
+  it("invalidates and aborts an invocation cursor when filters change", async () => {
+    let cursorSignal: AbortSignal | undefined; let finish!: (value: Response) => void; const pending = new Promise<Response>((resolve) => { finish = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => { const path = String(input); if (path.includes("/providers")) return response({ items: [] }); if (path.includes("/usage/summary")) return response({ calls: 1, input_tokens: 1, output_tokens: 1, total_tokens: 2, estimated_cost_micros: 1, cost_by_currency: { USD: 1 }, p95_latency_ms: 1, error_rate: 0, fallback_rate: 0 }); if (path.includes("cursor=inv-next")) { cursorSignal = init?.signal || undefined; return pending; } if (path.includes("/usage/invocations")) return response({ items: [], page_info: { limit: 100, has_more: true, next_cursor: "inv-next" } }); return response({ items: [] }); }));
+    render(<LlmGovernancePage />); fireEvent.click(screen.getByRole("tab", { name: "调用与成本" })); fireEvent.click(await screen.findByRole("button", { name: "加载更多调用" })); expect(cursorSignal?.aborted).toBe(false);
+    fireEvent.change(screen.getByLabelText("场景"), { target: { value: "reply_generation" } });
+    expect(cursorSignal?.aborted).toBe(true); expect(screen.queryByRole("button", { name: "加载更多调用" })).toBeNull(); finish(response({ items: [{ invocation_id: "late-invocation" }], page_info: { limit: 100, has_more: false, next_cursor: null } })); await Promise.resolve(); expect(screen.queryByText("late-invocation")).toBeNull();
+  });
+
+  it("owns version load-more by scope and suppresses busy double clicks", async () => {
+    let finish!: (value: Response) => void; const pending = new Promise<Response>((resolve) => { finish = resolve; }); let cursorCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => { const path = String(input); if (path.includes("/providers")) return response({ items: [] }); if (path.includes("cursor=version-next")) { cursorCalls += 1; return pending; } if (path.includes("dddddddd-dddd-4ddd-8ddd-dddddddddddd")) return response({ items: [{ ...version, version_id: "new-scope", organization_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" }], page_info: { limit: 50, has_more: false, next_cursor: null } }); return response({ items: [version], page_info: { limit: 50, has_more: true, next_cursor: "version-next" } }); }));
+    render(<LlmGovernancePage />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "加载组织配置" })); fireEvent.click(screen.getByRole("tab", { name: "版本记录" }));
+    const more = await screen.findByRole("button", { name: "加载更多版本" }); fireEvent.click(more); fireEvent.click(more); expect(cursorCalls).toBe(1);
+    fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" })); await screen.findByText("new-scope"); finish(response({ items: [{ ...version, version_id: "late-old-version" }], page_info: { limit: 50, has_more: false, next_cursor: null } })); await Promise.resolve(); expect(screen.queryByText("late-old-version")).toBeNull();
+  });
+
+  it("clears the main version loading state when its organization scope changes", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => String(input).includes("/providers") ? Promise.resolve(response({ items: [] })) : new Promise<Response>(() => undefined)));
+    render(<LlmGovernancePage />); fireEvent.click(screen.getByRole("tab", { name: "版本记录" })); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" })); expect(screen.getByRole("button", { name: "加载中…" })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" } }); expect(screen.getByRole("button", { name: "查询版本" })).toBeTruthy();
+  });
+
+  it("clears the main version loading state when leaving its tab", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => String(input).includes("/providers") ? Promise.resolve(response({ items: [] })) : new Promise<Response>(() => undefined)));
+    render(<LlmGovernancePage />); fireEvent.click(screen.getByRole("tab", { name: "版本记录" })); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" })); fireEvent.click(screen.getByRole("tab", { name: "配置与路由" })); fireEvent.click(screen.getByRole("tab", { name: "版本记录" }));
+    expect(screen.getByRole("button", { name: "查询版本" })).toBeTruthy();
   });
 
   it("hides high-risk writes from read-only roles and allows technical support connection tests only", async () => {
@@ -687,8 +793,8 @@ describe("LLM governance and releases", () => {
     fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "加载组织配置" }));
     fireEvent.click(await screen.findByRole("button", { name: "测试连接" }));
     expect(screen.getByRole("button", { name: "测试中…" }).hasAttribute("disabled")).toBe(true); expect(screen.getByText("连接测试进行中…")).toBeTruthy();
-    finish(response({ status: "failed", latency_ms: 321, error_code: "upstream_timeout", redacted_error_message: "safe failure" }, 202));
-    expect(await screen.findByText("连接测试失败，耗时 321ms")).toBeTruthy();
+    finish(response({ status: "failed", latency_ms: 321, error_code: "upstream_timeout", redacted_error_message: "safe failure", raw_error: "secret raw failure", secret: "never show" }, 202));
+    expect(await screen.findByText(/连接测试失败，耗时 321ms/)).toBeTruthy(); expect(screen.getByText(/upstream_timeout · safe failure/)).toBeTruthy(); expect(screen.queryByText(/secret raw failure|never show/)).toBeNull();
   });
 
   it("validates every route numeric boundary including finite integer constraints", () => {
@@ -698,6 +804,14 @@ describe("LLM governance and releases", () => {
       { timeout_seconds: 301 }, { max_retries: 20.5 }, { circuit_breaker_threshold: 0 }, { recovery_probe_seconds: 86401 }
     ]) expect(validateLlmRoute({ ...version.routes[0], ...patch })).not.toBeNull();
     expect(validateLlmRoute({ ...version.routes[0], temperature: 2, max_output_tokens: 1000000, timeout_seconds: 300, max_retries: 20, circuit_breaker_threshold: 10000, recovery_probe_seconds: 86400 })).toBeNull();
+  });
+
+  it("keeps unchanged routes disabled and saves only the dirty draft without changing running", async () => {
+    const running = { ...version, version_id: "running-version", version_number: 3, status: "running" as const, revision: 7 }; const writes: Array<{ path: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => { const path = String(input); if (path.includes("/providers")) return response({ items: [provider] }); if (path.includes("/config-versions?") && !init?.method) return response({ items: [version, running], page_info: { limit: 50, has_more: false, next_cursor: null } }); if (path.endsWith("/routes") && init?.method === "PUT") { writes.push({ path, body: JSON.parse(String(init.body)) }); return response({ ...version, revision: 4, routes: [{ ...version.routes[0], temperature: 0.4 }] }); } return response({ items: [] }); }));
+    vi.spyOn(window, "prompt").mockReturnValue("调整温度"); render(<LlmGovernancePage />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "加载组织配置" }));
+    const temperature = await screen.findByLabelText("Temperature"); const save = screen.getByRole("button", { name: "保存草稿" }); expect(save.hasAttribute("disabled")).toBe(true); fireEvent.change(temperature, { target: { value: "0.4" } }); expect(save.hasAttribute("disabled")).toBe(false); fireEvent.click(save);
+    await waitFor(() => expect(writes).toHaveLength(1)); expect(writes[0].body).toMatchObject({ expected_revision: 3, reason: "调整温度" }); expect((writes[0].body.routes as Array<Record<string, unknown>>)[0].temperature).toBe(0.4); expect(screen.queryByRole("button", { name: /发布/ })).toBeNull();
   });
 
   it("uses server-side LLM audit pagination and safe audit fields", async () => {
