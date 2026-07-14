@@ -54,7 +54,6 @@ CREATE TABLE IF NOT EXISTS llm_config_version (
     ),
     -- Rollback creates a new running version from a historical source. Once
     -- superseded, that derived version retains the source link for history.
-    CHECK (rollback_of_version_id IS NULL OR status IN ('running', 'superseded')),
     CHECK (rollback_of_version_id IS NULL OR rollback_of_version_id <> id)
 );
 
@@ -297,11 +296,18 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF TG_OP = 'DELETE' THEN
+        IF OLD.status <> 'draft' THEN
+            RAISE EXCEPTION 'only draft config versions may be deleted'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN OLD;
+    END IF;
+
     IF TG_OP = 'INSERT' THEN
         IF NEW.status <> 'draft' OR NEW.revision <> 1
             OR NEW.published_by_system_admin_user_id IS NOT NULL
             OR NEW.published_at IS NOT NULL
-            OR NEW.rollback_of_version_id IS NOT NULL
         THEN
             RAISE EXCEPTION 'config versions must start as unpublished revision-one drafts'
                 USING ERRCODE = '23514';
@@ -326,18 +332,41 @@ BEGIN
             USING ERRCODE = '23514';
     END IF;
 
-    IF NEW.version_number IS DISTINCT FROM OLD.version_number
-        OR NEW.created_by_system_admin_user_id IS DISTINCT FROM OLD.created_by_system_admin_user_id
-        OR NEW.created_at IS DISTINCT FROM OLD.created_at
-    THEN
-        RAISE EXCEPTION 'config version identity and creation metadata are immutable'
+    IF NEW.version_number IS DISTINCT FROM OLD.version_number THEN
+        RAISE EXCEPTION 'config version number is immutable'
             USING ERRCODE = '23514';
     END IF;
 
-    IF OLD.rollback_of_version_id IS NOT NULL
-        AND NEW.rollback_of_version_id IS DISTINCT FROM OLD.rollback_of_version_id
+    IF NEW.rollback_of_version_id IS DISTINCT FROM OLD.rollback_of_version_id THEN
+        RAISE EXCEPTION 'rollback source must be supplied during draft creation and is immutable'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF NOT (OLD.status = 'draft' AND NEW.status = 'draft')
+        AND (
+            NEW.configuration_hash IS DISTINCT FROM OLD.configuration_hash
+            OR NEW.description IS DISTINCT FROM OLD.description
+            OR NEW.created_by_system_admin_user_id IS DISTINCT FROM OLD.created_by_system_admin_user_id
+            OR NEW.created_at IS DISTINCT FROM OLD.created_at
+        )
     THEN
-        RAISE EXCEPTION 'rollback source metadata is immutable once set'
+        RAISE EXCEPTION 'config version content and creation metadata are frozen after draft'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF OLD.status = 'pending_publish' AND NEW.status = 'running' THEN
+        IF OLD.published_by_system_admin_user_id IS NOT NULL
+            OR OLD.published_at IS NOT NULL
+            OR NEW.published_by_system_admin_user_id IS NULL
+            OR NEW.published_at IS NULL
+        THEN
+            RAISE EXCEPTION 'publishing must set actor and timestamp exactly once'
+                USING ERRCODE = '23514';
+        END IF;
+    ELSIF NEW.published_by_system_admin_user_id IS DISTINCT FROM OLD.published_by_system_admin_user_id
+        OR NEW.published_at IS DISTINCT FROM OLD.published_at
+    THEN
+        RAISE EXCEPTION 'publication metadata is immutable outside pending-to-running publish'
             USING ERRCODE = '23514';
     END IF;
 
@@ -349,6 +378,6 @@ DROP TRIGGER IF EXISTS trg_validate_llm_config_version_transition
     ON llm_config_version;
 
 CREATE TRIGGER trg_validate_llm_config_version_transition
-    BEFORE INSERT OR UPDATE ON llm_config_version
+    BEFORE INSERT OR UPDATE OR DELETE ON llm_config_version
     FOR EACH ROW
     EXECUTE FUNCTION validate_llm_config_version_transition();

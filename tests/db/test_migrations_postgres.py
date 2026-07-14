@@ -66,6 +66,14 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
             system_admin_user_id = cursor.fetchone()[0]
             cursor.execute(
                 """
+                INSERT INTO system_admin_user (email, password_hash, display_name, role)
+                VALUES ('migration-reviewer@example.invalid', 'not-a-real-password-hash', 'Migration Reviewer', 'release_manager')
+                RETURNING id
+                """
+            )
+            other_system_admin_user_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
                 INSERT INTO organization (name) VALUES ('Migration Test Organization') RETURNING id
                 """
             )
@@ -104,6 +112,37 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 (system_admin_user_id,),
             )
             config_version_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                UPDATE llm_config_version
+                SET configuration_hash = 'edited-draft-hash',
+                    description = 'edited while draft',
+                    revision = revision + 1
+                WHERE id = %s
+                """,
+                (config_version_id,),
+            )
+            cursor.execute(
+                """
+                INSERT INTO llm_config_version (
+                    version_number, status, configuration_hash, created_by_system_admin_user_id
+                ) VALUES (10, 'draft', 'metadata-rewrite-target', %s)
+                RETURNING id
+                """,
+                (system_admin_user_id,),
+            )
+            metadata_rewrite_target_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO llm_config_version (
+                    version_number, status, configuration_hash, created_by_system_admin_user_id
+                ) VALUES (11, 'draft', 'deletable-draft', %s)
+                RETURNING id
+                """,
+                (system_admin_user_id,),
+            )
+            deletable_draft_id = cursor.fetchone()[0]
+            cursor.execute("DELETE FROM llm_config_version WHERE id = %s", (deletable_draft_id,))
             cursor.execute(
                 """
                 INSERT INTO llm_scenario_route (
@@ -188,6 +227,15 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 """,
                 (config_version_id,),
             )
+            assert_integrity_error(
+                cursor,
+                """
+                UPDATE llm_config_version
+                SET status = 'running', revision = revision + 1
+                WHERE id = %s
+                """,
+                (config_version_id,),
+            )
             cursor.execute(
                 """
                 UPDATE llm_config_version
@@ -205,6 +253,15 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 """,
                 (config_version_id,),
             )
+            assert_integrity_error(
+                cursor,
+                """
+                UPDATE llm_config_version
+                SET status = 'running', revision = revision + 1
+                WHERE id = %s
+                """,
+                (config_version_id,),
+            )
             cursor.execute(
                 """
                 UPDATE llm_config_version
@@ -214,6 +271,21 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 WHERE id = %s
                 """,
                 (system_admin_user_id, config_version_id),
+            )
+            cursor.execute(
+                """
+                SELECT configuration_hash, description, published_by_system_admin_user_id,
+                       published_at, rollback_of_version_id
+                FROM llm_config_version
+                WHERE id = %s
+                """,
+                (config_version_id,),
+            )
+            published_snapshot = cursor.fetchone()
+            assert_integrity_error(
+                cursor,
+                "DELETE FROM llm_config_version WHERE id = %s",
+                (config_version_id,),
             )
             assert_integrity_error(
                 cursor,
@@ -234,6 +306,20 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 ) VALUES (%s, 'running-insert', %s, 'test-model')
                 """,
                 (config_version_id, provider_id),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                UPDATE llm_config_version
+                SET status = 'superseded', revision = revision + 1,
+                    configuration_hash = 'rewritten-history',
+                    description = 'rewritten history',
+                    published_by_system_admin_user_id = %s,
+                    published_at = published_at + interval '1 second',
+                    rollback_of_version_id = %s
+                WHERE id = %s
+                """,
+                (other_system_admin_user_id, metadata_rewrite_target_id, config_version_id),
             )
             assert_integrity_error(
                 cursor,
@@ -285,6 +371,21 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 (config_version_id,),
             )
             cursor.execute(
+                """
+                SELECT configuration_hash, description, published_by_system_admin_user_id,
+                       published_at, rollback_of_version_id
+                FROM llm_config_version
+                WHERE id = %s
+                """,
+                (config_version_id,),
+            )
+            assert cursor.fetchone() == published_snapshot
+            assert_integrity_error(
+                cursor,
+                "DELETE FROM llm_config_version WHERE id = %s",
+                (config_version_id,),
+            )
+            cursor.execute(
                 "SELECT count(*) FROM llm_invocation_metric WHERE scenario_route_id = %s",
                 (scenario_route_id,),
             )
@@ -309,6 +410,56 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 cursor,
                 "DELETE FROM llm_scenario_route WHERE id = %s",
                 (scenario_route_id,),
+            )
+            cursor.execute(
+                """
+                INSERT INTO llm_config_version (
+                    version_number, status, configuration_hash, created_by_system_admin_user_id,
+                    rollback_of_version_id
+                ) VALUES (12, 'draft', 'rollback-version', %s, %s)
+                RETURNING id
+                """,
+                (system_admin_user_id, config_version_id),
+            )
+            rollback_version_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                UPDATE llm_config_version
+                SET status = 'validated', revision = revision + 1
+                WHERE id = %s
+                """,
+                (rollback_version_id,),
+            )
+            cursor.execute(
+                """
+                UPDATE llm_config_version
+                SET status = 'pending_publish', revision = revision + 1
+                WHERE id = %s
+                """,
+                (rollback_version_id,),
+            )
+            cursor.execute(
+                """
+                UPDATE llm_config_version
+                SET status = 'running', revision = revision + 1,
+                    published_by_system_admin_user_id = %s,
+                    published_at = now()
+                WHERE id = %s
+                """,
+                (system_admin_user_id, rollback_version_id),
+            )
+            cursor.execute(
+                """
+                UPDATE llm_config_version
+                SET status = 'rolled_back', revision = revision + 1
+                WHERE id = %s
+                """,
+                (rollback_version_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                "DELETE FROM llm_config_version WHERE id = %s",
+                (rollback_version_id,),
             )
     finally:
         connection.rollback()
