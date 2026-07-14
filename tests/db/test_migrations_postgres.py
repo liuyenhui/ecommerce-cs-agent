@@ -1,8 +1,8 @@
 import os
+import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Event
 
 import psycopg
 import pytest
@@ -28,21 +28,42 @@ def assert_integrity_error(cursor: psycopg.Cursor[object], statement: str, param
 
 def set_test_search_path(cursor: psycopg.Cursor[object], schema_name: str) -> None:
     cursor.execute(sql.SQL("SET LOCAL search_path TO {}, public").format(sql.Identifier(schema_name)))
-    cursor.execute("SET LOCAL lock_timeout = '2s'")
-    cursor.execute("SET LOCAL statement_timeout = '5s'")
+    cursor.execute("SET LOCAL lock_timeout = '5s'")
+    cursor.execute("SET LOCAL statement_timeout = '8s'")
+
+
+def wait_for_backend_lock(application_name: str, timeout_seconds: float = 3.0) -> tuple[int, str]:
+    deadline = time.monotonic() + timeout_seconds
+    with psycopg.connect(DATABASE_URL, autocommit=True) as observer_connection:
+        with observer_connection.cursor() as cursor:
+            while time.monotonic() < deadline:
+                cursor.execute(
+                    """
+                    SELECT pid, wait_event
+                    FROM pg_stat_activity
+                    WHERE application_name = %s
+                      AND state = 'active'
+                      AND wait_event_type = 'Lock'
+                    """,
+                    (application_name,),
+                )
+                observed_lock = cursor.fetchone()
+                if observed_lock is not None:
+                    return observed_lock
+                time.sleep(0.02)
+    raise AssertionError(f"backend {application_name!r} did not enter a lock wait")
 
 
 def execute_concurrent_statement(
     schema_name: str,
     statement: str,
     parameters: tuple[object, ...],
-    started: Event,
+    application_name: str,
 ) -> str:
-    connection = psycopg.connect(DATABASE_URL)
+    connection = psycopg.connect(DATABASE_URL, application_name=application_name)
     try:
         with connection.cursor() as cursor:
             set_test_search_path(cursor, schema_name)
-            started.set()
             cursor.execute(statement, parameters)
         connection.commit()
         return "committed"
@@ -148,6 +169,33 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 SET configuration_hash = 'edited-draft-hash',
                     description = 'edited while draft',
                     revision = revision + 1
+                WHERE id = %s
+                """,
+                (config_version_id,),
+            )
+            cursor.execute(
+                """
+                SELECT configuration_hash, description
+                FROM llm_config_version
+                WHERE id = %s
+                """,
+                (config_version_id,),
+            )
+            assert cursor.fetchone() == ("edited-draft-hash", "edited while draft")
+            assert_integrity_error(
+                cursor,
+                """
+                UPDATE llm_config_version
+                SET created_by_system_admin_user_id = %s, revision = revision + 1
+                WHERE id = %s
+                """,
+                (other_system_admin_user_id, config_version_id),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                UPDATE llm_config_version
+                SET created_at = created_at + interval '1 second', revision = revision + 1
                 WHERE id = %s
                 """,
                 (config_version_id,),
@@ -696,7 +744,7 @@ def test_llm_version_lock_serializes_route_and_metric_writes() -> None:
                 (route_race_version_id,),
             )
 
-        route_started = Event()
+        route_worker_name = f"migration-route-lock-{uuid.uuid4().hex}"
         with ThreadPoolExecutor(max_workers=1) as executor:
             route_future = executor.submit(
                 execute_concurrent_statement,
@@ -707,13 +755,11 @@ def test_llm_version_lock_serializes_route_and_metric_writes() -> None:
                 ) VALUES (%s, 'concurrent-route', %s, 'test-model')
                 """,
                 (route_race_version_id, provider_id),
-                route_started,
+                route_worker_name,
             )
-            assert route_started.wait(timeout=2)
-            with pytest.raises(FutureTimeoutError):
-                route_future.result(timeout=0.2)
+            wait_for_backend_lock(route_worker_name)
             transition_connection.commit()
-            assert route_future.result(timeout=5) == "23514"
+            assert route_future.result(timeout=8) == "23514"
         transition_connection.close()
         transition_connection = None
 
@@ -772,7 +818,7 @@ def test_llm_version_lock_serializes_route_and_metric_writes() -> None:
                 (metric_race_version_id,),
             )
 
-        metric_started = Event()
+        metric_worker_name = f"migration-metric-lock-{uuid.uuid4().hex}"
         with ThreadPoolExecutor(max_workers=1) as executor:
             metric_future = executor.submit(
                 execute_concurrent_statement,
@@ -783,13 +829,11 @@ def test_llm_version_lock_serializes_route_and_metric_writes() -> None:
                 ) VALUES (%s, 'primary', 10, 'succeeded', 'USD')
                 """,
                 (metric_race_route_id,),
-                metric_started,
+                metric_worker_name,
             )
-            assert metric_started.wait(timeout=2)
-            with pytest.raises(FutureTimeoutError):
-                metric_future.result(timeout=0.2)
+            wait_for_backend_lock(metric_worker_name)
             transition_connection.commit()
-            assert metric_future.result(timeout=5) == "23514"
+            assert metric_future.result(timeout=8) == "23514"
     finally:
         if transition_connection is not None:
             transition_connection.rollback()

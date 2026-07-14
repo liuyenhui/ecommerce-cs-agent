@@ -445,15 +445,20 @@ BEGIN
             USING ERRCODE = '23514';
     END IF;
 
+    IF NEW.created_by_system_admin_user_id IS DISTINCT FROM OLD.created_by_system_admin_user_id
+        OR NEW.created_at IS DISTINCT FROM OLD.created_at
+    THEN
+        RAISE EXCEPTION 'config version creation metadata is immutable'
+            USING ERRCODE = '23514';
+    END IF;
+
     IF NOT (OLD.status = 'draft' AND NEW.status = 'draft')
         AND (
             NEW.configuration_hash IS DISTINCT FROM OLD.configuration_hash
             OR NEW.description IS DISTINCT FROM OLD.description
-            OR NEW.created_by_system_admin_user_id IS DISTINCT FROM OLD.created_by_system_admin_user_id
-            OR NEW.created_at IS DISTINCT FROM OLD.created_at
         )
     THEN
-        RAISE EXCEPTION 'config version content and creation metadata are frozen after draft'
+        RAISE EXCEPTION 'config version content is frozen after draft'
             USING ERRCODE = '23514';
     END IF;
 

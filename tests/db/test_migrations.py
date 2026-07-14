@@ -339,6 +339,9 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "old.status = 'draft' and new.status = 'draft'",
             "new.configuration_hash is distinct from old.configuration_hash",
             "new.description is distinct from old.description",
+            "new.created_by_system_admin_user_id is distinct from old.created_by_system_admin_user_id",
+            "new.created_at is distinct from old.created_at",
+            "config version creation metadata is immutable",
             "new.rollback_of_version_id is distinct from old.rollback_of_version_id",
             "old.status = 'pending_publish' and new.status = 'running'",
             "new.published_by_system_admin_user_id is null or new.published_at is null",
@@ -383,6 +386,16 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
     ]
     for column_name in column_names:
         assert not any(re.search(pattern, column_name) for pattern in forbidden_column_patterns), column_name
+
+
+def test_llm_governance_postgres_concurrency_tests_observe_real_lock_waits() -> None:
+    postgres_test_sql = Path("tests/db/test_migrations_postgres.py").read_text(encoding="utf-8").lower()
+
+    assert "application_name" in postgres_test_sql
+    assert "def wait_for_backend_lock" in postgres_test_sql
+    assert "from pg_stat_activity" in postgres_test_sql
+    assert "wait_event_type = 'lock'" in postgres_test_sql
+    assert postgres_test_sql.count("wait_for_backend_lock(") >= 3
 
 
 def test_legacy_runtime_defaults_migration_contains_not_null_defaults() -> None:
