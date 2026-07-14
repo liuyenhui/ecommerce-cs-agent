@@ -10,6 +10,15 @@ describe("presentDecisionBadges", () => {
     ]);
   });
 
+  it.each([
+    ["auto_reply", "已自动回复", "success"],
+    ["handoff", "转人工处理", "danger"]
+  ])("presents action %s with the approved label and semantic tone", (action, label, tone) => {
+    expect(presentDecisionBadges({ action })).toEqual([
+      { key: "action", label, raw: action, tone }
+    ]);
+  });
+
   it("keeps unknown raw values out of visible labels", () => {
     expect(presentDecisionBadges({
       action: "new_action",
@@ -23,7 +32,7 @@ describe("presentDecisionBadges", () => {
   });
 
   it.each([
-    [{ action: "auto_reply", risk: "low", status: "completed" }, ["info", "success", "success"]],
+    [{ action: "auto_reply", risk: "low", status: "completed" }, ["success", "success", "success"]],
     [{ action: "candidate", risk: "medium", status: "waiting_context" }, ["info", "warning", "warning"]],
     [{ action: "handoff", risk: "high", status: "failed" }, ["danger", "danger", "danger"]],
     [{ action: "action_request", status: "retrying" }, ["info", "warning"]]
