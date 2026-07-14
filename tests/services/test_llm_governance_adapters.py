@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
 from pathlib import Path
 from urllib.error import HTTPError
@@ -34,6 +35,107 @@ def _provider(provider_type: str = "openai") -> dict[str, object]:
         "base_url": "https://models.example.test/v1",
         "secret_ref": {"namespace": "runtime", "name": "ecommerce-cs-agent-llm-provider", "key": "api-key"},
     }
+
+
+def test_bounded_resolver_pool_caps_workers_outstanding_jobs_and_recovers() -> None:
+    pool_type = getattr(adapter_module, "_BoundedResolverPool", None)
+    assert pool_type is not None, "bounded resolver pool is required"
+    release = threading.Event()
+    two_workers_started = threading.Event()
+    lock = threading.Lock()
+    started = 0
+
+    def blocking_getaddrinfo(_host: str, port: int, **_kwargs: object) -> list[tuple[object, ...]]:
+        nonlocal started
+        with lock:
+            started += 1
+            if started >= 2:
+                two_workers_started.set()
+        release.wait()
+        return [(2, 1, 6, "", ("10.0.0.9", port))]
+
+    pool = pool_type(workers=2, max_outstanding=3, getaddrinfo=blocking_getaddrinfo)
+    caller_results: list[str] = []
+
+    def call_and_timeout() -> None:
+        try:
+            pool.resolve("blocked.invalid", 443, 0.08)
+        except TimeoutError:
+            caller_results.append("timeout")
+
+    callers = [threading.Thread(target=call_and_timeout) for _ in range(3)]
+    for caller in callers:
+        caller.start()
+    assert two_workers_started.wait(0.2)
+    started_at = time.monotonic()
+    with pytest.raises(TimeoutError):
+        pool.resolve("capacity.invalid", 443, 1.0)
+    assert time.monotonic() - started_at < 0.05
+    assert len(pool._threads) == 2
+    assert all(worker.daemon for worker in pool._threads)
+    assert all("blocked.invalid" not in worker.name for worker in pool._threads)
+
+    for caller in callers:
+        caller.join(0.2)
+    assert caller_results == ["timeout", "timeout", "timeout"]
+    with pytest.raises(TimeoutError):
+        pool.resolve("still-full.invalid", 443, 1.0)
+
+    release.set()
+    deadline = time.monotonic() + 0.5
+    while pool.outstanding and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert pool.resolve("recovered.invalid", 443, 0.2) == ["10.0.0.9"]
+
+
+def test_kubernetes_service_host_must_be_an_ip_literal(tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("sa", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="IP literal"):
+        KubernetesSecretProviderConnectionTester(
+            kubernetes_host="kubernetes.default.svc",
+            kubernetes_port=443,
+            service_account_token_file=str(token_file),
+            kubernetes_ca_file=str(ca_file),
+            allowed_namespace="runtime",
+            allowed_secret_origins={
+                ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
+            },
+        )
+
+
+def test_kubernetes_ipv6_api_url_is_bracketed_and_uses_the_literal_address(tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("sa", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+    urls: list[str] = []
+
+    def kubernetes_transport(request: object, _deadline: object, _ca: str | None) -> tuple[int, bytes]:
+        urls.append(request.full_url)
+        return 200, json.dumps({"data": {"api-key": base64.b64encode(b"secret").decode()}}).encode()
+
+    tester = KubernetesSecretProviderConnectionTester(
+        kubernetes_host="fd00::10",
+        kubernetes_port=443,
+        service_account_token_file=str(token_file),
+        kubernetes_ca_file=str(ca_file),
+        allowed_namespace="runtime",
+        allowed_secret_origins={
+            ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
+        },
+        kubernetes_transport=kubernetes_transport,
+        provider_transport=lambda *_args: (200, b"{}"),
+        resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
+    )
+
+    assert tester(_provider(), {"timeout_seconds": 20})["status"] == "passed"
+    assert urls == [
+        "https://[fd00::10]:443/api/v1/namespaces/runtime/secrets/ecommerce-cs-agent-llm-provider"
+    ]
 
 
 def test_kubernetes_secret_tester_resolves_secret_and_probes_openai_without_leaking_it(tmp_path: Path) -> None:
@@ -98,7 +200,7 @@ def test_kubernetes_secret_tester_uses_provider_specific_auth_headers(
         return 200, b"{}"
 
     tester = KubernetesSecretProviderConnectionTester(
-        kubernetes_host="kubernetes.default.svc",
+        kubernetes_host="10.96.0.1",
         kubernetes_port=443,
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
@@ -125,7 +227,7 @@ def test_kubernetes_secret_tester_redacts_transport_failures(tmp_path: Path) -> 
         raise HTTPError(request.full_url, 401, "super-secret unauthorized", {}, None)
 
     tester = KubernetesSecretProviderConnectionTester(
-        kubernetes_host="kubernetes.default.svc",
+        kubernetes_host="10.96.0.1",
         kubernetes_port=443,
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
@@ -175,7 +277,7 @@ def test_kubernetes_secret_tester_rejects_secret_outside_allowlist_before_transp
         return 500, b"{}"
 
     tester = KubernetesSecretProviderConnectionTester(
-        kubernetes_host="kubernetes.default.svc",
+        kubernetes_host="10.96.0.1",
         kubernetes_port=443,
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
@@ -217,7 +319,7 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
         return 200, b"{}"
 
     environment = {
-        "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
+        "KUBERNETES_SERVICE_HOST": "10.96.0.1",
         "KUBERNETES_SERVICE_PORT_HTTPS": "443",
         "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": json.dumps(
             [
@@ -246,7 +348,7 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
 
     assert tester(_provider(), {"timeout_seconds": 3})["status"] == "passed"
     assert secret_requests == [
-        "https://kubernetes.default.svc:443/api/v1/namespaces/runtime/secrets/ecommerce-cs-agent-llm-provider"
+        "https://10.96.0.1:443/api/v1/namespaces/runtime/secrets/ecommerce-cs-agent-llm-provider"
     ]
 
 
@@ -254,7 +356,7 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
     "environment",
     [
         {
-            "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
+            "KUBERNETES_SERVICE_HOST": "10.96.0.1",
             "KUBERNETES_SERVICE_PORT_HTTPS": "443",
             "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": json.dumps(
                 [
@@ -268,18 +370,18 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
             ),
         },
         {
-            "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
+            "KUBERNETES_SERVICE_HOST": "10.96.0.1",
             "KUBERNETES_SERVICE_PORT_HTTPS": "443",
             "LLM_GOVERNANCE_SECRET_NAMESPACE": "runtime",
         },
         {
-            "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
+            "KUBERNETES_SERVICE_HOST": "10.96.0.1",
             "KUBERNETES_SERVICE_PORT_HTTPS": "443",
             "LLM_GOVERNANCE_SECRET_NAMESPACE": "runtime",
             "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": "[]",
         },
         {
-            "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
+            "KUBERNETES_SERVICE_HOST": "10.96.0.1",
             "KUBERNETES_SERVICE_PORT_HTTPS": "443",
             "LLM_GOVERNANCE_SECRET_NAMESPACE": "runtime",
             "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": json.dumps(
@@ -287,7 +389,7 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
             ),
         },
         {
-            "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
+            "KUBERNETES_SERVICE_HOST": "10.96.0.1",
             "KUBERNETES_SERVICE_PORT_HTTPS": "443",
             "LLM_GOVERNANCE_SECRET_NAMESPACE": "runtime",
             "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": json.dumps(
@@ -349,7 +451,7 @@ def test_kubernetes_secret_tester_uses_standard_azure_models_url(
         return 200, b"{}"
 
     tester = KubernetesSecretProviderConnectionTester(
-        kubernetes_host="kubernetes.default.svc",
+        kubernetes_host="10.96.0.1",
         kubernetes_port=443,
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
@@ -392,7 +494,7 @@ def test_provider_origin_and_public_dns_are_checked_before_kubernetes_secret_acc
     provider_calls: list[object] = []
 
     tester = KubernetesSecretProviderConnectionTester(
-        kubernetes_host="kubernetes.default.svc",
+        kubernetes_host="10.96.0.1",
         kubernetes_port=443,
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
@@ -653,7 +755,9 @@ def test_default_kubernetes_transport_ignores_https_proxy_and_targets_only_clust
     monkeypatch.setattr(adapter_module.http.client, "HTTPConnection", Connection)
     monkeypatch.setattr(adapter_module.ssl, "create_default_context", lambda **_kwargs: Context())
 
-    status, body = _KubernetesApiTransport()(
+    status, body = _KubernetesApiTransport(
+        tls_server_hostname="kubernetes.default.svc"
+    )(
         adapter_module.Request(
             "https://10.96.0.1:443/api/v1/namespaces/runtime/secrets/llm",
             headers={"Authorization": "Bearer token"},
@@ -666,7 +770,7 @@ def test_default_kubernetes_transport_ignores_https_proxy_and_targets_only_clust
     assert calls["host"] == "10.96.0.1"
     assert calls["port"] == 443
     assert calls["socket_address"] == ("10.96.0.1", 443)
-    assert calls["server_hostname"] == "10.96.0.1"
+    assert calls["server_hostname"] == "kubernetes.default.svc"
     assert calls["path"] == "/api/v1/namespaces/runtime/secrets/llm"
     assert "attacker.invalid" not in repr(calls)
 
@@ -870,7 +974,10 @@ def test_proxy_connect_slow_fragments_share_the_provider_deadline(
     started = time.monotonic()
 
     with pytest.raises(TimeoutError):
-        _PinnedProviderTransport("http://proxy.example:8080")(
+        _PinnedProviderTransport(
+            "http://proxy.example:8080",
+            resolver=lambda _host, _port, _timeout: ["10.0.0.5"],
+        )(
             adapter_module.Request("https://models.example.test/models"),
             _deadline(0.1),
             "93.184.216.34",
@@ -892,7 +999,7 @@ def test_kubernetes_transport_enforces_one_deadline_across_tls_and_body_stages(
 
     class Context:
         def wrap_socket(self, sock: object, *, server_hostname: str) -> object:
-            assert server_hostname == "10.96.0.1"
+            assert server_hostname == "kubernetes.default.svc"
             time.sleep(0.03)
             return sock
 
@@ -1024,7 +1131,10 @@ def test_http_proxy_uses_connect_to_pinned_ip_before_tls_and_never_receives_prov
     monkeypatch.setattr(adapter_module.ssl, "create_default_context", lambda: Context())
     monkeypatch.setattr(adapter_module.http.client, "HTTPConnection", Connection)
 
-    status, _body = _PinnedProviderTransport("http://proxy.example:8080")(
+    status, _body = _PinnedProviderTransport(
+        "http://proxy.example:8080",
+        resolver=lambda _host, _port, _timeout: ["10.0.0.5"],
+    )(
         adapter_module.Request(
             "https://models.example.test/models",
             headers={"Host": "models.example.test", "Authorization": "Bearer secret"},
@@ -1035,7 +1145,7 @@ def test_http_proxy_uses_connect_to_pinned_ip_before_tls_and_never_receives_prov
     )
 
     assert status == 200
-    assert calls["proxy_address"] == ("proxy.example", 8080)
+    assert calls["proxy_address"] == ("10.0.0.5", 8080)
     assert b"CONNECT 93.184.216.34:443" in proxy_socket.sent
     assert b"secret" not in proxy_socket.sent
     assert calls["server_hostname"] == "models.example.test"
@@ -1043,6 +1153,147 @@ def test_http_proxy_uses_connect_to_pinned_ip_before_tls_and_never_receives_prov
         "Host": "models.example.test",
         "Authorization": "Bearer secret",
     }
+
+
+def test_proxy_dns_is_resolved_once_and_connects_to_the_first_pinned_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {"resolver": 0}
+
+    class ProxySocket:
+        def settimeout(self, _timeout: float) -> None: return None
+        def sendall(self, _value: bytes) -> None: return None
+        def recv(self, _size: int) -> bytes:
+            return b"HTTP/1.1 200 Connection established\r\n\r\n"
+        def shutdown(self, _how: int) -> None: return None
+        def close(self) -> None: return None
+
+    proxy_socket = ProxySocket()
+
+    def resolver(host: str, port: int, timeout: float) -> list[str]:
+        calls["resolver"] = int(calls["resolver"]) + 1
+        assert (host, port) == ("proxy.internal", 8080)
+        return ["10.0.0.5"] if calls["resolver"] == 1 else ["10.0.0.6"]
+
+    class Context:
+        def wrap_socket(self, sock: object, *, server_hostname: str) -> object: return sock
+
+    class Response:
+        status = 200
+        def read(self, _limit: int) -> bytes: return b"{}"
+
+    class Connection:
+        def __init__(self, _host: str, _port: int, timeout: float) -> None:
+            self.sock: object | None = None
+        def request(self, _method: str, _path: str, headers: dict[str, str]) -> None: return None
+        def getresponse(self) -> Response: return Response()
+        def close(self) -> None: return None
+
+    monkeypatch.setattr(
+        adapter_module.socket,
+        "create_connection",
+        lambda address, timeout: calls.update(address=address) or proxy_socket,
+    )
+    monkeypatch.setattr(adapter_module.ssl, "create_default_context", lambda: Context())
+    monkeypatch.setattr(adapter_module.http.client, "HTTPConnection", Connection)
+
+    status, _body = _PinnedProviderTransport(
+        "http://proxy.internal:8080", resolver=resolver
+    )(
+        adapter_module.Request("https://models.example.test/models"),
+        _deadline(1.0),
+        "93.184.216.34",
+        "models.example.test",
+    )
+
+    assert status == 200
+    assert calls["resolver"] == 1
+    assert calls["address"] == ("10.0.0.5", 8080)
+
+
+def test_slow_proxy_dns_consumes_the_same_absolute_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    socket_calls: list[object] = []
+
+    def slow_resolver(_host: str, _port: int, _timeout: float) -> list[str]:
+        time.sleep(0.11)
+        return ["10.0.0.5"]
+
+    monkeypatch.setattr(
+        adapter_module.socket,
+        "create_connection",
+        lambda *args, **kwargs: socket_calls.append((args, kwargs)),
+    )
+    started = time.monotonic()
+
+    with pytest.raises(TimeoutError):
+        _PinnedProviderTransport(
+            "http://proxy.internal:8080", resolver=slow_resolver
+        )(
+            adapter_module.Request("https://models.example.test/models"),
+            _deadline(0.1),
+            "93.184.216.34",
+            "models.example.test",
+        )
+
+    assert time.monotonic() - started < 0.25
+    assert socket_calls == []
+
+
+@pytest.mark.parametrize("transport_kind", ["provider-context", "provider-wrap", "kubernetes-wrap"])
+def test_raw_socket_is_closed_when_tls_initialization_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    transport_kind: str,
+) -> None:
+    class RawSocket:
+        def __init__(self) -> None: self.closed = False
+        def settimeout(self, _timeout: float) -> None: return None
+        def shutdown(self, _how: int) -> None: return None
+        def close(self) -> None: self.closed = True
+
+    raw_socket = RawSocket()
+
+    class FailingContext:
+        def wrap_socket(self, _sock: object, *, server_hostname: str) -> object:
+            raise RuntimeError("tls setup failed")
+
+    monkeypatch.setattr(adapter_module.socket, "create_connection", lambda *_args, **_kwargs: raw_socket)
+    if transport_kind == "provider-context":
+        monkeypatch.setattr(
+            adapter_module.ssl,
+            "create_default_context",
+            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("context failed")),
+        )
+        transport = _PinnedProviderTransport()
+        args = (
+            adapter_module.Request("https://models.example.test/models"),
+            _deadline(1.0),
+            "93.184.216.34",
+            "models.example.test",
+        )
+    elif transport_kind == "provider-wrap":
+        monkeypatch.setattr(adapter_module.ssl, "create_default_context", lambda **_kwargs: FailingContext())
+        transport = _PinnedProviderTransport()
+        args = (
+            adapter_module.Request("https://models.example.test/models"),
+            _deadline(1.0),
+            "93.184.216.34",
+            "models.example.test",
+        )
+    else:
+        monkeypatch.setattr(adapter_module.ssl, "create_default_context", lambda **_kwargs: FailingContext())
+        transport = _KubernetesApiTransport(tls_server_hostname="kubernetes.default.svc")
+        args = (
+            adapter_module.Request("https://10.96.0.1/api/v1/namespaces/runtime/secrets/provider"),
+            _deadline(1.0),
+            "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+        )
+
+    with pytest.raises(RuntimeError, match="failed"):
+        transport(*args)
+
+    assert raw_socket.closed is True
 
 
 def test_postgres_evaluation_gate_requires_same_completed_passing_run() -> None:

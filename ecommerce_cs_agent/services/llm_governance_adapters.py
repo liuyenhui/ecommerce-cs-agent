@@ -28,6 +28,7 @@ Resolver = Callable[[str, int, float], list[str]]
 _SECRET_REF = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?$")
 _SECRET_KEY = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
 _MAX_RESPONSE_BYTES = 1024 * 1024
+_KUBERNETES_TLS_SERVER_NAME = "kubernetes.default.svc"
 
 
 class _SecurityPolicyError(ValueError):
@@ -112,29 +113,90 @@ def _canonical_origin(value: str, *, require_origin_only: bool) -> str:
     return f"https://{authority}"
 
 
-def _bounded_resolver(host: str, port: int, timeout: float) -> list[str]:
-    if timeout <= 0:
-        raise TimeoutError
-    results: queue.Queue[object] = queue.Queue(maxsize=1)
+class _BoundedResolverPool:
+    def __init__(
+        self,
+        *,
+        workers: int = 4,
+        max_outstanding: int = 8,
+        getaddrinfo: Callable[..., list[tuple[Any, ...]]] = socket.getaddrinfo,
+    ) -> None:
+        if workers < 1 or max_outstanding < workers:
+            raise ValueError("invalid resolver pool capacity")
+        self._getaddrinfo = getaddrinfo
+        self._capacity = threading.BoundedSemaphore(max_outstanding)
+        self._jobs: queue.Queue[tuple[str, int, queue.Queue[object]]] = queue.Queue(
+            maxsize=max_outstanding
+        )
+        self._state_lock = threading.Lock()
+        self._outstanding = 0
+        self._threads = [
+            threading.Thread(
+                target=self._worker,
+                name=f"llm-dns-worker-{index + 1}",
+                daemon=True,
+            )
+            for index in range(workers)
+        ]
+        for worker in self._threads:
+            worker.start()
 
-    def resolve() -> None:
+    @property
+    def outstanding(self) -> int:
+        with self._state_lock:
+            return self._outstanding
+
+    def _worker(self) -> None:
+        while True:
+            host, port, result = self._jobs.get()
+            try:
+                addresses: list[str] = []
+                for item in self._getaddrinfo(
+                    host, port, type=socket.SOCK_STREAM
+                ):
+                    address = item[4][0]
+                    if address not in addresses:
+                        addresses.append(address)
+                outcome: object = addresses
+            except Exception as exc:
+                outcome = exc
+            try:
+                result.put_nowait(outcome)
+            except queue.Full:
+                pass
+            finally:
+                with self._state_lock:
+                    self._outstanding -= 1
+                self._capacity.release()
+                self._jobs.task_done()
+
+    def resolve(self, host: str, port: int, timeout: float) -> list[str]:
+        if timeout <= 0 or not self._capacity.acquire(blocking=False):
+            raise TimeoutError
+        with self._state_lock:
+            self._outstanding += 1
+        result: queue.Queue[object] = queue.Queue(maxsize=1)
         try:
-            addresses = {
-                item[4][0]
-                for item in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-            }
-            results.put(list(addresses))
-        except Exception as exc:
-            results.put(exc)
+            self._jobs.put_nowait((host, port, result))
+        except queue.Full:
+            with self._state_lock:
+                self._outstanding -= 1
+            self._capacity.release()
+            raise TimeoutError from None
+        try:
+            outcome = result.get(timeout=timeout)
+        except queue.Empty:
+            raise TimeoutError from None
+        if isinstance(outcome, Exception):
+            raise socket.gaierror from None
+        return outcome
 
-    threading.Thread(target=resolve, daemon=True).start()
-    try:
-        outcome = results.get(timeout=timeout)
-    except queue.Empty:
-        raise TimeoutError from None
-    if isinstance(outcome, Exception):
-        raise socket.gaierror from None
-    return outcome
+
+_RESOLVER_POOL = _BoundedResolverPool()
+
+
+def _bounded_resolver(host: str, port: int, timeout: float) -> list[str]:
+    return _RESOLVER_POOL.resolve(host, port, timeout)
 
 
 def _set_deadline_timeout(sock: Any, deadline: _Deadline) -> None:
@@ -185,22 +247,39 @@ def _safe_close(value: Any) -> None:
 class _KubernetesApiTransport:
     """In-cluster HTTPS only; intentionally has no proxy or redirect support."""
 
+    def __init__(self, tls_server_hostname: str = _KUBERNETES_TLS_SERVER_NAME) -> None:
+        if (
+            not tls_server_hostname
+            or _contains_control(tls_server_hostname)
+            or "/" in tls_server_hostname
+        ):
+            raise RuntimeError("Kubernetes TLS server hostname is invalid")
+        self._tls_server_hostname = tls_server_hostname
+
     def __call__(self, request: Request, deadline: _Deadline, ca_file: str | None) -> tuple[int, bytes]:
         parsed = urlsplit(request.full_url)
         if parsed.scheme != "https" or not parsed.hostname or not ca_file:
             raise _SecurityPolicyError("invalid_kubernetes_request")
+        try:
+            kubernetes_ip = str(ipaddress.ip_address(parsed.hostname))
+        except ValueError:
+            raise _SecurityPolicyError("invalid_kubernetes_request") from None
         context = ssl.create_default_context(cafile=ca_file)
         port = parsed.port or 443
-        raw_socket = socket.create_connection((parsed.hostname, port), timeout=deadline.remaining())
+        raw_socket = socket.create_connection((kubernetes_ip, port), timeout=deadline.remaining())
         guard = _guard_socket(raw_socket, deadline)
+        active_socket = raw_socket
         connection: http.client.HTTPConnection | None = None
         path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
         try:
             _set_deadline_timeout(raw_socket, deadline)
-            tls_socket = context.wrap_socket(raw_socket, server_hostname=parsed.hostname)
+            tls_socket = context.wrap_socket(
+                raw_socket, server_hostname=self._tls_server_hostname
+            )
             deadline.remaining()
             guard.replace_socket(tls_socket)
-            connection = http.client.HTTPConnection(parsed.hostname, port, timeout=deadline.remaining())
+            active_socket = tls_socket
+            connection = http.client.HTTPConnection(kubernetes_ip, port, timeout=deadline.remaining())
             connection.sock = tls_socket
             _set_deadline_timeout(tls_socket, deadline)
             connection.request("GET", path, headers=dict(request.header_items()))
@@ -217,6 +296,7 @@ class _KubernetesApiTransport:
             guard.cancel()
             if connection is not None:
                 _safe_close(connection)
+            _safe_close(active_socket)
 
 
 def _proxy_tunnel_socket(
@@ -224,6 +304,7 @@ def _proxy_tunnel_socket(
     pinned_ip: str,
     port: int,
     deadline: _Deadline,
+    resolver: Resolver,
 ) -> tuple[socket.socket, _SocketDeadlineGuard]:
     try:
         proxy = urlsplit(proxy_url)
@@ -242,7 +323,16 @@ def _proxy_tunnel_socket(
         or not 1 <= proxy_port <= 65535
     ):
         raise _SecurityPolicyError("unsupported_proxy")
-    sock = socket.create_connection((proxy.hostname, proxy_port), timeout=deadline.remaining())
+    addresses = resolver(proxy.hostname, proxy_port, deadline.remaining())
+    deadline.remaining()
+    try:
+        parsed_addresses = [ipaddress.ip_address(address) for address in addresses]
+    except ValueError:
+        raise _SecurityPolicyError("invalid_proxy_address") from None
+    if not parsed_addresses or len({address.is_global for address in parsed_addresses}) > 1:
+        raise _SecurityPolicyError("invalid_proxy_address")
+    proxy_ip = str(parsed_addresses[0])
+    sock = socket.create_connection((proxy_ip, proxy_port), timeout=deadline.remaining())
     guard = _guard_socket(sock, deadline)
     authority = f"[{pinned_ip}]:{port}" if ":" in pinned_ip else f"{pinned_ip}:{port}"
     request = f"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n"
@@ -273,8 +363,14 @@ def _proxy_tunnel_socket(
 class _PinnedProviderTransport:
     """HTTPS transport pinned to a prevalidated IP with original-host TLS SNI."""
 
-    def __init__(self, proxy_url: str | None = None) -> None:
+    def __init__(
+        self,
+        proxy_url: str | None = None,
+        *,
+        resolver: Resolver = _bounded_resolver,
+    ) -> None:
         self._proxy_url = proxy_url.strip() if proxy_url else None
+        self._resolver = resolver
 
     def __call__(
         self,
@@ -289,13 +385,14 @@ class _PinnedProviderTransport:
             raise _SecurityPolicyError("invalid_provider_request")
         if self._proxy_url:
             raw_socket, guard = _proxy_tunnel_socket(
-                self._proxy_url, pinned_ip, port, deadline
+                self._proxy_url, pinned_ip, port, deadline, self._resolver
             )
         else:
             raw_socket = socket.create_connection(
                 (pinned_ip, port), timeout=deadline.remaining()
             )
             guard = _guard_socket(raw_socket, deadline)
+        active_socket = raw_socket
         connection: http.client.HTTPConnection | None = None
         path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
         try:
@@ -304,6 +401,7 @@ class _PinnedProviderTransport:
             tls_socket = context.wrap_socket(raw_socket, server_hostname=server_hostname)
             deadline.remaining()
             guard.replace_socket(tls_socket)
+            active_socket = tls_socket
             connection = http.client.HTTPConnection(
                 pinned_ip, port, timeout=deadline.remaining()
             )
@@ -323,6 +421,7 @@ class _PinnedProviderTransport:
             guard.cancel()
             if connection is not None:
                 _safe_close(connection)
+            _safe_close(active_socket)
 
 
 class KubernetesSecretProviderConnectionTester:
@@ -337,12 +436,17 @@ class KubernetesSecretProviderConnectionTester:
         kubernetes_ca_file: str,
         allowed_namespace: str,
         allowed_secret_origins: Mapping[tuple[str, str], set[str] | frozenset[str]],
+        kubernetes_tls_server_name: str = _KUBERNETES_TLS_SERVER_NAME,
         kubernetes_transport: KubernetesTransport | None = None,
         provider_transport: ProviderTransport | None = None,
         resolver: Resolver = _bounded_resolver,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
-        if not kubernetes_host or not 1 <= int(kubernetes_port) <= 65535:
+        try:
+            kubernetes_ip = str(ipaddress.ip_address(kubernetes_host))
+        except ValueError:
+            raise RuntimeError("Kubernetes in-cluster host must be an IP literal") from None
+        if not 1 <= int(kubernetes_port) <= 65535:
             raise RuntimeError("Kubernetes in-cluster host and port are required")
         if not Path(service_account_token_file).is_file() or not Path(kubernetes_ca_file).is_file():
             raise RuntimeError("Kubernetes in-cluster token and CA files are required")
@@ -364,13 +468,15 @@ class KubernetesSecretProviderConnectionTester:
                 )
         except (RuntimeError, _SecurityPolicyError, TypeError):
             raise RuntimeError("Kubernetes Secret origin bindings are required") from None
-        self._host = kubernetes_host
+        self._host = kubernetes_ip
         self._port = int(kubernetes_port)
         self._token_file = service_account_token_file
         self._ca_file = kubernetes_ca_file
         self._allowed_namespace = allowed_namespace
         self._allowed_secret_origins = canonical_bindings
-        self._kubernetes_transport = kubernetes_transport or _KubernetesApiTransport()
+        self._kubernetes_transport = kubernetes_transport or _KubernetesApiTransport(
+            tls_server_hostname=kubernetes_tls_server_name
+        )
         self._provider_transport = provider_transport or _PinnedProviderTransport()
         self._resolver = resolver
         self._monotonic = monotonic
@@ -417,7 +523,8 @@ class KubernetesSecretProviderConnectionTester:
             allowed_namespace=namespace,
             allowed_secret_origins=allowed_secret_origins,
             kubernetes_transport=kubernetes_transport,
-            provider_transport=provider_transport or _PinnedProviderTransport(proxy_url),
+            provider_transport=provider_transport
+            or _PinnedProviderTransport(proxy_url, resolver=resolver),
             resolver=resolver,
         )
 
@@ -488,8 +595,11 @@ class KubernetesSecretProviderConnectionTester:
         token = Path(self._token_file).read_text(encoding="utf-8").strip()
         if not token:
             raise RuntimeError("secret_resolution_failed")
+        kubernetes_authority = (
+            f"[{self._host}]" if ":" in self._host else self._host
+        )
         url = (
-            f"https://{self._host}:{self._port}/api/v1/namespaces/"
+            f"https://{kubernetes_authority}:{self._port}/api/v1/namespaces/"
             f"{quote(namespace, safe='')}/secrets/{quote(name, safe='')}"
         )
         request = Request(url, method="GET", headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
