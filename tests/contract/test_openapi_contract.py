@@ -3,6 +3,11 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
+from ecommerce_cs_agent.api.app import create_app
+from ecommerce_cs_agent.core.config import Settings
+
 
 ROOT = Path(__file__).resolve().parents[2]
 OPENAPI_PATH = ROOT / "docs" / "openapi.yaml"
@@ -207,6 +212,49 @@ def json_schema_ref(operation, status_code):
     if "$ref" in response:
         return response["$ref"]
     return response["content"]["application/json"]["schema"]["$ref"]
+
+
+def assert_schema_valid(instance, schema, document, path="$"):
+    if "$ref" in schema:
+        return assert_schema_valid(instance, resolve_pointer(document, schema["$ref"]), document, path)
+    branches = schema.get("oneOf") or schema.get("anyOf")
+    if branches:
+        errors = []
+        for branch in branches:
+            try:
+                assert_schema_valid(instance, branch, document, path)
+                return
+            except AssertionError as exc:
+                errors.append(str(exc))
+        raise AssertionError(f"{path} did not match a schema branch: {errors}")
+
+    expected = schema.get("type")
+    expected_types = expected if isinstance(expected, list) else [expected] if expected else []
+    type_checks = {
+        "object": lambda value: isinstance(value, dict),
+        "array": lambda value: isinstance(value, list),
+        "string": lambda value: isinstance(value, str),
+        "integer": lambda value: isinstance(value, int) and not isinstance(value, bool),
+        "number": lambda value: isinstance(value, (int, float)) and not isinstance(value, bool),
+        "boolean": lambda value: isinstance(value, bool),
+        "null": lambda value: value is None,
+    }
+    if expected_types:
+        assert any(type_checks[item](instance) for item in expected_types), f"{path} expected {expected_types}, got {type(instance).__name__}"
+    if isinstance(instance, str) and "minLength" in schema:
+        assert len(instance) >= schema["minLength"], f"{path} is shorter than minLength"
+    if isinstance(instance, dict):
+        required = set(schema.get("required", []))
+        assert required <= set(instance), f"{path} missing {sorted(required - set(instance))}"
+        properties = schema.get("properties", {})
+        if schema.get("additionalProperties") is False:
+            assert set(instance) <= set(properties), f"{path} has unknown {sorted(set(instance) - set(properties))}"
+        for key, value in instance.items():
+            if key in properties:
+                assert_schema_valid(value, properties[key], document, f"{path}.{key}")
+    if isinstance(instance, list) and "items" in schema:
+        for index, value in enumerate(instance):
+            assert_schema_valid(value, schema["items"], document, f"{path}[{index}]")
 
 
 class OpenApiContractTest(unittest.TestCase):
@@ -454,6 +502,162 @@ class OpenApiContractTest(unittest.TestCase):
             version["properties"]["routes"]["items"]["$ref"],
             "#/components/schemas/LlmScenarioRouteView",
         )
+
+    def test_llm_operations_document_exact_roles_base_errors_and_safe_request_examples(self):
+        read_roles = {"super_admin", "release_admin", "technical_support", "security_auditor"}
+        write_roles = {"super_admin", "release_admin"}
+        connection_roles = write_roles | {"technical_support"}
+        write_operations = 0
+
+        for path, path_item in self.document["paths"].items():
+            if not path.startswith("/v1/system-admin/llm/"):
+                continue
+            for method, operation in path_item.items():
+                if method not in {"get", "post", "put", "patch", "delete"}:
+                    continue
+                expected_roles = read_roles if method == "get" else write_roles
+                if path.endswith("/connection-tests"):
+                    expected_roles = connection_roles
+                self.assertEqual(set(operation.get("x-roles", [])), expected_roles, f"{method} {path}")
+                self.assertTrue({"401", "403", "422", "500"} <= set(operation["responses"]), f"{method} {path}")
+                if method != "get":
+                    write_operations += 1
+                    media = operation["requestBody"]["content"]["application/json"]
+                    example = media.get("example") or next(iter(media.get("examples", {}).values()), {}).get("value")
+                    self.assertIsInstance(example, dict, f"missing request example {method} {path}")
+                    safe = json.dumps(example).lower()
+                    self.assertNotIn("secret_value", safe)
+                    self.assertNotIn("bearer ", safe)
+                    self.assertNotIn("prompt", safe)
+
+        self.assertEqual(write_operations, 10)
+
+        not_found = {
+            ("patch", "/v1/system-admin/llm/providers/{provider_id}"),
+            ("post", "/v1/system-admin/llm/providers/{provider_id}/connection-tests"),
+            ("get", "/v1/system-admin/llm/config-versions/{version_id}"),
+            ("put", "/v1/system-admin/llm/config-versions/{version_id}/routes"),
+            ("patch", "/v1/system-admin/llm/config-versions/{version_id}/routes"),
+            ("post", "/v1/system-admin/llm/config-versions/{version_id}/validate"),
+            ("post", "/v1/system-admin/llm/config-versions/{version_id}/submit-publish"),
+            ("post", "/v1/system-admin/llm/config-versions/{version_id}/publish"),
+            ("post", "/v1/system-admin/llm/config-versions/{version_id}/rollback"),
+        }
+        conflict = {
+            ("post", "/v1/system-admin/llm/providers"),
+            ("patch", "/v1/system-admin/llm/providers/{provider_id}"),
+            ("post", "/v1/system-admin/llm/providers/{provider_id}/connection-tests"),
+            ("post", "/v1/system-admin/llm/config-versions/drafts"),
+            ("put", "/v1/system-admin/llm/config-versions/{version_id}/routes"),
+            ("patch", "/v1/system-admin/llm/config-versions/{version_id}/routes"),
+            ("post", "/v1/system-admin/llm/config-versions/{version_id}/validate"),
+            ("post", "/v1/system-admin/llm/config-versions/{version_id}/submit-publish"),
+            ("post", "/v1/system-admin/llm/config-versions/{version_id}/publish"),
+            ("post", "/v1/system-admin/llm/config-versions/{version_id}/rollback"),
+        }
+        for method, path in not_found:
+            self.assertIn("404", self.document["paths"][path][method]["responses"], f"{method} {path}")
+        for method, path in conflict:
+            self.assertIn("409", self.document["paths"][path][method]["responses"], f"{method} {path}")
+
+        organization = self.document["paths"]["/v1/system-admin/llm/config-versions"]["get"]["parameters"][0]
+        self.assertEqual(organization["schema"]["format"], "uuid")
+        self.assertTrue(organization["required"])
+
+    def test_actual_llm_errors_validate_against_error_response_schema(self):
+        client = TestClient(
+            create_app(
+                Settings(environment="test", database_url=None),
+                llm_connection_tester=lambda _provider, _request: {"status": "passed", "latency_ms": 5},
+            )
+        )
+        headers = {"Cookie": "agent_system_admin_session=test-system-session"}
+        provider_payload = {
+            "name": "contract-provider",
+            "provider_type": "openai_compatible",
+            "base_url": "https://provider.example/v1",
+            "secret_ref": {"namespace": "runtime", "name": "llm-provider", "key": "api-key"},
+            "reason": "contract setup",
+            "idempotency_key": "contract-provider-create",
+        }
+        provider = client.post("/v1/system-admin/llm/providers", headers=headers, json=provider_payload).json()
+        stale = client.patch(
+            f"/v1/system-admin/llm/providers/{provider['provider_id']}",
+            headers=headers,
+            json={"enabled": False, "expected_revision": 2, "reason": "stale", "idempotency_key": "contract-stale"},
+        )
+        missing = client.patch(
+            "/v1/system-admin/llm/providers/missing-provider",
+            headers=headers,
+            json={"enabled": False, "expected_revision": 1, "reason": "missing", "idempotency_key": "contract-missing"},
+        )
+        invalid = client.post(
+            "/v1/system-admin/llm/providers",
+            headers=headers,
+            json={**provider_payload, "idempotency_key": "contract-invalid", "secret_value": "must-not-return"},
+        )
+        draft = client.post(
+            "/v1/system-admin/llm/config-versions/drafts",
+            headers=headers,
+            json={"organization_id": "11111111-1111-1111-1111-111111111111", "reason": "draft", "idempotency_key": "contract-draft"},
+        ).json()
+        routes = [
+            {
+                "scenario": scenario,
+                "primary_provider_config_id": provider["provider_id"],
+                "primary_model": "chat-pro",
+                "fallback_provider_config_id": None,
+                "fallback_model": None,
+                "enabled": True,
+                "temperature": 0.2,
+                "max_output_tokens": 1200,
+                "timeout_seconds": 18,
+                "max_retries": 2,
+                "circuit_breaker_threshold": 5,
+                "recovery_probe_seconds": 30,
+            }
+            for scenario in ("reply_generation", "knowledge_extraction", "blind_test_question_generation")
+        ]
+        changed = client.put(
+            f"/v1/system-admin/llm/config-versions/{draft['version_id']}/routes",
+            headers=headers,
+            json={"routes": routes, "expected_revision": 1, "reason": "routes", "idempotency_key": "contract-routes"},
+        ).json()
+        client.post(
+            f"/v1/system-admin/llm/providers/{provider['provider_id']}/connection-tests",
+            headers=headers,
+            json={"config_version_id": draft["version_id"], "reason": "test", "idempotency_key": "contract-test"},
+        )
+        validated = client.post(
+            f"/v1/system-admin/llm/config-versions/{draft['version_id']}/validate",
+            headers=headers,
+            json={"expected_revision": changed["revision"], "reason": "validate", "idempotency_key": "contract-validate"},
+        ).json()
+        gate = client.post(
+            f"/v1/system-admin/llm/config-versions/{draft['version_id']}/submit-publish",
+            headers=headers,
+            json={"expected_revision": validated["revision"], "evaluation_run_id": "eval-contract", "reason": "submit", "idempotency_key": "contract-submit"},
+        )
+
+        expected = [(stale, 409, "stale_revision"), (missing, 404, "provider_not_found"), (gate, 409, "release_gate_failed"), (invalid, 422, "validation_error")]
+        schema = self.document["components"]["schemas"]["ErrorResponse"]
+        for response, status, code in expected:
+            self.assertEqual(response.status_code, status)
+            self.assertEqual(response.json()["error"]["code"], code)
+            assert_schema_valid(response.json(), schema, self.document)
+            safe = response.text.lower()
+            self.assertNotIn("must-not-return", safe)
+            self.assertNotIn("postgresql://", safe)
+
+        business_details = {
+            "detail": "business validation failed",
+            "error": {
+                "code": "business_rule_failed",
+                "message": "business validation failed",
+                "details": {"field": "safe-reference"},
+            },
+        }
+        assert_schema_valid(business_details, schema, self.document)
 
 
 if __name__ == "__main__":

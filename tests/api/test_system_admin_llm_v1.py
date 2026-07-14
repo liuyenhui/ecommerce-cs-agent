@@ -392,13 +392,26 @@ def test_usage_query_validation_is_strict(monkeypatch: pytest.MonkeyPatch, path:
     assert response.status_code == 422
 
 
-def test_llm_resource_ids_have_bounded_path_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("provider_id", ["p" * 129, "provider%20id", "%00", "%0A"])
+def test_llm_resource_ids_have_bounded_path_validation(monkeypatch: pytest.MonkeyPatch, provider_id: str) -> None:
     client, _service = _client(monkeypatch)
 
     response = client.patch(
-        "/v1/system-admin/llm/providers/" + "p" * 129,
+        "/v1/system-admin/llm/providers/" + provider_id,
         headers=SYSTEM_HEADERS,
         json={"enabled": False, "expected_revision": 1, "reason": "bounded ID", "idempotency_key": "bounded-id"},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("organization_id", ["not-a-uuid", "%00", "%20", "%0A", "11111111-1111-1111-1111-111111111111%20"])
+def test_config_version_organization_filter_requires_canonical_uuid(monkeypatch: pytest.MonkeyPatch, organization_id: str) -> None:
+    client, _service = _client(monkeypatch)
+
+    response = client.get(
+        f"/v1/system-admin/llm/config-versions?organization_id={organization_id}",
+        headers=SYSTEM_HEADERS,
     )
 
     assert response.status_code == 422

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Annotated, Any, Callable, Literal
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, Path, Request
 from fastapi.responses import JSONResponse
@@ -11,7 +12,7 @@ from ecommerce_cs_agent.api.errors import api_error
 from ecommerce_cs_agent.services.llm_governance import LlmGovernanceRepository
 
 
-ResourceId = Annotated[str, Path(min_length=1, max_length=128, pattern=r"^[^\x00-\x1f]+$")]
+ResourceId = Annotated[str, Path(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")]
 
 
 class StrictRequest(BaseModel):
@@ -137,6 +138,23 @@ class InvocationFilters(UsageFilters):
     limit: int = Field(default=100, ge=1, le=500)
 
 
+class ConfigVersionsQuery(StrictRequest):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False, strict=False)
+    organization_id: UUID
+
+    @model_validator(mode="before")
+    @classmethod
+    def require_canonical_uuid(cls, value: Any) -> Any:
+        raw = value.get("organization_id") if isinstance(value, dict) else None
+        try:
+            canonical = str(UUID(str(raw)))
+        except (TypeError, ValueError, AttributeError):
+            raise ValueError("organization_id must be a canonical UUID") from None
+        if raw != canonical:
+            raise ValueError("organization_id must be a canonical UUID")
+        return value
+
+
 def _query_model(request: Request, model: type[StrictRequest]) -> StrictRequest:
     try:
         return model.model_validate(dict(request.query_params))
@@ -192,9 +210,9 @@ def register_system_admin_llm_routes(
 
     @app.get("/v1/system-admin/llm/config-versions")
     def list_llm_config_versions(request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
-        organization_id = request.query_params.get("organization_id")
-        if set(request.query_params) != {"organization_id"} or not organization_id or len(organization_id) > 128:
-            raise api_error(422, "validation_error", "organization_id is the only required versions filter")
+        query = _query_model(request, ConfigVersionsQuery)
+        assert isinstance(query, ConfigVersionsQuery)
+        organization_id = str(query.organization_id)
         return {"items": [_version_response(item) for item in repository.list_versions(session, organization_id)]}
 
     @app.get("/v1/system-admin/llm/config-versions/{version_id}")

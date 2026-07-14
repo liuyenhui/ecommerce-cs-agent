@@ -2089,6 +2089,7 @@ paths:
       operationId: listSystemAdminLlmProviders
       summary: 查询 Provider 配置
       description: super_admin、release_admin、technical_support 和 security_auditor 可读；仅返回 Secret 引用，不返回密钥内容。
+      x-roles: [super_admin, release_admin, technical_support, security_auditor]
       security:
         - SystemAdminSession: []
       responses:
@@ -2102,6 +2103,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/InternalError"
     post:
@@ -2109,6 +2112,7 @@ paths:
       operationId: createSystemAdminLlmProvider
       summary: 创建 Provider 配置
       description: 仅 super_admin 或 release_admin 可创建；Secret 只能以 Kubernetes namespace、name、key 引用。
+      x-roles: [super_admin, release_admin]
       security:
         - SystemAdminSession: []
       requestBody:
@@ -2149,19 +2153,25 @@ paths:
       operationId: updateSystemAdminLlmProvider
       summary: 更新 Provider 名称或启用状态
       description: 仅 super_admin 或 release_admin 可更新；expected_revision 防止覆盖并发修改，端点和 Secret 引用不可原地替换。
+      x-roles: [super_admin, release_admin]
       security:
         - SystemAdminSession: []
       parameters:
         - name: provider_id
           in: path
           required: true
-          schema: {type: string, maxLength: 128}
+          schema: {type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/LlmProviderUpdateRequest"
+            example:
+              expected_revision: 3
+              enabled: false
+              reason: temporarily disable an unhealthy provider
+              idempotency_key: provider-update-001
       responses:
         "200":
           description: Provider 已更新。
@@ -2179,6 +2189,8 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/system-admin/llm/providers/{provider_id}/connection-tests:
     post:
@@ -2186,19 +2198,26 @@ paths:
       operationId: testSystemAdminLlmProviderConnection
       summary: 对草稿执行 Provider 连接测试
       description: super_admin、release_admin 或 technical_support 可执行。config_version_id 必须指向草稿；只记录状态、耗时和脱敏错误码，不记录请求或响应正文。
+      x-roles: [super_admin, release_admin, technical_support]
       security:
         - SystemAdminSession: []
       parameters:
         - name: provider_id
           in: path
           required: true
-          schema: {type: string, maxLength: 128}
+          schema: {type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/LlmConnectionTestRequest"
+            example:
+              config_version_id: 22222222-2222-4222-8222-222222222222
+              timeout_seconds: 20
+              max_tokens: 128
+              reason: verify the draft provider reference
+              idempotency_key: connection-test-001
       responses:
         "202":
           description: 连接测试已完成并记录脱敏结果。
@@ -2216,6 +2235,8 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/system-admin/llm/config-versions:
     get:
@@ -2223,13 +2244,14 @@ paths:
       operationId: listSystemAdminLlmConfigVersions
       summary: 按组织查询 LLM 配置版本
       description: 返回不可变版本历史及其 release_record 和 evaluation 摘要，不伪造不存在的发布记录。
+      x-roles: [super_admin, release_admin, technical_support, security_auditor]
       security:
         - SystemAdminSession: []
       parameters:
         - name: organization_id
           in: query
           required: true
-          schema: {type: string, minLength: 1, maxLength: 128}
+          schema: {type: string, format: uuid, minLength: 36, maxLength: 36}
       responses:
         "200":
           description: 版本列表。
@@ -2243,6 +2265,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/system-admin/llm/config-versions/drafts:
     post:
@@ -2250,6 +2274,7 @@ paths:
       operationId: createSystemAdminLlmConfigDraft
       summary: 创建组织级配置草稿
       description: super_admin 或 release_admin 创建新草稿；所有写操作携带审计原因和幂等键。
+      x-roles: [super_admin, release_admin]
       security:
         - SystemAdminSession: []
       requestBody:
@@ -2258,6 +2283,11 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/LlmConfigDraftCreateRequest"
+            example:
+              organization_id: 11111111-1111-4111-8111-111111111111
+              description: customer reply model tuning
+              reason: prepare a reviewed configuration change
+              idempotency_key: config-draft-001
       responses:
         "201":
           description: 草稿已创建。
@@ -2273,6 +2303,8 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/system-admin/llm/config-versions/{version_id}:
     get:
@@ -2280,6 +2312,7 @@ paths:
       operationId: getSystemAdminLlmConfigVersion
       summary: 查询单个配置版本
       description: 返回路由、运行参数、发布记录和评测引用；不返回 Prompt、消息正文或密钥内容。
+      x-roles: [super_admin, release_admin, technical_support, security_auditor]
       security:
         - SystemAdminSession: []
       parameters:
@@ -2297,6 +2330,10 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/system-admin/llm/config-versions/{version_id}/routes:
     put:
@@ -2304,6 +2341,7 @@ paths:
       operationId: replaceSystemAdminLlmRoutes
       summary: 完整替换草稿场景路由
       description: 仅草稿可改；expected_revision 防止并发覆盖，必须提供各场景主模型、可选降级模型及完整运行参数。
+      x-roles: [super_admin, release_admin]
       security:
         - SystemAdminSession: []
       parameters:
@@ -2314,6 +2352,23 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/LlmRoutesReplaceRequest"
+            example:
+              expected_revision: 1
+              routes:
+                - scenario: reply_generation
+                  primary_provider_config_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+                  primary_model: chat-pro
+                  fallback_provider_config_id: null
+                  fallback_model: null
+                  enabled: true
+                  temperature: 0.2
+                  max_output_tokens: 1200
+                  timeout_seconds: 18
+                  max_retries: 2
+                  circuit_breaker_threshold: 5
+                  recovery_probe_seconds: 30
+              reason: configure reviewed scenario routes
+              idempotency_key: config-routes-put-001
       responses:
         "200":
           description: 路由已替换。
@@ -2331,11 +2386,14 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
     patch:
       tags: [System Admin LLM Governance]
       operationId: patchSystemAdminLlmRoutes
       summary: 以完整集合更新草稿场景路由
       description: 与 PUT 使用同一完整替换语义；不支持对已验证或已发布版本原地修改。
+      x-roles: [super_admin, release_admin]
       security:
         - SystemAdminSession: []
       parameters:
@@ -2346,6 +2404,23 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/LlmRoutesReplaceRequest"
+            example:
+              expected_revision: 2
+              routes:
+                - scenario: knowledge_extraction
+                  primary_provider_config_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+                  primary_model: extract-pro
+                  fallback_provider_config_id: bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
+                  fallback_model: extract-lite
+                  enabled: true
+                  temperature: 0.1
+                  max_output_tokens: 800
+                  timeout_seconds: 20
+                  max_retries: 1
+                  circuit_breaker_threshold: 5
+                  recovery_probe_seconds: 30
+              reason: update the complete draft route set
+              idempotency_key: config-routes-patch-001
       responses:
         "200":
           description: 路由已替换。
@@ -2363,6 +2438,8 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/system-admin/llm/config-versions/{version_id}/validate:
     post:
@@ -2370,6 +2447,7 @@ paths:
       operationId: validateSystemAdminLlmConfig
       summary: 验证配置草稿
       description: 执行 draft 到 validated；要求场景完整且每个 Provider 对当前草稿有通过的连接测试。
+      x-roles: [super_admin, release_admin]
       security:
         - SystemAdminSession: []
       parameters:
@@ -2380,6 +2458,10 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/LlmRevisionWriteRequest"
+            example:
+              expected_revision: 2
+              reason: all required routes and connection checks passed
+              idempotency_key: config-validate-001
       responses:
         "200":
           description: 草稿已验证。
@@ -2391,10 +2473,14 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/system-admin/llm/config-versions/{version_id}/submit-publish:
     post:
@@ -2402,6 +2488,7 @@ paths:
       operationId: submitSystemAdminLlmConfigPublish
       summary: 提交已验证配置发布
       description: 执行 validated 到 pending_publish；只有真实 evaluation_run_id 通过 release gate 后才创建 release_record。
+      x-roles: [super_admin, release_admin]
       security:
         - SystemAdminSession: []
       parameters:
@@ -2412,6 +2499,11 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/LlmSubmitPublishRequest"
+            example:
+              expected_revision: 3
+              evaluation_run_id: eval-release-20260714
+              reason: evaluation gate passed
+              idempotency_key: config-submit-001
       responses:
         "200":
           description: 配置已进入待发布。
@@ -2423,10 +2515,14 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/system-admin/llm/config-versions/{version_id}/publish:
     post:
@@ -2434,6 +2530,7 @@ paths:
       operationId: publishSystemAdminLlmConfig
       summary: 发布待发布配置
       description: 仅 super_admin 或 release_admin 可执行 pending_publish 到 running；失败时原运行版本不切换，expected_revision 防止并发覆盖。
+      x-roles: [super_admin, release_admin]
       security:
         - SystemAdminSession: []
       parameters:
@@ -2444,6 +2541,10 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/LlmRevisionWriteRequest"
+            example:
+              expected_revision: 4
+              reason: release approved for production traffic
+              idempotency_key: config-publish-001
       responses:
         "200":
           description: 配置已成为运行版本。
@@ -2461,6 +2562,8 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/system-admin/llm/config-versions/{version_id}/rollback:
     post:
@@ -2468,6 +2571,7 @@ paths:
       operationId: rollbackSystemAdminLlmConfig
       summary: 从发布历史创建受审计回滚版本
       description: super_admin 或 release_admin 从运行中或终态历史复制新版本并发布；不删除、不改写原版本和原 release_record。
+      x-roles: [super_admin, release_admin]
       security:
         - SystemAdminSession: []
       parameters:
@@ -2478,6 +2582,9 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/LlmRollbackRequest"
+            example:
+              reason: provider regression requires an audited rollback
+              idempotency_key: config-rollback-001
       responses:
         "200":
           description: 新回滚版本已成为运行版本。
@@ -2495,6 +2602,8 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/system-admin/llm/usage/summary:
     get:
@@ -2502,6 +2611,7 @@ paths:
       operationId: getSystemAdminLlmUsageSummary
       summary: 查询调用与成本汇总
       description: 基于真实调用元数据聚合；混合币种时 estimated_cost_micros 为 null，并使用 cost_by_currency 分币种返回。
+      x-roles: [super_admin, release_admin, technical_support, security_auditor]
       security:
         - SystemAdminSession: []
       parameters:
@@ -2528,6 +2638,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/system-admin/llm/usage/timeseries:
     get:
@@ -2535,6 +2647,7 @@ paths:
       operationId: getSystemAdminLlmUsageTimeseries
       summary: 查询按小时调用时间序列
       description: 每个时间桶按币种分行；无真实调用时 items 为空，不生成示例曲线。
+      x-roles: [super_admin, release_admin, technical_support, security_auditor]
       security:
         - SystemAdminSession: []
       parameters:
@@ -2561,6 +2674,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/system-admin/llm/usage/breakdown:
     get:
@@ -2568,6 +2683,7 @@ paths:
       operationId: getSystemAdminLlmUsageBreakdown
       summary: 查询调用成本维度分布
       description: 按 Provider、模型、场景、组织、店铺、状态或安全错误码分组，每组继续按币种拆分。
+      x-roles: [super_admin, release_admin, technical_support, security_auditor]
       security:
         - SystemAdminSession: []
       parameters:
@@ -2598,6 +2714,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/system-admin/llm/usage/invocations:
     get:
@@ -2605,6 +2723,7 @@ paths:
       operationId: listSystemAdminLlmInvocations
       summary: 查询脱敏调用明细
       description: 仅返回调用 ID、模型维度、Token、耗时、状态和估算成本，不返回 Prompt、客户消息或模型回复。
+      x-roles: [super_admin, release_admin, technical_support, security_auditor]
       security:
         - SystemAdminSession: []
       parameters:
@@ -2634,6 +2753,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "422":
           $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
 components:
   securitySchemes:
@@ -2746,6 +2867,7 @@ components:
         type: string
         minLength: 1
         maxLength: 128
+        pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
       description: LLM 配置版本 ID。
     Page:
       name: page
@@ -5213,6 +5335,7 @@ components:
           enum: [pass, warning, blocked]
         message:
           type: string
+          minLength: 1
         refs:
           type: array
           items:
@@ -5920,6 +6043,9 @@ components:
       type: object
       required: [error]
       properties:
+        detail:
+          type: string
+          description: 面向调用方的安全错误摘要；不得包含凭据、数据库错误或 raw payload。
         errorId:
           type: string
           description: 稳定错误编号；仅已登记链路保证返回，例如 ECS-OE-001。
@@ -5938,45 +6064,48 @@ components:
       properties:
         code:
           type: string
-          enum:
-            - invalid_request
-            - unauthorized
-            - forbidden
-            - not_found
-            - conflict
-            - rate_limited
-            - idempotency_conflict
-            - connector_not_bound
-            - launch_token_consumed
-            - launch_token_expired
-            - launch_token_not_found
-            - validation_error
-            - object_storage_error
-            - object_storage_unavailable
-            - missing_context
-            - action_result_required
-            - policy_blocked
-            - internal_error
-            - TENANT_SCOPE_REQUIRED
-            - RESOURCE_MAPPING_REQUIRED
-            - ROLE_FORBIDDEN
-            - AUDIT_REASON_REQUIRED
-            - RAW_PAYLOAD_ACCESS_DENIED
-            - IDEMPOTENCY_CONFLICT
-            - WEBHOOK_SIGNATURE_INVALID
-            - WEBHOOK_DELIVERY_DEAD_LETTERED
-            - CONNECTOR_UNAVAILABLE
-            - CONNECTOR_CIRCUIT_OPEN
-            - RULE_DRY_RUN_FAILED
-            - RULE_RELEASE_CONFLICT
-            - TASK_RETRY_EXHAUSTED
+          minLength: 1
+          description: 稳定机器可读错误码；由各接口和服务能力扩展，不使用会漂移的全局封闭枚举。
+          examples: [validation_error, stale_revision, provider_not_found, release_gate_failed]
         message:
           type: string
         errorId:
           type: string
           description: 与顶层 `errorId` 相同；便于只解析 `error` 对象的客户端定位。
         details:
-          $ref: "#/components/schemas/Metadata"
+          description: 业务错误可返回键值对象；请求校验错误返回 Pydantic 风格的安全问题数组，敏感 input 可以省略。
+          oneOf:
+            - $ref: "#/components/schemas/Metadata"
+            - type: array
+              items:
+                $ref: "#/components/schemas/ValidationIssue"
+
+    ValidationIssue:
+      type: object
+      additionalProperties: true
+      required: [type, loc, msg]
+      properties:
+        type:
+          type: string
+          minLength: 1
+          examples: [extra_forbidden]
+        loc:
+          type: array
+          minItems: 1
+          items:
+            type: [string, integer]
+          examples: [[body, field_name]]
+        msg:
+          type: string
+          minLength: 1
+          examples: [Extra inputs are not permitted]
+        input:
+          description: 可选的安全输入摘要；服务端会对可能含敏感内容的请求省略该字段。
+        ctx:
+          type: object
+          additionalProperties: true
+        url:
+          type: string
 
     Platform:
       type: string

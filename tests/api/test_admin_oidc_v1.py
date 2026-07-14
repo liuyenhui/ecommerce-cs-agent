@@ -10,6 +10,7 @@ from ecommerce_cs_agent.core.config import Settings
 
 def _oidc_settings() -> Settings:
     return Settings(
+        environment="test",
         admin_oidc_enabled=True,
         admin_oidc_issuer="https://account.fcihome.com",
         admin_oidc_client_id="customer-admin-dev",
