@@ -219,6 +219,43 @@ def test_decision_idempotency_scope_migration_replaces_organization_only_uniquen
     assert "on decision_record (organization_id, store_id, request_id)" in sql
 
 
+def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
+    sql = Path("migrations/012_system_admin_llm_governance.sql").read_text(encoding="utf-8").lower()
+
+    for snippet in [
+        "create table if not exists llm_provider_config",
+        "secret_namespace",
+        "secret_name",
+        "secret_key",
+        "create table if not exists llm_config_version",
+        "create unique index if not exists idx_llm_config_version_one_running",
+        "where status = 'running'",
+        "create table if not exists llm_scenario_route",
+        "create table if not exists llm_connection_test",
+        "create table if not exists llm_invocation_metric",
+        "estimated_cost_minor",
+        "idx_llm_scenario_route_primary_provider_model",
+        "idx_llm_scenario_route_scenario",
+        "idx_llm_invocation_metric_provider_model_occurred",
+        "idx_llm_invocation_metric_scenario_occurred",
+        "idx_llm_invocation_metric_organization_store_occurred",
+        "check (status in",
+        "check (revision > 0)",
+    ]:
+        assert snippet in sql
+
+    for forbidden_storage in [
+        "secret_value",
+        "prompt text",
+        "prompt_body",
+        "request_body",
+        "response_body",
+        "customer_message",
+        "model_response",
+    ]:
+        assert forbidden_storage not in sql
+
+
 def test_legacy_runtime_defaults_migration_contains_not_null_defaults() -> None:
     sql = Path("migrations/005_legacy_runtime_defaults.sql").read_text(encoding="utf-8").lower()
 
