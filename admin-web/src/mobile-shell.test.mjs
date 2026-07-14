@@ -68,3 +68,44 @@ test("LLM tabs, release dialog, and form inputs keep accessible relationships", 
     assert.match(releasesSource, new RegExp(`<label>${label}`));
   }
 });
+
+test("every custom LLM table cell keeps its field name when mobile headers are hidden", () => {
+  const cells = llmSource.match(/<td\b/g) || [];
+  const mobileLabels = llmSource.match(/<td\b[^>]*\bdata-label=/g) || [];
+
+  assert.ok(cells.length > 0);
+  assert.equal(mobileLabels.length, cells.length);
+  for (const label of [
+    "名称",
+    "类型 / Base URL",
+    "Secret 引用",
+    "状态",
+    "操作",
+    "模型",
+    "调用",
+    "Token",
+    "估算成本",
+    "调用 / 时间",
+    "Provider",
+    "组织 / 店铺",
+    "模型 / 场景",
+    "路由 / 延迟",
+    "Token / 成本",
+    "状态 / 失败原因",
+    "版本",
+    "状态 / revision",
+    "创建者 / 时间",
+    "发布者 / 时间",
+    "评测",
+    "操作者",
+    "动作",
+    "原因",
+    "结果",
+    "时间"
+  ]) {
+    assert.match(llmSource, new RegExp(`data-label="${label.replace("/", "\\/")}"`));
+  }
+  for (const label of ["发布记录：", "配置版本：", "提交：", "发布：", "评测：", "回滚发布：", "回滚版本："]) {
+    assert.match(releasesSource, new RegExp(label));
+  }
+});

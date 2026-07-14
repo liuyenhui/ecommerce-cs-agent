@@ -48,6 +48,9 @@ from ecommerce_cs_agent.services.llm_governance_adapters import (
 def create_app(
     settings: Settings | None = None,
     *,
+    admin_auth_service_override: Any | None = None,
+    system_admin_auth_service_override: Any | None = None,
+    system_admin_repository_override: Any | None = None,
     llm_governance_repository: LlmGovernanceRepository | None = None,
     llm_connection_tester: Callable[[dict[str, Any], dict[str, int]], dict[str, Any]] | None = None,
     llm_release_gate_checker: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
@@ -57,9 +60,18 @@ def create_app(
     decisions = DecisionService(settings)
     admin_data = admin_repository_for(settings)
     product_analyzer = product_document_analyzer_for(settings)
-    admin_auth = admin_auth_service_for(settings)
-    system_admin_auth = system_admin_auth_service_for(settings)
-    system_admin_data = system_admin_repository_for(settings)
+    if settings.environment.lower() != "test" and any(
+        item is not None
+        for item in (
+            admin_auth_service_override,
+            system_admin_auth_service_override,
+            system_admin_repository_override,
+        )
+    ):
+        raise RuntimeError("Admin service injection is test-only")
+    admin_auth = admin_auth_service_override or admin_auth_service_for(settings)
+    system_admin_auth = system_admin_auth_service_override or system_admin_auth_service_for(settings)
+    system_admin_data = system_admin_repository_override or system_admin_repository_for(settings)
     if llm_governance_repository is not None and settings.environment.lower() != "test":
         raise RuntimeError("LLM governance repository injection is test-only outside production wiring")
     if llm_governance_repository is not None:
@@ -799,49 +811,6 @@ def _normalize_reply_decision_payload(payload: dict[str, Any]) -> dict[str, Any]
 
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _admin_user() -> dict[str, Any]:
-    return {
-        "id": "admin-001",
-        "email": "admin@example.test",
-        "name": "Customer Admin",
-        "role": "owner",
-        "status": "active",
-    }
-
-
-def _system_user() -> dict[str, Any]:
-    return {
-        "id": "sysadmin-001",
-        "email": "system-admin@example.test",
-        "name": "System Admin",
-        "role": "super_admin",
-        "status": "active",
-    }
-
-
-def _organization() -> dict[str, Any]:
-    return {"id": "org-001", "name": "Test Organization", "status": "active", "metadata": {}}
-
-
-def _store() -> dict[str, Any]:
-    return {
-        "id": "store-001",
-        "organization_id": "org-001",
-        "name": "Test PDD Store",
-        "platform": "pdd",
-        "status": "active",
-        "metadata": {},
-    }
-
-
-def _admin_auth_payload() -> dict[str, Any]:
-    return {"user": _admin_user(), "organizations": [_organization()], "stores": [_store()]}
-
-
-def _system_me_payload() -> dict[str, Any]:
-    return {"user": _system_user(), "permissions": ["system:read", "system:write"]}
 
 
 def _audit_log(log_type: str, actor_id: str) -> dict[str, Any]:

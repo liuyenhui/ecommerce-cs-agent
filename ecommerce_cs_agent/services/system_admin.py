@@ -65,35 +65,9 @@ class SystemAdminRepository(Protocol):
 
 class InMemorySystemAdminRepository:
     def __init__(self) -> None:
-        self.users: dict[str, dict[str, Any]] = {
-            "sysadmin-001": _system_user("sysadmin-001", "system-admin@example.test", "System Admin", ["super_admin"])
-        }
-        self.organizations: dict[str, dict[str, Any]] = {
-            "org-001": {
-                "id": "org-001",
-                "organization_id": "org-001",
-                "name": "Test Organization",
-                "status": "active",
-                "metadata": {},
-                "external_ref": "org-001",
-                "contact": {},
-                "created_at": _now(),
-            }
-        }
-        self.stores: dict[str, dict[str, Any]] = {
-            "store-001": {
-                "id": "store-001",
-                "store_id": "store-001",
-                "organization_id": "org-001",
-                "name": "Test PDD Store",
-                "platform": "pdd",
-                "status": "active",
-                "metadata": {},
-                "external_store_id": "store-001",
-                "readiness_status": "blocked",
-                "created_at": _now(),
-            }
-        }
+        self.users = {}
+        self.organizations = {}
+        self.stores = {}
         self.product_store_ids: set[str] = set()
         self.price_snapshot_store_ids: set[str] = set()
         self.approved_knowledge_store_ids: set[str] = set()

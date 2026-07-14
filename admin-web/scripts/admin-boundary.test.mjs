@@ -21,15 +21,35 @@ function readProjectRelative(file) {
 }
 
 function assertNoAdminDemoFallback(source) {
-  assert.doesNotMatch(source, /Demo Organization|Demo PDD Store/);
+  assert.doesNotMatch(source, /\b(?:Demo|Test|Sample|Fake) (?:Organization|Tenant|PDD Store|Store)\b/i);
   assert.doesNotMatch(source, /(?:demo|sample|fake)[_-]?(?:organization|tenant|store|admin)[_-]?(?:fallback|default|seed)?/i);
 }
 
 function assertLlmUiUsesSecretReferencesOnly(source) {
-  assert.doesNotMatch(source, /\b(?:secret_value|api_key|raw_secret)\b/i);
-  assert.match(source, /secret_ref/);
-  assert.match(source, /secret_name/);
-  assert.match(source, /secret_key/);
+  const forbidden = new Set([
+    "apikey",
+    "secretvalue",
+    "rawsecret",
+    "password",
+    "accesstoken",
+    "refreshtoken",
+    "privatekey",
+    "clientsecret",
+    "authorization",
+    "bearertoken"
+  ]);
+  const identifiers = source.match(/[A-Za-z][A-Za-z0-9_-]*/g) || [];
+  for (const identifier of identifiers) {
+    const canonical = identifier.replace(/[-_]/g, "").toLowerCase();
+    assert.ok(!forbidden.has(canonical), `forbidden raw credential field ${identifier}`);
+  }
+  assert.match(source, /<label>Secret namespace<input[^>]*value=\{form\.namespace\}/);
+  assert.match(source, /<label>Secret name<input[^>]*value=\{form\.secret_name\}/);
+  assert.match(source, /<label>Secret key<input[^>]*value=\{form\.secret_key\}/);
+  assert.match(
+    source,
+    /provider\.secret_ref\.namespace[\s\S]*provider\.secret_ref\.name[\s\S]*provider\.secret_ref\.key/
+  );
 }
 
 function collectSource(dir, { includeTests = true } = {}) {
@@ -203,6 +223,7 @@ test("admin production sources contain no demo organization or store fallback", 
     collectSource("system-admin/src", { includeTests: false }),
     collectSource("shared", { includeTests: false }),
     readProjectRelative("ecommerce_cs_agent/api/app.py"),
+    readProjectRelative("ecommerce_cs_agent/services/admin.py"),
     readProjectRelative("ecommerce_cs_agent/services/admin_auth.py"),
     readProjectRelative("ecommerce_cs_agent/services/system_admin.py")
   ].join("\n");
@@ -217,17 +238,71 @@ test("demo fallback guard rejects an isolated forbidden seed", () => {
   );
 });
 
+test("renamed test seed guard still rejects an isolated fake business fixture", () => {
+  assert.throws(
+    () => assertNoAdminDemoFallback('self.organizations = {"org-001": {"name": "Test Organization"}}'),
+    /Test Organization/
+  );
+});
+
+test("in-memory Admin production classes default to empty collections and factories fail fast outside test", () => {
+  const adminAuth = readProjectRelative("ecommerce_cs_agent/services/admin_auth.py");
+  const systemAdmin = readProjectRelative("ecommerce_cs_agent/services/system_admin.py");
+  const adminData = readProjectRelative("ecommerce_cs_agent/services/admin.py");
+  const customerInMemory = sliceBetween(adminAuth, "class InMemoryAdminAuthService", "class PostgresAdminAuthService");
+  const systemInMemoryAuth = sliceBetween(adminAuth, "class InMemorySystemAdminAuthService", "class PostgresSystemAdminAuthService");
+  const customerFactory = sliceBetween(adminAuth, "def admin_auth_service_for", "def system_admin_auth_service_for");
+  const customerDataFactory = adminData.slice(adminData.indexOf("def admin_repository_for"), adminData.indexOf("def _object_storage_for"));
+  const systemInMemoryRepository = sliceBetween(systemAdmin, "class InMemorySystemAdminRepository", "class PostgresSystemAdminRepository");
+
+  for (const marker of ["self.organizations = {}", "self.stores = {}", "self.users = {}", "self.sessions = {}"]) {
+    assert.match(customerInMemory, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.match(systemInMemoryAuth, /self\.users = \{\}/);
+  assert.match(systemInMemoryAuth, /self\.sessions = \{\}/);
+  assert.match(systemInMemoryRepository, /self\.users = \{\}/);
+  assert.match(systemInMemoryRepository, /self\.organizations = \{\}/);
+  assert.match(systemInMemoryRepository, /self\.stores = \{\}/);
+  assert.match(customerFactory, /if settings\.environment\.lower\(\) == "test"/);
+  assert.match(customerFactory, /raise RuntimeError\("DATABASE_URL is required for Customer Admin outside test"\)/);
+  assert.match(customerDataFactory, /if settings\.environment\.lower\(\) == "test"/);
+  assert.match(customerDataFactory, /raise RuntimeError\("DATABASE_URL is required for Customer Admin data outside test"\)/);
+});
+
 test("LLM governance UI accepts Kubernetes Secret references but no raw secret fields", () => {
-  const source = collectSource("system-admin/src", { includeTests: false });
+  const source = [
+    readRelative("system-admin/src/pages/LlmGovernancePage.tsx"),
+    readRelative("system-admin/src/pages/ReleasesPage.tsx")
+  ].join("\n");
 
   assertLlmUiUsesSecretReferencesOnly(source);
 });
 
 test("LLM raw-secret source guard rejects an isolated forbidden field", () => {
   assert.throws(
-    () => assertLlmUiUsesSecretReferencesOnly("const form = { secret_value: value, secret_ref, secret_name, secret_key };"),
+    () => assertLlmUiUsesSecretReferencesOnly("const form = { secret_value: value };"),
     /secret_value/
   );
+});
+
+test("LLM raw-secret guard rejects camelCase form fields even when unrelated Secret markers exist", () => {
+  const mutant = `
+    const unrelated = { secret_ref, secret_name, secret_key };
+    return <label>API key<input name="apiKey" /></label>;
+  `;
+
+  assert.throws(() => assertLlmUiUsesSecretReferencesOnly(mutant), /apiKey/);
+});
+
+test("LLM raw-secret guard accepts only concrete Kubernetes Secret reference controls and rendering", () => {
+  const safeFixture = `
+    <label>Secret namespace<input value={form.namespace} /></label>
+    <label>Secret name<input value={form.secret_name} /></label>
+    <label>Secret key<input value={form.secret_key} /></label>
+    <span>{provider.secret_ref.namespace}/{provider.secret_ref.name}:{provider.secret_ref.key}</span>
+  `;
+
+  assert.doesNotThrow(() => assertLlmUiUsesSecretReferencesOnly(safeFixture));
 });
 
 test("shared components do not import System Admin request-state types", () => {

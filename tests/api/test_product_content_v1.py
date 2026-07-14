@@ -5,6 +5,7 @@ import base64
 from fastapi.testclient import TestClient
 
 from ecommerce_cs_agent.api.app import create_app
+from tests.admin_fixtures import create_test_app
 from ecommerce_cs_agent.core.config import Settings
 
 
@@ -17,7 +18,7 @@ def _admin_cookie(client: TestClient) -> str:
 
 
 def test_product_asset_markdown_price_snapshot_and_review_flow_are_persisted() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_test_app())
     cookie = _admin_cookie(client)
     headers = {"Cookie": cookie}
 
@@ -92,7 +93,7 @@ def test_product_asset_markdown_price_snapshot_and_review_flow_are_persisted() -
 
 
 def test_product_list_is_scoped_to_current_customer_store() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_test_app())
     cookie = _admin_cookie(client)
     headers = {"Cookie": cookie}
 
@@ -136,7 +137,7 @@ def test_product_list_is_scoped_to_current_customer_store() -> None:
 
 
 def test_product_import_draft_upload_analyzes_without_creating_product() -> None:
-    client = TestClient(create_app(Settings(environment="test", object_storage_backend="memory")))
+    client = TestClient(create_test_app(Settings(environment="test", object_storage_backend="memory")))
     cookie = _admin_cookie(client)
     headers = {"Cookie": cookie}
     content = "标题: AI 提取商品\n外部商品ID: sku-ai-draft\n材质为棉。"
@@ -167,7 +168,7 @@ def test_product_import_draft_upload_analyzes_without_creating_product() -> None
 
 
 def test_product_import_draft_confirm_creates_product_asset_idempotently() -> None:
-    client = TestClient(create_app(Settings(environment="test", object_storage_backend="memory")))
+    client = TestClient(create_test_app(Settings(environment="test", object_storage_backend="memory")))
     cookie = _admin_cookie(client)
     headers = {"Cookie": cookie}
     upload = client.post(
@@ -220,7 +221,7 @@ def test_product_import_draft_confirm_creates_product_asset_idempotently() -> No
 
 
 def test_product_asset_storage_unavailable_returns_503_contract_error() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_test_app())
     cookie = _admin_cookie(client)
     headers = {"Cookie": cookie}
 
@@ -251,7 +252,7 @@ def test_product_asset_storage_unavailable_returns_503_contract_error() -> None:
 
 
 def test_product_asset_invalid_inline_content_returns_422_contract_error() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_test_app())
     cookie = _admin_cookie(client)
     headers = {"Cookie": cookie}
 

@@ -11,6 +11,7 @@ from referencing.jsonschema import DRAFT202012
 from ecommerce_cs_agent.api.app import create_app
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.system_admin import _message_trace_summary_from_row
+from tests.admin_fixtures import create_test_app
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -404,7 +405,7 @@ class OpenApiContractTest(unittest.TestCase):
             self.assertIn("organization_id", parameter_names, path)
             self.assertNotIn("tenant_id", parameter_names, path)
 
-        client = TestClient(create_app(Settings(environment="test", database_url=None)))
+        client = TestClient(create_test_app(Settings(environment="test", database_url=None)))
         headers = {"Cookie": "agent_system_admin_session=test-system-session"}
         organization_response = client.post(
             "/v1/system-admin/organizations",
@@ -910,7 +911,7 @@ class OpenApiContractTest(unittest.TestCase):
 
     def test_actual_llm_errors_validate_against_error_response_schema(self):
         client = TestClient(
-            create_app(
+            create_test_app(
                 Settings(environment="test", database_url=None),
                 llm_connection_tester=lambda _provider, _request: {"status": "passed", "latency_ms": 5},
             )
@@ -1005,7 +1006,7 @@ class OpenApiContractTest(unittest.TestCase):
 
     def test_actual_llm_success_payloads_validate_distinct_response_schemas(self):
         client = TestClient(
-            create_app(
+            create_test_app(
                 Settings(environment="test", database_url=None),
                 llm_connection_tester=lambda _provider, _request: {"status": "passed", "latency_ms": 5},
             )

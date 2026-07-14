@@ -10,6 +10,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from ecommerce_cs_agent.api.app import create_app
+from tests.admin_fixtures import create_test_app
 from ecommerce_cs_agent.services import open_erp_integration as open_erp_module
 
 
@@ -313,7 +314,7 @@ def test_connector_scope_rejects_cross_store_continuations_without_payload_scope
 
 
 def test_open_erp_launch_ticket_exchanges_to_customer_admin_session() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_test_app())
     connector = provision(client)
 
     ticket = client.post(

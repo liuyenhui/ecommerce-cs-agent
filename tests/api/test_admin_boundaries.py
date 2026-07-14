@@ -6,13 +6,28 @@ from fastapi.testclient import TestClient
 from ecommerce_cs_agent.api.app import create_app
 from ecommerce_cs_agent.core.config import Settings, load_settings
 from ecommerce_cs_agent.services.admin_auth import (
+    InMemoryAdminAuthService,
     InMemorySystemAdminAuthService,
+    admin_auth_service_for,
     system_admin_auth_service_for,
+)
+from ecommerce_cs_agent.services.admin import admin_repository_for
+from ecommerce_cs_agent.services.system_admin import InMemorySystemAdminRepository
+from tests.admin_fixtures import (
+    customer_admin_auth_fixture,
+    system_admin_auth_fixture,
+    system_admin_repository_fixture,
 )
 
 
 def _test_app():
-    return create_app(Settings(environment="test", database_url=None))
+    settings = Settings(environment="test", database_url=None)
+    return create_app(
+        settings,
+        admin_auth_service_override=customer_admin_auth_fixture(settings),
+        system_admin_auth_service_override=system_admin_auth_fixture(settings),
+        system_admin_repository_override=system_admin_repository_fixture(),
+    )
 
 
 def test_system_admin_auth_service_allows_in_memory_only_in_test() -> None:
@@ -24,6 +39,33 @@ def test_system_admin_auth_service_allows_in_memory_only_in_test() -> None:
 def test_system_admin_auth_service_requires_database_outside_test() -> None:
     with pytest.raises(RuntimeError, match="DATABASE_URL is required for System Admin"):
         system_admin_auth_service_for(Settings(environment="development", database_url=None))
+
+
+def test_customer_admin_auth_service_requires_database_outside_test() -> None:
+    with pytest.raises(RuntimeError, match="DATABASE_URL is required for Customer Admin"):
+        admin_auth_service_for(Settings(environment="development", database_url=None))
+
+
+def test_customer_admin_data_repository_requires_database_outside_test() -> None:
+    with pytest.raises(RuntimeError, match="DATABASE_URL is required for Customer Admin data"):
+        admin_repository_for(Settings(environment="development", database_url=None))
+
+
+def test_in_memory_admin_services_and_repository_default_empty() -> None:
+    settings = Settings(environment="test", database_url=None)
+    customer = InMemoryAdminAuthService(settings)
+    system = InMemorySystemAdminAuthService(settings)
+    repository = InMemorySystemAdminRepository()
+
+    assert customer.organizations == {}
+    assert customer.stores == {}
+    assert customer.users == {}
+    assert customer.sessions == {}
+    assert system.users == {}
+    assert system.sessions == {}
+    assert repository.users == {}
+    assert repository.organizations == {}
+    assert repository.stores == {}
 
 
 def test_external_api_token_cannot_call_customer_admin():

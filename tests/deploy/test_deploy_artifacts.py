@@ -141,7 +141,10 @@ def test_helm_api_uses_dedicated_service_account_and_secret_allowlist() -> None:
     schema = json.loads((chart_dir / "values.schema.json").read_text(encoding="utf-8"))
     cursor_schema = schema["properties"]["api"]["properties"]["cursorSigningSecretRef"]
     assert cursor_schema["required"] == ["name", "key"]
-    assert cursor_schema["properties"]["name"]["pattern"] == r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+    assert cursor_schema["properties"]["name"]["pattern"] == (
+        r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?"
+        r"(?:\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$"
+    )
     assert cursor_schema["properties"]["key"]["pattern"] == r"^[A-Za-z0-9._-]+$"
     assert api["secretAccess"]["allowedSecretRefs"][0]["name"] != api["envFromSecret"]
 
@@ -291,21 +294,41 @@ def test_helm_rejects_runtime_llm_ref_outside_dedicated_allowlist() -> None:
 
 
 def test_helm_rejects_invalid_or_provider_reused_cursor_signing_secret_ref() -> None:
-    invalid_name = _render_helm(
-        "--set", "api.cursorSigningSecretRef.name=Invalid_Name", expect_success=False
-    )
-    invalid_key = _render_helm(
-        "--set", "api.cursorSigningSecretRef.key=bad/key", expect_success=False
-    )
+    invalid_names = {
+        value: _render_helm(
+            "--set-string", f"api.cursorSigningSecretRef.name={value}", expect_success=False
+        )
+        for value in ("a..b", ".a", "a.", "-a", "a-", "Invalid_Name", "")
+    }
+    invalid_key = _render_helm("--set-string", "api.cursorSigningSecretRef.key=bad/key", expect_success=False)
     provider_reuse = _render_helm(
         "--set", "api.cursorSigningSecretRef.name=ecommerce-cs-agent-llm-provider",
         "--set", "api.cursorSigningSecretRef.key=api-key",
         expect_success=False,
     )
+    second_provider_reuse = _render_helm(
+        "--set-json",
+        'api.secretAccess.allowedSecretRefs=[{"name":"ecommerce-cs-agent-llm-provider","keys":[{"key":"api-key","allowedOrigins":[]}]},{"name":"second-provider","keys":[{"key":"token","allowedOrigins":["https://models.example"]}]}]',
+        "--set", "api.cursorSigningSecretRef.name=second-provider",
+        "--set", "api.cursorSigningSecretRef.key=cursor-key",
+        expect_success=False,
+    )
 
-    assert "/api/cursorSigningSecretRef/name" in invalid_name
+    for output in invalid_names.values():
+        assert "/api/cursorSigningSecretRef/name" in output
     assert "/api/cursorSigningSecretRef/key" in invalid_key
     assert "cursorSigningSecretRef must be separate from runtimeLlmSecretRef" in provider_reuse
+    assert "cursorSigningSecretRef must be separate from every allowed provider Secret" in second_provider_reuse
+
+
+def test_helm_accepts_legal_cursor_signing_secret_subdomain_and_key() -> None:
+    rendered = _render_helm(
+        "--set", "api.cursorSigningSecretRef.name=cursor-signing.security-agent",
+        "--set", "api.cursorSigningSecretRef.key=signing_key.v1",
+    )
+
+    assert "cursor-signing.security-agent" in rendered
+    assert "signing_key.v1" in rendered
 
 
 def test_api_deployment_is_stateless_and_uses_shared_external_state() -> None:

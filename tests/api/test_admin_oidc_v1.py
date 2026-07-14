@@ -4,8 +4,8 @@ from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
 
-from ecommerce_cs_agent.api.app import create_app
 from ecommerce_cs_agent.core.config import Settings
+from tests.admin_fixtures import create_test_app
 
 
 def _oidc_settings() -> Settings:
@@ -20,7 +20,7 @@ def _oidc_settings() -> Settings:
 
 
 def test_customer_admin_oidc_start_disabled_returns_clear_config_error() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_test_app())
 
     response = client.get("/v1/admin/auth/oidc/start", follow_redirects=False)
 
@@ -31,7 +31,7 @@ def test_customer_admin_oidc_start_disabled_returns_clear_config_error() -> None
 
 
 def test_customer_admin_oidc_start_redirects_to_fcihome_without_admin_session() -> None:
-    client = TestClient(create_app(_oidc_settings()))
+    client = TestClient(create_test_app(_oidc_settings()))
 
     response = client.get("/v1/admin/auth/oidc/start", follow_redirects=False)
 
@@ -46,7 +46,7 @@ def test_customer_admin_oidc_start_redirects_to_fcihome_without_admin_session() 
 
 def test_customer_admin_oidc_callback_sets_only_customer_session(monkeypatch) -> None:
     settings = _oidc_settings()
-    client = TestClient(create_app(settings))
+    client = TestClient(create_test_app(settings))
     start = client.get("/v1/admin/auth/oidc/start", follow_redirects=False)
     state = _query_value(start.headers["location"], "state")
 
@@ -80,7 +80,7 @@ def test_customer_admin_oidc_callback_sets_only_customer_session(monkeypatch) ->
 
 
 def test_customer_admin_oidc_callback_state_failure_redirects_to_distinct_login_error(monkeypatch) -> None:
-    client = TestClient(create_app(_oidc_settings()))
+    client = TestClient(create_test_app(_oidc_settings()))
     client.get("/v1/admin/auth/oidc/start", follow_redirects=False)
 
     def fake_exchange(_settings: Settings, _code: str, _state_payload: dict[str, str]) -> dict[str, object]:
@@ -101,7 +101,7 @@ def test_customer_admin_oidc_callback_state_failure_redirects_to_distinct_login_
 
 def test_customer_admin_oidc_callback_unbound_account_redirects_to_distinct_login_error(monkeypatch) -> None:
     settings = _oidc_settings()
-    client = TestClient(create_app(settings))
+    client = TestClient(create_test_app(settings))
     start = client.get("/v1/admin/auth/oidc/start", follow_redirects=False)
     state = _query_value(start.headers["location"], "state")
 
@@ -127,7 +127,7 @@ def test_customer_admin_oidc_callback_unbound_account_redirects_to_distinct_logi
 
 def test_customer_admin_oidc_link_requires_customer_session(monkeypatch) -> None:
     settings = _oidc_settings()
-    client = TestClient(create_app(settings))
+    client = TestClient(create_test_app(settings))
 
     missing_session = client.post(
         "/v1/admin/auth/oidc/link",
@@ -163,7 +163,7 @@ def test_customer_admin_oidc_link_requires_customer_session(monkeypatch) -> None
 
 
 def test_system_admin_has_no_oidc_entrypoint() -> None:
-    client = TestClient(create_app(_oidc_settings()))
+    client = TestClient(create_test_app(_oidc_settings()))
 
     response = client.get("/v1/system-admin/auth/oidc/start")
 

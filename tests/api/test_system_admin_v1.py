@@ -22,15 +22,16 @@ from ecommerce_cs_agent.services.system_admin import (
     system_admin_repository_for,
 )
 from tests.api.test_v1_api import auth_headers, minimal_reply_request
+from tests.admin_fixtures import system_admin_auth_fixture, system_admin_session_fixture
 
 
 def _test_app():
-    return create_app(Settings(environment="test", database_url=None))
+    settings = Settings(environment="test", database_url=None)
+    return create_app(settings, system_admin_auth_service_override=system_admin_auth_fixture(settings))
 
 
 def _system_session():
-    service = InMemorySystemAdminAuthService(Settings(environment="test", database_url=None))
-    return service.require_session("agent_system_admin_session=test-system-session", None)[1]
+    return system_admin_session_fixture()
 
 
 def test_system_admin_repository_allows_in_memory_only_in_test() -> None:
@@ -545,7 +546,7 @@ def test_system_admin_dashboard_summary_uses_postgres_total_aggregates(monkeypat
         self._database_url = database_url
         self._connect = lambda _url: connection
 
-    monkeypatch.setattr(app_module, "system_admin_auth_service_for", lambda settings: InMemorySystemAdminAuthService(settings))
+    monkeypatch.setattr(app_module, "system_admin_auth_service_for", system_admin_auth_fixture)
     monkeypatch.setattr(PostgresSystemAdminRepository, "__init__", fake_repo_init)
 
     client = TestClient(create_app(
@@ -735,7 +736,7 @@ def test_system_admin_api_uses_postgres_repository_when_database_url_is_configur
         self._database_url = database_url
         self._connect = lambda _url: connection
 
-    monkeypatch.setattr(app_module, "system_admin_auth_service_for", lambda settings: InMemorySystemAdminAuthService(settings))
+    monkeypatch.setattr(app_module, "system_admin_auth_service_for", system_admin_auth_fixture)
     monkeypatch.setattr(PostgresSystemAdminRepository, "__init__", fake_repo_init)
 
     client = TestClient(create_app(
@@ -779,7 +780,7 @@ def test_system_admin_message_traces_use_postgres_repository_when_database_url_i
         self._database_url = database_url
         self._connect = lambda _url: connection
 
-    monkeypatch.setattr(app_module, "system_admin_auth_service_for", lambda settings: InMemorySystemAdminAuthService(settings))
+    monkeypatch.setattr(app_module, "system_admin_auth_service_for", system_admin_auth_fixture)
     monkeypatch.setattr(PostgresSystemAdminRepository, "__init__", fake_repo_init)
 
     client = TestClient(create_app(
@@ -818,8 +819,8 @@ def test_system_admin_pagination_parameters_are_applied() -> None:
     response = client.get("/v1/system-admin/organizations?page=2&page_size=2", headers=headers)
 
     assert response.status_code == 200
-    assert response.json()["page_info"] == {"page": 2, "page_size": 2, "total": 4}
-    assert len(response.json()["items"]) == 2
+    assert response.json()["page_info"] == {"page": 2, "page_size": 2, "total": 3}
+    assert len(response.json()["items"]) == 1
 
 
 class _FakeConnection:

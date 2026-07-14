@@ -14,6 +14,7 @@ from ecommerce_cs_agent.api.app import create_app
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.admin_auth import InMemorySystemAdminAuthService, SystemAdminSession
 from ecommerce_cs_agent.services.llm_governance import InMemoryLlmGovernanceRepository as _InMemoryLlmGovernanceRepository
+from tests.admin_fixtures import create_test_app
 
 
 ORG_ID = "11111111-1111-1111-1111-111111111111"
@@ -617,7 +618,7 @@ def test_unexpected_repository_error_returns_safe_500(monkeypatch: pytest.Monkey
 
 
 def test_default_test_adapters_fail_safely_instead_of_running_fake_checks() -> None:
-    client = TestClient(create_app(Settings(environment="test", database_url=None)))
+    client = TestClient(create_test_app(Settings(environment="test", database_url=None)))
     provider = client.post("/v1/system-admin/llm/providers", headers=SYSTEM_HEADERS, json=PROVIDER).json()
     draft = client.post(
         "/v1/system-admin/llm/config-versions/drafts",
@@ -640,7 +641,7 @@ def test_default_test_adapters_fail_safely_instead_of_running_fake_checks() -> N
 
 def test_default_release_gate_fails_safely_without_a_real_evaluation_adapter() -> None:
     client = TestClient(
-        create_app(
+        create_test_app(
             Settings(environment="test", database_url=None),
             llm_connection_tester=lambda _provider, _request: {"status": "passed", "latency_ms": 5},
         )
