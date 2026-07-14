@@ -41,6 +41,29 @@ def assert_deferred_integrity_error(
     cursor.execute("SET CONSTRAINTS ALL DEFERRED")
 
 
+def create_completed_evaluation(
+    cursor: psycopg.Cursor[object],
+    evaluation_run_id: str,
+    organization_id: object,
+    config_version_id: object,
+) -> None:
+    cursor.execute(
+        "SELECT status, revision, configuration_hash FROM llm_config_version WHERE id=%s",
+        (config_version_id,),
+    )
+    status, revision, configuration_hash = cursor.fetchone()
+    assert status == "validated"
+    assert len(str(configuration_hash)) == 64
+    cursor.execute(
+        "INSERT INTO llm_eval_run (id, organization_id, config_version_id, config_revision, configuration_hash) VALUES (%s,%s,%s,%s,%s)",
+        (evaluation_run_id, organization_id, config_version_id, revision, configuration_hash),
+    )
+    cursor.execute(
+        "UPDATE llm_eval_run SET status='completed', gate_status='passed', completed_at=now(), revision=2 WHERE id=%s",
+        (evaluation_run_id,),
+    )
+
+
 def set_test_search_path(cursor: psycopg.Cursor[object], schema_name: str) -> None:
     cursor.execute(sql.SQL("SET LOCAL search_path TO {}, public").format(sql.Identifier(schema_name)))
     cursor.execute("SET LOCAL lock_timeout = '5s'")
@@ -255,23 +278,59 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 (organization_id, system_admin_user_id),
             )
             config_version_id = cursor.fetchone()[0]
+            assert_integrity_error(
+                cursor,
+                "INSERT INTO llm_eval_run (id, organization_id, config_version_id, config_revision, configuration_hash) VALUES ('eval-draft', %s, %s, 1, %s)",
+                (organization_id, config_version_id, "a" * 64),
+            )
             cursor.execute(
-                "INSERT INTO llm_eval_run (id, organization_id, config_version_id) VALUES ('eval-migration', %s, %s)",
-                (organization_id, config_version_id),
+                "INSERT INTO llm_config_version (organization_id, version_number, configuration_hash, created_by_system_admin_user_id) VALUES (%s, 99, %s, %s) RETURNING id",
+                (organization_id, "a" * 64, system_admin_user_id),
+            )
+            eval_version_id = cursor.fetchone()[0]
+            cursor.execute("UPDATE llm_config_version SET status='validated', revision=2 WHERE id=%s", (eval_version_id,))
+            assert_integrity_error(
+                cursor,
+                "INSERT INTO llm_eval_run (id, organization_id, config_version_id, config_revision, configuration_hash) VALUES ('eval-bad-revision', %s, %s, 1, %s)",
+                (organization_id, eval_version_id, "a" * 64),
             )
             assert_integrity_error(
                 cursor,
-                "UPDATE llm_eval_run SET gate_status='passed', revision=revision+1 WHERE id='eval-migration'",
+                "INSERT INTO llm_eval_run (id, organization_id, config_version_id, config_revision, configuration_hash) VALUES ('eval-bad-hash', %s, %s, 2, %s)",
+                (organization_id, eval_version_id, "b" * 64),
+            )
+            cursor.execute(
+                "INSERT INTO llm_eval_run (id, organization_id, config_version_id, config_revision, configuration_hash) VALUES ('eval-snapshot-constraints', %s, %s, 2, %s)",
+                (organization_id, eval_version_id, "a" * 64),
+            )
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_eval_run SET gate_status='passed', revision=revision+1 WHERE id='eval-snapshot-constraints'",
+                (),
+            )
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_eval_run SET status='completed', gate_status='failed', completed_at=created_at - interval '1 second', revision=revision+1 WHERE id='eval-snapshot-constraints'",
                 (),
             )
             cursor.execute(
-                "UPDATE llm_eval_run SET status='completed', gate_status='passed', completed_at=now(), revision=revision+1 WHERE id='eval-migration'"
+                "UPDATE llm_eval_run SET status='completed', gate_status='passed', completed_at=now(), revision=revision+1 WHERE id='eval-snapshot-constraints'"
             )
-            assert_integrity_error(cursor, "DELETE FROM llm_eval_run WHERE id='eval-migration'", ())
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_eval_run SET config_revision=config_revision+1, revision=revision+1 WHERE id='eval-snapshot-constraints'",
+                (),
+            )
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_eval_run SET configuration_hash=%s, revision=revision+1 WHERE id='eval-snapshot-constraints'",
+                ("b" * 64,),
+            )
+            assert_integrity_error(cursor, "DELETE FROM llm_eval_run WHERE id='eval-snapshot-constraints'", ())
             cursor.execute(
                 """
                 UPDATE llm_config_version
-                SET configuration_hash = 'edited-draft-hash',
+                SET configuration_hash = repeat('a', 64),
                     description = 'edited while draft',
                     revision = revision + 1
                 WHERE id = %s
@@ -286,7 +345,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 """,
                 (config_version_id,),
             )
-            assert cursor.fetchone() == ("edited-draft-hash", "edited while draft")
+            assert cursor.fetchone() == ("a" * 64, "edited while draft")
             assert_integrity_error(
                 cursor,
                 """
@@ -494,6 +553,19 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 """,
                 (config_version_id,),
             )
+            cursor.execute(
+                """
+                INSERT INTO llm_eval_run (
+                    id, organization_id, config_version_id, config_revision, configuration_hash
+                )
+                SELECT 'migration-eval', organization_id, id, revision, configuration_hash
+                FROM llm_config_version WHERE id=%s
+                """,
+                (config_version_id,),
+            )
+            cursor.execute(
+                "UPDATE llm_eval_run SET status='completed', gate_status='passed', completed_at=now(), revision=2 WHERE id='migration-eval'"
+            )
             assert_integrity_error(
                 cursor,
                 "UPDATE llm_config_version SET id = gen_random_uuid(), revision = revision + 1 WHERE id = %s",
@@ -567,11 +639,12 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 """
                 INSERT INTO llm_release_record (
                     organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id,
                     submitted_by_system_admin_user_id
-                ) VALUES (%s, %s, 'migration-eval', %s)
+                ) VALUES (%s, %s, 'migration-eval', %s, %s)
                 RETURNING id
                 """,
-                (organization_id, config_version_id, system_admin_user_id),
+                (organization_id, config_version_id, config_version_id, system_admin_user_id),
             )
             release_record_id = cursor.fetchone()[0]
             assert_integrity_error(
@@ -579,10 +652,11 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 """
                 INSERT INTO llm_release_record (
                     organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id,
                     submitted_by_system_admin_user_id
-                ) VALUES (%s, %s, 'wrong-tenant', %s)
+                ) VALUES (%s, %s, 'migration-eval', %s, %s)
                 """,
-                (other_organization_id, config_version_id, system_admin_user_id),
+                (other_organization_id, config_version_id, config_version_id, system_admin_user_id),
             )
             cursor.execute(
                 """
@@ -600,6 +674,11 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
             assert_integrity_error(
                 cursor,
                 "UPDATE llm_release_record SET evaluation_run_id='rewritten', revision=revision+1 WHERE id=%s",
+                (release_record_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_release_record SET evaluation_config_version_id=gen_random_uuid(), revision=revision+1 WHERE id=%s",
                 (release_record_id,),
             )
             assert_integrity_error(cursor, "DELETE FROM llm_release_record WHERE id=%s", (release_record_id,))
@@ -924,27 +1003,26 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                 (organization_id, admin_id),
             )
             draft_id = cursor.fetchone()[0]
-            assert_deferred_integrity_error(
+            assert_integrity_error(
                 cursor,
-                [(
-                    """
-                    INSERT INTO llm_release_record (
-                        organization_id, config_version_id, evaluation_run_id,
-                        submitted_by_system_admin_user_id
-                    ) VALUES (%s, %s, 'draft-release', %s)
-                    """,
-                    (organization_id, draft_id, admin_id),
-                )],
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id, submitted_by_system_admin_user_id
+                ) VALUES (%s, %s, 'draft-release', %s, %s)
+                """,
+                (organization_id, draft_id, draft_id, admin_id),
             )
             assert_integrity_error(
                 cursor,
                 """
                 INSERT INTO llm_release_record (
                     organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id,
                     submitted_by_system_admin_user_id
-                ) VALUES (%s, %s, '   ', %s)
+                ) VALUES (%s, %s, '   ', %s, %s)
                 """,
-                (organization_id, draft_id, admin_id),
+                (organization_id, draft_id, draft_id, admin_id),
             )
             for whitespace_only_evaluation_id in ("\t", "\n", "\r\n\t"):
                 assert_integrity_error(
@@ -952,13 +1030,15 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                     """
                     INSERT INTO llm_release_record (
                         organization_id, config_version_id, evaluation_run_id,
+                        evaluation_config_version_id,
                         submitted_by_system_admin_user_id
-                    ) VALUES (%s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s)
                     """,
                     (
                         organization_id,
                         draft_id,
                         whitespace_only_evaluation_id,
+                        draft_id,
                         admin_id,
                     ),
                 )
@@ -971,13 +1051,28 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                         INSERT INTO llm_config_version (
                             organization_id, version_number, configuration_hash,
                             created_by_system_admin_user_id
-                        ) VALUES (%s, 2, 'running-with-pending-release', %s)
+                        ) VALUES (%s, 2, %s, %s)
                         """,
-                        (organization_id, admin_id),
+                        (organization_id, "e" * 64, admin_id),
                     ),
                     (
                         "UPDATE llm_config_version SET status='validated', revision=revision+1 WHERE version_number=2 AND organization_id=%s",
                         (organization_id,),
+                    ),
+                    (
+                        """
+                        INSERT INTO llm_eval_run (
+                            id, organization_id, config_version_id, config_revision, configuration_hash
+                        )
+                        SELECT 'pending-only', organization_id, id, revision, configuration_hash
+                        FROM llm_config_version
+                        WHERE version_number=2 AND organization_id=%s
+                        """,
+                        (organization_id,),
+                    ),
+                    (
+                        "UPDATE llm_eval_run SET status='completed', gate_status='passed', completed_at=now(), revision=2 WHERE id='pending-only'",
+                        (),
                     ),
                     (
                         "UPDATE llm_config_version SET status='pending_publish', revision=revision+1 WHERE version_number=2 AND organization_id=%s",
@@ -987,8 +1082,9 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                         """
                         INSERT INTO llm_release_record (
                             organization_id, config_version_id, evaluation_run_id,
+                            evaluation_config_version_id,
                             submitted_by_system_admin_user_id
-                        ) SELECT organization_id, id, 'pending-only', %s
+                        ) SELECT organization_id, id, 'pending-only', id, %s
                           FROM llm_config_version
                          WHERE organization_id=%s AND version_number=2
                         """,
@@ -1016,12 +1112,18 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                     ) VALUES (%s, %s, %s, %s)
                     RETURNING id
                     """,
-                    (organization_id, version_number, f"terminal-{version_number}", admin_id),
+                    (organization_id, version_number, format(version_number, "064x"), admin_id),
                 )
                 version_id = cursor.fetchone()[0]
                 cursor.execute(
                     "UPDATE llm_config_version SET status='validated', revision=revision+1 WHERE id=%s",
                     (version_id,),
+                )
+                create_completed_evaluation(
+                    cursor,
+                    f"terminal-eval-{version_number}",
+                    organization_id,
+                    version_id,
                 )
                 cursor.execute(
                     "UPDATE llm_config_version SET status='pending_publish', revision=revision+1 WHERE id=%s",
@@ -1029,13 +1131,14 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                 )
                 cursor.execute(
                     """
-                    INSERT INTO llm_release_record (
-                        organization_id, config_version_id, evaluation_run_id,
-                        submitted_by_system_admin_user_id
-                    ) VALUES (%s, %s, %s, %s)
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id,
+                    submitted_by_system_admin_user_id
+                ) VALUES (%s, %s, %s, %s, %s)
                     RETURNING id
                     """,
-                    (organization_id, version_id, f"terminal-eval-{version_number}", admin_id),
+                    (organization_id, version_id, f"terminal-eval-{version_number}", version_id, admin_id),
                 )
                 release_id = cursor.fetchone()[0]
                 cursor.execute(
@@ -1073,13 +1176,15 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                 """
                 INSERT INTO llm_release_record (
                     organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id,
                     submitted_by_system_admin_user_id,
                     rollback_of_release_id, rollback_of_version_id
-                ) VALUES (%s, %s, 'ordinary-with-rollback-links', %s, %s, %s)
+                ) VALUES (%s, %s, 'terminal-eval-10', %s, %s, %s, %s)
                 """,
                 (
                     organization_id,
                     draft_id,
+                    first_version_id,
                     admin_id,
                     first_release_id,
                     first_version_id,
@@ -1101,43 +1206,48 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                 """
                 INSERT INTO llm_release_record (
                     organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id,
                     submitted_by_system_admin_user_id
-                ) VALUES (%s, %s, 'rollback-without-links', %s)
+                ) VALUES (%s, %s, 'terminal-eval-10', %s, %s)
                 """,
-                (organization_id, rollback_version_id, admin_id),
+                (organization_id, rollback_version_id, first_version_id, admin_id),
             )
             assert_integrity_error(
                 cursor,
                 """
                 INSERT INTO llm_release_record (
                     organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id,
                     submitted_by_system_admin_user_id, rollback_of_release_id
-                ) VALUES (%s, %s, 'partial-rollback', %s, %s)
+                ) VALUES (%s, %s, 'terminal-eval-10', %s, %s, %s)
                 """,
-                (organization_id, rollback_version_id, admin_id, first_release_id),
+                (organization_id, rollback_version_id, first_version_id, admin_id, first_release_id),
             )
             assert_integrity_error(
                 cursor,
                 """
                 INSERT INTO llm_release_record (
                     organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id,
                     submitted_by_system_admin_user_id, rollback_of_version_id
-                ) VALUES (%s, %s, 'partial-rollback-version', %s, %s)
+                ) VALUES (%s, %s, 'terminal-eval-10', %s, %s, %s)
                 """,
-                (organization_id, rollback_version_id, admin_id, first_version_id),
+                (organization_id, rollback_version_id, first_version_id, admin_id, first_version_id),
             )
             assert_integrity_error(
                 cursor,
                 """
                 INSERT INTO llm_release_record (
                     organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id,
                     submitted_by_system_admin_user_id,
                     rollback_of_release_id, rollback_of_version_id
-                ) VALUES (%s, %s, 'mismatched-rollback', %s, %s, %s)
+                ) VALUES (%s, %s, 'terminal-eval-10', %s, %s, %s, %s)
                 """,
                 (
                     organization_id,
                     rollback_version_id,
+                    first_version_id,
                     admin_id,
                     first_release_id,
                     second_version_id,
@@ -1148,13 +1258,15 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                 """
                 INSERT INTO llm_release_record (
                     organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id,
                     submitted_by_system_admin_user_id,
                     rollback_of_release_id, rollback_of_version_id
-                ) VALUES (%s, %s, 'target-source-mismatch', %s, %s, %s)
+                ) VALUES (%s, %s, 'terminal-eval-11', %s, %s, %s, %s)
                 """,
                 (
                     organization_id,
                     rollback_version_id,
+                    second_version_id,
                     admin_id,
                     second_release_id,
                     second_version_id,
@@ -1168,17 +1280,52 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
                 "UPDATE llm_config_version SET status='pending_publish', revision=revision+1 WHERE id=%s",
                 (rollback_version_id,),
             )
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id, submitted_by_system_admin_user_id,
+                    rollback_of_release_id, rollback_of_version_id
+                ) VALUES (%s,%s,'missing-eval',%s,%s,%s,%s)
+                """,
+                (organization_id, rollback_version_id, first_version_id, admin_id, first_release_id, first_version_id),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id, submitted_by_system_admin_user_id,
+                    rollback_of_release_id, rollback_of_version_id
+                ) VALUES (%s,%s,'terminal-eval-10',%s,%s,%s,%s)
+                """,
+                (other_organization_id, rollback_version_id, first_version_id, admin_id, first_release_id, first_version_id),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_release_record (
+                    organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id, submitted_by_system_admin_user_id,
+                    rollback_of_release_id, rollback_of_version_id
+                ) VALUES (%s,%s,'terminal-eval-10',%s,%s,%s,%s)
+                """,
+                (organization_id, rollback_version_id, second_version_id, admin_id, first_release_id, first_version_id),
+            )
             cursor.execute(
                 """
                 INSERT INTO llm_release_record (
                     organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id,
                     submitted_by_system_admin_user_id,
                     rollback_of_release_id, rollback_of_version_id
-                ) VALUES (%s, %s, 'valid-rollback', %s, %s, %s)
+                ) VALUES (%s, %s, 'terminal-eval-10', %s, %s, %s, %s)
                 """,
                 (
                     organization_id,
                     rollback_version_id,
+                    first_version_id,
                     admin_id,
                     first_release_id,
                     first_version_id,
@@ -1245,20 +1392,29 @@ def test_postgres_evaluation_release_gate_checker_reads_migrated_table() -> None
             cursor.execute("INSERT INTO organization (name) VALUES ('Eval Gate') RETURNING id")
             organization_id = cursor.fetchone()[0]
             cursor.execute(
-                "INSERT INTO llm_config_version (organization_id, version_number, configuration_hash, created_by_system_admin_user_id) VALUES (%s,1,'hash',%s) RETURNING id",
-                (organization_id, admin_id),
+                "INSERT INTO llm_config_version (organization_id, version_number, configuration_hash, created_by_system_admin_user_id) VALUES (%s,1,%s,%s) RETURNING id",
+                (organization_id, "a" * 64, admin_id),
             )
             version_id = cursor.fetchone()[0]
-            cursor.execute("INSERT INTO llm_eval_run (id, organization_id, config_version_id) VALUES ('eval-real',%s,%s)", (organization_id, version_id))
-            cursor.execute("UPDATE llm_eval_run SET status='completed', gate_status='passed', completed_at=now(), revision=2 WHERE id='eval-real'")
+            cursor.execute("UPDATE llm_config_version SET status='validated', revision=2 WHERE id=%s", (version_id,))
+            create_completed_evaluation(cursor, "eval-real", organization_id, version_id)
         connection.commit()
 
         checker = PostgresEvaluationReleaseGateChecker(
             DATABASE_URL,
             connect=lambda url: psycopg.connect(url, options=f"-csearch_path={schema_name},public"),
         )
-        assert checker({"organization_id": str(organization_id), "version_id": str(version_id)}, "eval-real")["status"] == "passed"
-        assert checker({"organization_id": str(organization_id), "version_id": str(version_id)}, "missing")["status"] == "failed"
+        candidate = {"organization_id": str(organization_id), "version_id": str(version_id), "revision": 2, "configuration_hash": "a" * 64, "status": "validated"}
+        assert checker(candidate, "eval-real")["status"] == "passed"
+        assert checker(candidate, "missing")["status"] == "failed"
+        assert checker({**candidate, "revision": 3}, "eval-real")["status"] == "failed"
+        assert checker({**candidate, "configuration_hash": "b" * 64}, "eval-real")["status"] == "failed"
+        assert checker({**candidate, "organization_id": str(uuid.uuid4())}, "eval-real")["status"] == "failed"
+        assert checker({**candidate, "version_id": str(uuid.uuid4())}, "eval-real")["status"] == "failed"
+        with psycopg.connect(DATABASE_URL, options=f"-csearch_path={schema_name},public") as transition:
+            with transition.cursor() as cursor:
+                cursor.execute("UPDATE llm_config_version SET status='pending_publish', revision=3 WHERE id=%s", (version_id,))
+        assert checker(candidate, "eval-real")["status"] == "failed"
     finally:
         connection.rollback()
         connection.close()
@@ -1350,10 +1506,10 @@ def test_llm_version_lock_serializes_route_metric_and_release_writes() -> None:
                 INSERT INTO llm_config_version (
                     organization_id, version_number, status, configuration_hash,
                     created_by_system_admin_user_id
-                ) VALUES (%s, 2, 'draft', 'metric-race', %s)
+                ) VALUES (%s, 2, 'draft', %s, %s)
                 RETURNING id
                 """,
-                (organization_id, system_admin_user_id),
+                (organization_id, "c" * 64, system_admin_user_id),
             )
             metric_race_version_id = cursor.fetchone()[0]
             cursor.execute(
@@ -1370,6 +1526,9 @@ def test_llm_version_lock_serializes_route_metric_and_release_writes() -> None:
                 "UPDATE llm_config_version SET status = 'validated', revision = revision + 1 WHERE id = %s",
                 (metric_race_version_id,),
             )
+            create_completed_evaluation(
+                cursor, "metric-race-eval", organization_id, metric_race_version_id
+            )
             cursor.execute(
                 "UPDATE llm_config_version SET status = 'pending_publish', revision = revision + 1 WHERE id = %s",
                 (metric_race_version_id,),
@@ -1378,11 +1537,12 @@ def test_llm_version_lock_serializes_route_metric_and_release_writes() -> None:
                 """
                 INSERT INTO llm_release_record (
                     organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id,
                     submitted_by_system_admin_user_id
-                ) VALUES (%s, %s, 'metric-race-eval', %s)
+                ) VALUES (%s, %s, 'metric-race-eval', %s, %s)
                 RETURNING id
                 """,
-                (organization_id, metric_race_version_id, system_admin_user_id),
+                (organization_id, metric_race_version_id, metric_race_version_id, system_admin_user_id),
             )
             metric_race_release_id = cursor.fetchone()[0]
             cursor.execute(
@@ -1449,10 +1609,10 @@ def test_llm_version_lock_serializes_route_metric_and_release_writes() -> None:
                 INSERT INTO llm_config_version (
                     organization_id, version_number, configuration_hash,
                     created_by_system_admin_user_id
-                ) VALUES (%s, 3, 'release-race', %s)
+                ) VALUES (%s, 3, %s, %s)
                 RETURNING id
                 """,
-                (organization_id, system_admin_user_id),
+                (organization_id, "d" * 64, system_admin_user_id),
             )
             release_race_version_id = cursor.fetchone()[0]
         setup_connection.commit()
@@ -1464,6 +1624,9 @@ def test_llm_version_lock_serializes_route_metric_and_release_writes() -> None:
                 "UPDATE llm_config_version SET status='validated', revision=revision+1 WHERE id=%s",
                 (release_race_version_id,),
             )
+            create_completed_evaluation(
+                cursor, "concurrent-release", organization_id, release_race_version_id
+            )
 
         release_worker_name = f"migration-release-lock-{uuid.uuid4().hex}"
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -1473,10 +1636,11 @@ def test_llm_version_lock_serializes_route_metric_and_release_writes() -> None:
                 """
                 INSERT INTO llm_release_record (
                     organization_id, config_version_id, evaluation_run_id,
+                    evaluation_config_version_id,
                     submitted_by_system_admin_user_id
-                ) VALUES (%s, %s, 'concurrent-release', %s)
+                ) VALUES (%s, %s, 'concurrent-release', %s, %s)
                 """,
-                (organization_id, release_race_version_id, system_admin_user_id),
+                (organization_id, release_race_version_id, release_race_version_id, system_admin_user_id),
                 release_worker_name,
             )
             wait_for_backend_lock(release_worker_name)
@@ -1548,14 +1712,15 @@ def test_llm_version_lock_serializes_route_metric_and_release_writes() -> None:
                         """
                         INSERT INTO llm_release_record (
                             organization_id, config_version_id, evaluation_run_id,
+                            evaluation_config_version_id,
                             submitted_by_system_admin_user_id,
                             rollback_of_release_id, rollback_of_version_id
-                        ) VALUES (%s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, 'metric-race-eval', %s, %s, %s, %s)
                         """,
                         (
                             organization_id,
                             rollback_race_version_id,
-                            f"rollback-deadlock-{mutation_name}",
+                            metric_race_version_id,
                             system_admin_user_id,
                             metric_race_release_id,
                             metric_race_version_id,

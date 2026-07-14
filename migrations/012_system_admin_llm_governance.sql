@@ -67,6 +67,9 @@ CREATE TABLE IF NOT EXISTS llm_eval_run (
         CHECK (length(id) BETWEEN 1 AND 128 AND id ~ '^[A-Za-z0-9][A-Za-z0-9_:-]*$'),
     organization_id uuid NOT NULL REFERENCES organization(id) ON DELETE RESTRICT,
     config_version_id uuid NOT NULL,
+    config_revision integer NOT NULL CHECK (config_revision > 0),
+    configuration_hash char(64) NOT NULL
+        CHECK (configuration_hash ~ '^[0-9a-f]{64}$'),
     status text NOT NULL DEFAULT 'running'
         CHECK (status IN ('running', 'completed', 'failed', 'canceled')),
     gate_status text NOT NULL DEFAULT 'pending'
@@ -89,6 +92,7 @@ CREATE TABLE IF NOT EXISTS llm_eval_run (
         OR (status = 'completed' AND gate_status IN ('passed', 'failed') AND completed_at IS NOT NULL)
         OR (status IN ('failed', 'canceled') AND gate_status = 'failed' AND completed_at IS NOT NULL)
     ),
+    CHECK (completed_at IS NULL OR completed_at >= created_at),
     CHECK (gate_status <> 'passed' OR (status = 'completed' AND red_line_failures = 0))
 );
 
@@ -104,6 +108,7 @@ CREATE TABLE IF NOT EXISTS llm_release_record (
             length(evaluation_run_id) <= 128
             AND evaluation_run_id ~ '[^[:space:]]'
         ),
+    evaluation_config_version_id uuid NOT NULL,
     status text NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'running', 'superseded', 'rolled_back')),
     submitted_by_system_admin_user_id uuid NOT NULL
@@ -118,14 +123,20 @@ CREATE TABLE IF NOT EXISTS llm_release_record (
     UNIQUE (config_version_id),
     FOREIGN KEY (config_version_id, organization_id)
         REFERENCES llm_config_version(id, organization_id) ON DELETE RESTRICT,
+    FOREIGN KEY (evaluation_run_id, organization_id, evaluation_config_version_id)
+        REFERENCES llm_eval_run(id, organization_id, config_version_id) ON DELETE RESTRICT,
     CHECK (
         (status = 'pending' AND published_by_system_admin_user_id IS NULL AND published_at IS NULL)
         OR (status IN ('running', 'superseded', 'rolled_back')
             AND published_by_system_admin_user_id IS NOT NULL AND published_at IS NOT NULL)
     ),
     CHECK (
-        (rollback_of_release_id IS NULL AND rollback_of_version_id IS NULL)
-        OR (rollback_of_release_id IS NOT NULL AND rollback_of_version_id IS NOT NULL)
+        (rollback_of_release_id IS NULL
+            AND rollback_of_version_id IS NULL
+            AND evaluation_config_version_id = config_version_id)
+        OR (rollback_of_release_id IS NOT NULL
+            AND rollback_of_version_id IS NOT NULL
+            AND evaluation_config_version_id = rollback_of_version_id)
     )
 );
 
@@ -600,11 +611,35 @@ CREATE OR REPLACE FUNCTION protect_llm_eval_run_history()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    version_organization_id uuid;
+    version_status text;
+    version_revision integer;
+    version_configuration_hash text;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'evaluation run history is immutable' USING ERRCODE = '23514';
     END IF;
     IF TG_OP = 'INSERT' THEN
+        SELECT organization_id, status, revision, configuration_hash
+        INTO version_organization_id, version_status, version_revision, version_configuration_hash
+        FROM llm_config_version
+        WHERE id = NEW.config_version_id
+        FOR UPDATE;
+        IF NOT FOUND
+            OR version_organization_id IS DISTINCT FROM NEW.organization_id
+            OR version_status <> 'validated'
+        THEN
+            RAISE EXCEPTION 'evaluation runs require a validated config version snapshot'
+                USING ERRCODE = '23514';
+        END IF;
+        PERFORM lock_llm_config_versions(NEW.config_version_id);
+        IF NEW.config_revision <> version_revision
+            OR NEW.configuration_hash IS DISTINCT FROM version_configuration_hash
+        THEN
+            RAISE EXCEPTION 'evaluation snapshot must match config version revision and hash'
+                USING ERRCODE = '23514';
+        END IF;
         IF NEW.status <> 'running' OR NEW.gate_status <> 'pending'
             OR NEW.completed_at IS NOT NULL OR NEW.revision <> 1
         THEN
@@ -617,6 +652,8 @@ BEGIN
         OR NEW.id IS DISTINCT FROM OLD.id
         OR NEW.organization_id IS DISTINCT FROM OLD.organization_id
         OR NEW.config_version_id IS DISTINCT FROM OLD.config_version_id
+        OR NEW.config_revision IS DISTINCT FROM OLD.config_revision
+        OR NEW.configuration_hash IS DISTINCT FROM OLD.configuration_hash
         OR NEW.created_at IS DISTINCT FROM OLD.created_at
         OR NEW.completed_at IS NULL
     THEN
@@ -660,17 +697,39 @@ BEGIN
         END IF;
         IF NEW.rollback_of_version_id IS NULL THEN
             PERFORM lock_llm_config_versions(NEW.config_version_id);
+            IF NEW.evaluation_config_version_id <> NEW.config_version_id THEN
+                RAISE EXCEPTION 'normal release evaluation must target its config version'
+                    USING ERRCODE = '23514';
+            END IF;
         ELSE
             PERFORM lock_llm_config_versions(
                 NEW.config_version_id,
                 NEW.rollback_of_version_id
             );
+            IF NEW.evaluation_config_version_id <> NEW.rollback_of_version_id THEN
+                RAISE EXCEPTION 'rollback release evaluation must target its source version'
+                    USING ERRCODE = '23514';
+            END IF;
         END IF;
 
         IF NEW.status <> 'pending' OR NEW.revision <> 1
             OR NEW.published_by_system_admin_user_id IS NOT NULL OR NEW.published_at IS NOT NULL
         THEN
             RAISE EXCEPTION 'release records must start as pending revision one'
+                USING ERRCODE = '23514';
+        END IF;
+        PERFORM 1
+        FROM llm_eval_run AS release_evaluation
+        WHERE release_evaluation.id = NEW.evaluation_run_id
+          AND release_evaluation.organization_id = NEW.organization_id
+          AND release_evaluation.config_version_id = NEW.evaluation_config_version_id
+          AND release_evaluation.status = 'completed'
+          AND release_evaluation.gate_status = 'passed'
+          AND release_evaluation.red_line_failures = 0
+          AND release_evaluation.completed_at >= release_evaluation.created_at
+        FOR KEY SHARE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'release records require a completed passing evaluation snapshot'
                 USING ERRCODE = '23514';
         END IF;
         IF NEW.rollback_of_release_id IS NOT NULL THEN
@@ -725,6 +784,7 @@ BEGIN
         OR NEW.organization_id IS DISTINCT FROM OLD.organization_id
         OR NEW.config_version_id IS DISTINCT FROM OLD.config_version_id
         OR NEW.evaluation_run_id IS DISTINCT FROM OLD.evaluation_run_id
+        OR NEW.evaluation_config_version_id IS DISTINCT FROM OLD.evaluation_config_version_id
         OR NEW.submitted_by_system_admin_user_id IS DISTINCT FROM OLD.submitted_by_system_admin_user_id
         OR NEW.submitted_at IS DISTINCT FROM OLD.submitted_at
         OR NEW.rollback_of_release_id IS DISTINCT FROM OLD.rollback_of_release_id

@@ -516,7 +516,7 @@ class InMemoryLlmGovernanceRepository:
         version["revision"] += 1
         version["evaluation_run_id"] = evaluation_run_id
         release_id = str(uuid.uuid4())
-        self.release_records[version_id] = {"release_record_id": release_id, "organization_id": version["organization_id"], "config_version_id": version_id, "evaluation_run_id": evaluation_run_id, "status": "pending", "revision": 1, "submitted_by_system_admin_user_id": session.user_id, "submitted_at": _iso(_now_dt()), "published_by_system_admin_user_id": None, "published_at": None, "rollback_of_release_id": None, "rollback_of_version_id": None}
+        self.release_records[version_id] = {"release_record_id": release_id, "organization_id": version["organization_id"], "config_version_id": version_id, "evaluation_run_id": evaluation_run_id, "evaluation_config_version_id": version_id, "status": "pending", "revision": 1, "submitted_by_system_admin_user_id": session.user_id, "submitted_at": _iso(_now_dt()), "published_by_system_admin_user_id": None, "published_at": None, "rollback_of_release_id": None, "rollback_of_version_id": None}
         version["release_record_id"] = release_id
         version["release_status"] = "pending"
         return self._finish_write(session, "llm.config.submit_publish", "llm_config_version", version_id, reason, key, request_data, copy.deepcopy(version))
@@ -581,7 +581,7 @@ class InMemoryLlmGovernanceRepository:
             self.versions[new_id] = rolled_back
             source_release = self.release_records.get(version_id)
             release_id = str(uuid.uuid4())
-            self.release_records[new_id] = {"release_record_id": release_id, "organization_id": source["organization_id"], "config_version_id": new_id, "evaluation_run_id": source.get("evaluation_run_id"), "status": "running", "revision": 2, "submitted_by_system_admin_user_id": session.user_id, "submitted_at": rolled_back["created_at"], "published_by_system_admin_user_id": session.user_id, "published_at": rolled_back["published_at"], "rollback_of_release_id": source_release.get("release_record_id") if source_release else None, "rollback_of_version_id": version_id}
+            self.release_records[new_id] = {"release_record_id": release_id, "organization_id": source["organization_id"], "config_version_id": new_id, "evaluation_run_id": source.get("evaluation_run_id"), "evaluation_config_version_id": version_id, "status": "running", "revision": 2, "submitted_by_system_admin_user_id": session.user_id, "submitted_at": rolled_back["created_at"], "published_by_system_admin_user_id": session.user_id, "published_at": rolled_back["published_at"], "rollback_of_release_id": source_release.get("release_record_id") if source_release else None, "rollback_of_version_id": version_id}
             rolled_back["release_record_id"] = release_id
             return self._finish_write(session, "llm.config.rollback", "llm_config_version", new_id, reason, key, request_data, copy.deepcopy(rolled_back))
         except Exception:
@@ -1048,7 +1048,7 @@ class PostgresLlmGovernanceRepository:
                 raise api_error(409, "stale_revision", "config version is not a matching validated version")
             self._ensure_version_ready_pg(cur, version)
             cur.execute("UPDATE llm_config_version SET status='pending_publish', revision=revision+1 WHERE id=%s AND status='validated' AND revision=%s", (version_id, expected_revision))
-            cur.execute("INSERT INTO llm_release_record (organization_id, config_version_id, evaluation_run_id, submitted_by_system_admin_user_id) VALUES (%s,%s,%s,%s)", (version["organization_id"], version_id, evaluation_run_id, session.user_id))
+            cur.execute("INSERT INTO llm_release_record (organization_id, config_version_id, evaluation_run_id, evaluation_config_version_id, submitted_by_system_admin_user_id) VALUES (%s,%s,%s,%s,%s)", (version["organization_id"], version_id, evaluation_run_id, version_id, session.user_id))
             result = self._fetch_version(cur, version_id)
             self._audit(cur, session, "llm.config.submit_publish", "llm_config_version", version_id, reason, key, request_data, result)
             return result
@@ -1111,7 +1111,7 @@ class PostgresLlmGovernanceRepository:
             cur.execute("SELECT COALESCE(MAX(version_number),0)+1 FROM llm_config_version WHERE organization_id=%s", (source["organization_id"],))
             number = int(cur.fetchone()[0])
             cur.execute("INSERT INTO llm_config_version (id, organization_id, version_number, description, configuration_hash, created_by_system_admin_user_id, rollback_of_version_id) VALUES (%s,%s,%s,%s,%s,%s,%s)", (new_id, source["organization_id"], number, f"Rollback of version {source['version_number']}", source["configuration_hash"], session.user_id, version_id))
-            cur.execute("INSERT INTO llm_release_record (organization_id, config_version_id, evaluation_run_id, submitted_by_system_admin_user_id, rollback_of_release_id, rollback_of_version_id) VALUES (%s,%s,%s,%s,%s,%s)", (source["organization_id"], new_id, source.get("evaluation_run_id") or "rollback-no-evaluation", session.user_id, source.get("release_record_id"), version_id))
+            cur.execute("INSERT INTO llm_release_record (organization_id, config_version_id, evaluation_run_id, evaluation_config_version_id, submitted_by_system_admin_user_id, rollback_of_release_id, rollback_of_version_id) VALUES (%s,%s,%s,%s,%s,%s,%s)", (source["organization_id"], new_id, source["evaluation_run_id"], version_id, session.user_id, source.get("release_record_id"), version_id))
             cur.execute("INSERT INTO llm_scenario_route (config_version_id, scenario, primary_provider_config_id, primary_model, fallback_provider_config_id, fallback_model, enabled, temperature, max_output_tokens, timeout_seconds, max_retries, circuit_breaker_threshold, recovery_probe_seconds) SELECT %s, scenario, primary_provider_config_id, primary_model, fallback_provider_config_id, fallback_model, enabled, temperature, max_output_tokens, timeout_seconds, max_retries, circuit_breaker_threshold, recovery_probe_seconds FROM llm_scenario_route WHERE config_version_id=%s", (new_id, version_id))
             for state in ("validated", "pending_publish"):
                 cur.execute("UPDATE llm_config_version SET status=%s, revision=revision+1 WHERE id=%s", (state, new_id))

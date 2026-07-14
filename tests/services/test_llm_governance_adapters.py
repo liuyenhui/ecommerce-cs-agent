@@ -125,8 +125,8 @@ def test_postgres_evaluation_gate_requires_same_completed_passing_run() -> None:
         def __exit__(self, *_args: object) -> None: return None
         def execute(self, sql: str, params: tuple[object, ...]) -> None:
             captured.update(sql=sql, params=params)
-        def fetchone(self) -> tuple[str, str, int]:
-            return ("completed", "passed", 0)
+        def fetchone(self) -> tuple[str]:
+            return ("eval-1",)
 
     class Connection:
         def __enter__(self) -> "Connection": return self
@@ -135,9 +135,72 @@ def test_postgres_evaluation_gate_requires_same_completed_passing_run() -> None:
 
     checker = PostgresEvaluationReleaseGateChecker("postgresql://example", connect=lambda _url: Connection())
     result = checker(
-        {"organization_id": "11111111-1111-1111-1111-111111111111", "version_id": "22222222-2222-2222-2222-222222222222"},
+        {
+            "organization_id": "11111111-1111-1111-1111-111111111111",
+            "version_id": "22222222-2222-2222-2222-222222222222",
+            "revision": 7,
+            "configuration_hash": "a" * 64,
+            "status": "validated",
+        },
         "eval-1",
     )
     assert result == {"status": "passed", "error_code": None}
-    assert captured["params"] == ("eval-1", "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222")
+    assert captured["params"] == (
+        "eval-1",
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+        7,
+        "a" * 64,
+    )
     assert "%s" in str(captured["sql"])
+    assert "config_revision" in str(captured["sql"])
+    assert "configuration_hash" in str(captured["sql"])
+    assert "eval.completed_at >= eval.created_at" in str(captured["sql"])
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        {"revision": 8, "configuration_hash": "a" * 64, "status": "validated"},
+        {"revision": 7, "configuration_hash": "b" * 64, "status": "validated"},
+        {"revision": 7, "configuration_hash": "a" * 64, "status": "pending_publish"},
+    ],
+)
+def test_postgres_evaluation_gate_rejects_stale_snapshot_or_nonvalidated_version(version: dict[str, object]) -> None:
+    class Cursor:
+        def __enter__(self) -> "Cursor": return self
+        def __exit__(self, *_args: object) -> None: return None
+        def execute(self, _sql: str, _params: tuple[object, ...]) -> None: return None
+        def fetchone(self) -> None: return None
+
+    class Connection:
+        def __enter__(self) -> "Connection": return self
+        def __exit__(self, *_args: object) -> None: return None
+        def cursor(self) -> Cursor: return Cursor()
+
+    checker = PostgresEvaluationReleaseGateChecker("postgresql://example", connect=lambda _url: Connection())
+    candidate = {
+        "organization_id": "11111111-1111-1111-1111-111111111111",
+        "version_id": "22222222-2222-2222-2222-222222222222",
+        **version,
+    }
+    assert checker(candidate, "eval-1") == {"status": "failed", "error_code": "release_gate_failed"}
+
+
+def test_postgres_evaluation_gate_redacts_database_failures() -> None:
+    def failed_connect(_url: str) -> object:
+        raise RuntimeError("postgresql://user:secret@example/private")
+
+    checker = PostgresEvaluationReleaseGateChecker("postgresql://example", connect=failed_connect)
+    result = checker(
+        {
+            "organization_id": "11111111-1111-1111-1111-111111111111",
+            "version_id": "22222222-2222-2222-2222-222222222222",
+            "revision": 7,
+            "configuration_hash": "a" * 64,
+            "status": "validated",
+        },
+        "eval-1",
+    )
+    assert result == {"status": "failed", "error_code": "release_gate_failed"}
+    assert "secret" not in repr(result)

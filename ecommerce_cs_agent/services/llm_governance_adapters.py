@@ -166,15 +166,41 @@ class PostgresEvaluationReleaseGateChecker:
         self._connect = connect
 
     def __call__(self, version: dict[str, Any], evaluation_run_id: str) -> dict[str, Any]:
-        with self._connect(self._database_url) as connection, connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT status, gate_status, red_line_failures
-                FROM llm_eval_run
-                WHERE id=%s AND organization_id=%s AND config_version_id=%s
-                """,
-                (evaluation_run_id, version.get("organization_id"), version.get("version_id")),
-            )
-            row = cursor.fetchone()
-        passed = bool(row and row[0] == "completed" and row[1] == "passed" and int(row[2]) == 0)
+        if version.get("status") != "validated":
+            return {"status": "failed", "error_code": "release_gate_failed"}
+        try:
+            with self._connect(self._database_url) as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT eval.id
+                    FROM llm_eval_run AS eval
+                    JOIN llm_config_version AS version
+                      ON version.id = eval.config_version_id
+                     AND version.organization_id = eval.organization_id
+                    WHERE eval.id=%s
+                      AND eval.organization_id=%s
+                      AND eval.config_version_id=%s
+                      AND eval.config_revision=%s
+                      AND eval.configuration_hash=%s
+                      AND version.status='validated'
+                      AND version.revision=eval.config_revision
+                      AND version.configuration_hash=eval.configuration_hash
+                      AND eval.status='completed'
+                      AND eval.gate_status='passed'
+                      AND eval.red_line_failures=0
+                      AND eval.completed_at IS NOT NULL
+                      AND eval.completed_at >= eval.created_at
+                    """,
+                    (
+                        evaluation_run_id,
+                        version.get("organization_id"),
+                        version.get("version_id"),
+                        version.get("revision"),
+                        version.get("configuration_hash"),
+                    ),
+                )
+                row = cursor.fetchone()
+        except Exception:
+            row = None
+        passed = bool(row)
         return {"status": "passed" if passed else "failed", "error_code": None if passed else "release_gate_failed"}

@@ -301,10 +301,12 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
         ]),
         (release_sql, [
             "evaluation_run_id varchar(128) not null",
+            "evaluation_config_version_id uuid not null",
             "length(evaluation_run_id) <= 128",
             "evaluation_run_id ~ '[^[:space:]]'",
             "unique (config_version_id)",
             "foreign key (config_version_id, organization_id)",
+            "foreign key (evaluation_run_id, organization_id, evaluation_config_version_id)",
             "check (status in ('pending', 'running', 'superseded', 'rolled_back'))",
             "rollback_of_release_id is null and rollback_of_version_id is null",
             "rollback_of_release_id is not null and rollback_of_version_id is not null",
@@ -312,10 +314,14 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
         ]),
         (eval_sql, [
             "id varchar(128) primary key",
+            "config_revision integer not null check (config_revision > 0)",
+            "configuration_hash char(64) not null",
+            "configuration_hash ~ '^[0-9a-f]{64}$'",
             "foreign key (config_version_id, organization_id)",
             "red_line_failures integer not null default 0 check (red_line_failures >= 0)",
             "gate_status <> 'passed' or (status = 'completed' and red_line_failures = 0)",
             "report_ref text check",
+            "completed_at is null or completed_at >= created_at",
         ]),
         (invocation_sql, [
             "scenario_route_id uuid not null references llm_scenario_route(id) on delete restrict",
@@ -393,6 +399,15 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
     assert "create or replace function protect_llm_release_record_history()" in compact_sql
     assert "create or replace function protect_llm_eval_run_history()" in compact_sql
     assert "evaluation run history is immutable" in compact_sql
+    assert "evaluation runs require a validated config version snapshot" in compact_sql
+    assert "new.config_revision <> version_revision" in compact_sql
+    assert "new.configuration_hash is distinct from version_configuration_hash" in compact_sql
+    assert "new.config_revision is distinct from old.config_revision" in compact_sql
+    assert "new.configuration_hash is distinct from old.configuration_hash" in compact_sql
+    assert "new.evaluation_config_version_id is distinct from old.evaluation_config_version_id" in compact_sql
+    assert "new.evaluation_config_version_id <> new.config_version_id" in compact_sql
+    assert "new.evaluation_config_version_id <> new.rollback_of_version_id" in compact_sql
+    assert "release records require a completed passing evaluation snapshot" in compact_sql
     assert "terminal release records are immutable" in compact_sql
     assert "source.config_version_id = new.rollback_of_version_id" in compact_sql
     assert "source.status in ('superseded', 'rolled_back')" in compact_sql

@@ -20,6 +20,7 @@ from ecommerce_cs_agent.services.llm_governance import (
     _bounded_snapshot,
     _fingerprint,
 )
+from ecommerce_cs_agent.services.llm_governance_adapters import PostgresEvaluationReleaseGateChecker
 
 
 ORG_ID = "11111111-1111-1111-1111-111111111111"
@@ -282,6 +283,8 @@ def test_draft_publish_and_rollback_preserve_immutable_history() -> None:
     assert rolled_back["rollback_of_version_id"] == published["version_id"]
     assert rolled_back["routes"] == published["routes"]
     assert service.versions[published["version_id"]]["routes"] == published["routes"]
+    assert service.release_records[published["version_id"]]["evaluation_config_version_id"] == published["version_id"]
+    assert service.release_records[rolled_back["version_id"]]["evaluation_config_version_id"] == published["version_id"]
 
 
 def test_running_source_rollback_is_atomic_and_creates_a_new_running_version() -> None:
@@ -564,7 +567,22 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
         setup.commit()
         scoped_url = psycopg.conninfo.make_conninfo(database_url, options=f"-c search_path={schema_name},public")
         session = SystemAdminSession(token="integration", user_id=user_id, email="llm-service@example.invalid", display_name="LLM Service", role="super_admin", expires_at=datetime.now(timezone.utc) + timedelta(hours=1))
-        service = PostgresLlmGovernanceRepository(scoped_url, connection_tester=lambda _provider, _request: {"status": "passed", "latency_ms": 2}, release_gate_checker=lambda _version, _run: {"status": "passed"})
+        service = PostgresLlmGovernanceRepository(
+            scoped_url,
+            connection_tester=lambda _provider, _request: {"status": "passed", "latency_ms": 2},
+            release_gate_checker=PostgresEvaluationReleaseGateChecker(scoped_url),
+        )
+        def complete_evaluation(version: dict[str, Any], evaluation_run_id: str) -> None:
+            with psycopg.connect(scoped_url) as evaluation_connection:
+                with evaluation_connection.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO llm_eval_run (id, organization_id, config_version_id, config_revision, configuration_hash) VALUES (%s,%s,%s,%s,%s)",
+                        (evaluation_run_id, version["organization_id"], version["version_id"], version["revision"], version["configuration_hash"]),
+                    )
+                    cur.execute(
+                        "UPDATE llm_eval_run SET status='completed', gate_status='passed', completed_at=now(), revision=2 WHERE id=%s",
+                        (evaluation_run_id,),
+                    )
         provider_payload = dict(PROVIDER_PAYLOAD, idempotency_key="integration-provider")
         provider = service.create_provider(session, provider_payload)
         assert set(provider["secret_ref"]) == {"namespace", "name", "key"}
@@ -622,6 +640,7 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
             service.create_provider(session, dict(provider_payload, base_url="https://other.example.test"))
         assert create_conflict.value.status_code == 409
         validated = service.validate_draft(session, draft["version_id"], {"expected_revision": changed["revision"], "reason": "integration", "idempotency_key": "integration-validate"})
+        complete_evaluation(validated, "integration-eval")
         pending = service.submit_publish(session, draft["version_id"], {"expected_revision": validated["revision"], "evaluation_run_id": "integration-eval", "reason": "integration", "idempotency_key": "integration-submit"})
         assert pending["release_status"] == "pending"
         assert service.get_version(session, draft["version_id"])["evaluation_run_id"] == "integration-eval"
@@ -634,6 +653,7 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
         second_changed = service.replace_routes(session, second_draft["version_id"], _all_routes(provider["provider_id"]), expected_revision=1, payload={"reason": "integration", "idempotency_key": "integration-routes-two"})
         service.test_connection(session, provider["provider_id"], {"config_version_id": second_draft["version_id"], "reason": "integration", "idempotency_key": "integration-test-two"})
         second_validated = service.validate_draft(session, second_draft["version_id"], {"expected_revision": second_changed["revision"], "reason": "integration", "idempotency_key": "integration-validate-two"})
+        complete_evaluation(second_validated, "integration-eval-two")
         second_pending = service.submit_publish(session, second_draft["version_id"], {"expected_revision": second_validated["revision"], "evaluation_run_id": "integration-eval-two", "reason": "integration", "idempotency_key": "integration-submit-two"})
         original_audit = service._audit
         service._audit = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("publish audit failed"))
