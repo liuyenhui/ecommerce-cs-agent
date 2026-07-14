@@ -36,6 +36,7 @@ def test_admin_web_is_vite_react_app() -> None:
     package = yaml.safe_load(Path("admin-web/package.json").read_text(encoding="utf-8"))
     customer_app = Path("admin-web/customer-admin/src/App.tsx").read_text(encoding="utf-8")
     system_app = Path("admin-web/system-admin/src/App.tsx").read_text(encoding="utf-8")
+    system_api = Path("admin-web/system-admin/src/system-api.ts").read_text(encoding="utf-8")
     shared_api = Path("admin-web/shared/api.ts").read_text(encoding="utf-8")
     nginx = Path("admin-web/nginx.conf").read_text(encoding="utf-8")
 
@@ -46,7 +47,7 @@ def test_admin_web_is_vite_react_app() -> None:
     assert "系统后台" in system_app
     assert "fetch(" in shared_api
     assert "/v1/admin/auth/login" in customer_app
-    assert "/v1/system-admin/message-traces" in system_app
+    assert "/v1/system-admin/message-traces" in system_api
     assert "password: \"admin-password\"" not in customer_app
     assert "password: \"admin-password\"" not in system_app
     assert "proxy_pass http://ecommerce-cs-agent-api:8000" in nginx
@@ -55,6 +56,8 @@ def test_admin_web_is_vite_react_app() -> None:
 def test_admin_web_splits_customer_and_system_sites_by_host() -> None:
     customer_app = Path("admin-web/customer-admin/src/App.tsx").read_text(encoding="utf-8")
     system_app = Path("admin-web/system-admin/src/App.tsx").read_text(encoding="utf-8")
+    system_api = Path("admin-web/system-admin/src/system-api.ts").read_text(encoding="utf-8")
+    system_workspace = Path("admin-web/system-admin/src/SystemWorkspace.tsx").read_text(encoding="utf-8")
     shared = "\n".join(
         path.read_text(encoding="utf-8")
         for path in [
@@ -76,10 +79,10 @@ def test_admin_web_splits_customer_and_system_sites_by_host() -> None:
     assert "setWorkspace" not in all_sources
     assert "/v1/admin/auth/me" in customer_app
     assert "/v1/system-admin" not in customer_app
-    assert "/v1/system-admin/auth/me" in system_app
-    assert "/v1/admin/auth/me" not in system_app
+    assert "/v1/system-admin/auth/me" in system_api
+    assert "/v1/admin/auth/me" not in system_api
     assert "function CustomerAdminShell(" in customer_app
-    assert "function SystemWorkspace(" in system_app
+    assert "function SystemWorkspace(" in system_workspace
     assert "system-admin.ecommerce-cs-agent-dev.fcihome.com system;" in nginx
     assert "default customer;" in nginx
     assert "try_files /$admin_site$uri =404;" in nginx

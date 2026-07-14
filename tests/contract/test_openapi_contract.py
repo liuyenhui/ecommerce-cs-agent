@@ -43,6 +43,7 @@ REQUIRED_PATHS = {
     "/v1/system-admin/auth/login",
     "/v1/system-admin/auth/logout",
     "/v1/system-admin/auth/me",
+    "/v1/system-admin/dashboard-summary",
     "/v1/system-admin/message-traces",
     "/v1/system-admin/audit-logs",
     "/v1/system-admin/health",
@@ -115,6 +116,7 @@ CORE_JSON_RESPONSES = {
     ("post", "/v1/product-content/assets", "201"): "#/components/schemas/ProductAssetResponse",
     ("post", "/v1/product-content/price-snapshots", "201"): "#/components/schemas/ProductPriceSnapshotResponse",
     ("get", "/v1/system-admin/auth/me", "200"): "#/components/schemas/SystemAdminMeResponse",
+    ("get", "/v1/system-admin/dashboard-summary", "200"): "#/components/schemas/SystemDashboardSummary",
     ("get", "/v1/system-admin/message-traces", "200"): "#/components/schemas/SystemMessageTraceListResponse",
     ("get", "/v1/system-admin/tasks", "200"): "#/components/schemas/TaskListResponse",
     ("post", "/v1/system-admin/tasks/{task_id}/retry", "202"): "#/components/schemas/TaskRetryResponse",
@@ -245,6 +247,69 @@ class OpenApiContractTest(unittest.TestCase):
         self.assertEqual(self.document["openapi"], "3.1.0")
         self.assertIsInstance(self.document["paths"], dict)
         self.assertIsInstance(self.document["components"], dict)
+
+    def test_system_admin_operational_contract_exposes_real_retry_and_audit_filters(self):
+        task = self.document["components"]["schemas"]["BackgroundTask"]
+        self.assertIn("retryable", task["required"])
+        self.assertIn("organization_id", task["required"])
+        self.assertNotIn("tenant_id", task["properties"])
+        self.assertEqual(task["properties"]["retryable"]["type"], "boolean")
+        assert_schema_valid(
+            {
+                "task_id": "task-example",
+                "task_type": "embedding",
+                "status": "failed",
+                "retryable": True,
+                "organization_id": "org-example",
+                "store_id": "store-example",
+                "input_ref": "asset-example",
+                "output_ref": None,
+                "error_summary": "provider timeout",
+                "retry_count": 1,
+                "next_retry_at": None,
+                "created_at": "2026-07-15T08:00:00Z",
+            },
+            task,
+            self.document,
+        )
+
+        audit_schema = self.document["components"]["schemas"]["AuditLog"]
+        self.assertIn("organization_id", audit_schema["properties"])
+        self.assertNotIn("tenant_id", audit_schema["properties"])
+        self.assertEqual(audit_schema["properties"]["diff_summary"]["type"], ["object", "null"])
+        assert_schema_valid(
+            {
+                "audit_log_id": "audit-example",
+                "actor_system_user_id": "sysadmin-example",
+                "organization_id": "org-example",
+                "store_id": "store-example",
+                "object_type": "background_task",
+                "object_id": "task-example",
+                "action": "system_admin.task.retry",
+                "reason": "manual retry",
+                "diff_summary": {"reason": "manual retry", "sensitive_access": False},
+                "sensitive_access": False,
+                "created_at": "2026-07-15T08:00:00Z",
+            },
+            audit_schema,
+            self.document,
+        )
+
+        audit = self.document["paths"]["/v1/system-admin/audit-logs"]["get"]
+        parameter_names = {
+            parameter.get("name")
+            for parameter in audit["parameters"]
+            if "$ref" not in parameter
+        }
+        self.assertIn("action", parameter_names)
+        self.assertIn("actor_user_id", parameter_names)
+        self.assertIn("sensitive_access", parameter_names)
+
+    def test_system_dashboard_contract_contains_real_recent_release_summaries(self):
+        schema = self.document["components"]["schemas"]["SystemDashboardSummary"]
+        self.assertIn("recent_releases", schema["required"])
+        release_ref = schema["properties"]["recent_releases"]["items"]["$ref"]
+        self.assertEqual(release_ref, "#/components/schemas/SystemRecentRelease")
 
     def test_usage_endpoints_share_component_query_parameters(self):
         paths = [

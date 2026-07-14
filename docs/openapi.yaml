@@ -1668,6 +1668,45 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /v1/system-admin/dashboard-summary:
+    get:
+      tags: [System Admin]
+      operationId: getSystemAdminDashboardSummary
+      summary: 查询系统总览聚合
+      description: 返回全局真实聚合指标及最多 5 条最近发布摘要；发布摘要来自发布记录，不要求选择单一组织，也不回退示例数据。
+      security:
+        - SystemAdminSession: []
+      responses:
+        "200":
+          description: 系统总览聚合。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemDashboardSummary"
+              example:
+                active_organizations: 12
+                active_stores: 28
+                decisions_today: 341
+                auto_reply_rate: 0.62
+                handoff_rate: 0.18
+                error_rate: 0.01
+                readiness_blockers: 3
+                pending_tasks: 4
+                critical_alerts: 1
+                recent_releases:
+                  - release_id: 79e4a3a2-f6ce-44ec-b4b1-7d7298f6f9e7
+                    organization_id: org-example
+                    config_version_id: 0844be22-0659-4e9f-bf83-cb0e79fa6880
+                    version_number: 7
+                    status: running
+                    published_at: "2026-07-15T08:00:00Z"
+                    submitted_at: "2026-07-15T07:30:00Z"
+                generated_at: "2026-07-15T08:05:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /v1/system-admin/users:
     get:
       tags: [System Admin]
@@ -2029,24 +2068,44 @@ paths:
       tags: [System Admin]
       operationId: listSystemAuditLogs
       summary: 查询系统后台审计日志
-      description: 查询系统后台登录、权限变更、跨租户访问、代运营修改、敏感数据查看和高风险变更。
+      description: 查询系统后台登录、权限变更、跨租户访问、代运营修改、敏感数据查看和高风险变更。时间范围采用 `[time_from, time_to)` 半开区间；起止时间必须含时区且起点早于终点。
       security:
         - SystemAdminSession: []
       parameters:
-        - $ref: "#/components/parameters/TenantIdQuery"
+        - name: organization_id
+          in: query
+          required: false
+          schema: {type: string, maxLength: 256}
+          description: Agent 组织 ID，按精确值筛选。
         - $ref: "#/components/parameters/StoreIdQuery"
         - name: actor_user_id
           in: query
           required: false
           schema:
             type: string
+            maxLength: 256
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 256
+          description: 审计动作精确值，例如 `system_admin.release.publish`。
         - name: sensitive_access
           in: query
           required: false
           schema:
             type: boolean
-        - $ref: "#/components/parameters/TimeFrom"
-        - $ref: "#/components/parameters/TimeTo"
+        - name: time_from
+          in: query
+          required: false
+          schema: {type: string, format: date-time}
+          description: 创建时间起点，含时区，闭区间。
+        - name: time_to
+          in: query
+          required: false
+          schema: {type: string, format: date-time}
+          description: 创建时间终点，含时区，开区间。
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
       responses:
@@ -2056,10 +2115,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuditLogListResponse"
+              example:
+                items:
+                  - audit_log_id: audit-example
+                    actor_system_user_id: sysadmin-example
+                    organization_id: org-example
+                    store_id: store-example
+                    object_type: llm_release
+                    object_id: release-example
+                    action: system_admin.release.publish
+                    reason: approved rollout
+                    sensitive_access: false
+                    created_at: "2026-07-15T08:00:00Z"
+                page_info: {page: 1, page_size: 20, total: 1}
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
 
   /v1/system-admin/health:
     get:
@@ -5867,6 +5941,55 @@ components:
             - "null"
           format: date-time
 
+    SystemDashboardSummary:
+      type: object
+      required: [active_organizations, active_stores, decisions_today, auto_reply_rate, handoff_rate, error_rate, readiness_blockers, pending_tasks, critical_alerts, recent_releases, generated_at]
+      properties:
+        active_organizations: {type: integer, minimum: 0}
+        active_stores: {type: integer, minimum: 0}
+        decisions_today: {type: integer, minimum: 0}
+        auto_reply_rate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+        handoff_rate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+        error_rate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+        readiness_blockers: {type: integer, minimum: 0}
+        pending_tasks: {type: integer, minimum: 0}
+        critical_alerts: {type: integer, minimum: 0}
+        recent_releases:
+          type: array
+          maxItems: 5
+          items:
+            $ref: "#/components/schemas/SystemRecentRelease"
+        generated_at:
+          type: string
+          format: date-time
+
+    SystemRecentRelease:
+      type: object
+      required: [release_id, organization_id, config_version_id, version_number, status, published_at, submitted_at]
+      properties:
+        release_id: {type: string}
+        organization_id: {type: string}
+        config_version_id: {type: string}
+        version_number: {type: integer, minimum: 1}
+        status:
+          type: string
+          enum: [pending, running, superseded, rolled_back]
+        published_at:
+          type: [string, "null"]
+          format: date-time
+        submitted_at:
+          type: string
+          format: date-time
+
     SystemTenant:
       allOf:
         - $ref: "#/components/schemas/Tenant"
@@ -5961,7 +6084,7 @@ components:
 
     BackgroundTask:
       type: object
-      required: [task_id, task_type, status, tenant_id, created_at]
+      required: [task_id, task_type, status, organization_id, retryable, created_at]
       properties:
         task_id:
           type: string
@@ -5971,7 +6094,10 @@ components:
         status:
           type: string
           enum: [queued, running, succeeded, failed, retrying, canceled]
-        tenant_id:
+        retryable:
+          type: boolean
+          description: 服务端持久化的幂等安全重试能力；客户端不得从任务状态或类型推断。
+        organization_id:
           type: string
         store_id:
           type:
@@ -6015,7 +6141,7 @@ components:
             - string
             - "null"
           description: 系统 Admin 操作者 ID。
-        tenant_id:
+        organization_id:
           type:
             - string
             - "null"
@@ -6035,8 +6161,9 @@ components:
             - "null"
         diff_summary:
           type:
-            - string
+            - object
             - "null"
+          additionalProperties: true
         sensitive_access:
           type: boolean
         created_at:

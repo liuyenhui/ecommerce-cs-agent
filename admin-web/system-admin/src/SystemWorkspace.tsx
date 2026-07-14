@@ -35,7 +35,7 @@ export const systemNavigationItems: Array<NavItem<SystemPage>> = [
 ];
 
 export function SystemNavigation({ activePage, collapsed, onChange, onNavigate }: { activePage: SystemPage; collapsed: boolean; onChange: (page: SystemPage) => void; onNavigate?: () => void }) {
-  return <div className={collapsed ? "systemNavigation collapsed" : "systemNavigation"}><Navigation items={systemNavigationItems} activeTab={activePage} onChange={onChange} onNavigate={onNavigate} ariaLabel="系统后台任务导航" /></div>;
+  return <div className={collapsed ? "systemNavigation collapsed" : "systemNavigation"}><Navigation items={systemNavigationItems} activeTab={activePage} onChange={onChange} onNavigate={onNavigate} ariaLabel="系统后台任务导航" showTooltips={collapsed} /></div>;
 }
 
 const loading = <T,>(): RequestState<T> => ({ kind: "loading" });
@@ -73,7 +73,7 @@ export function SystemWorkspace({ activePage, session, setToast }: { activePage:
     try {
       const summary = await systemApi.dashboardSummary();
       const { failures, pages } = await loadDashboardSupportingData(systemApi);
-      const data: DashboardData = { summary, readiness: pages[0], tasks: pages[1], releases: emptyPage(), decisions: pages[2] };
+      const data: DashboardData = { summary, readiness: pages[0], tasks: pages[1], decisions: pages[2] };
       setDashboard(failures.length ? { kind: "partial", data, failures } : { kind: "success", data });
     } catch (error) { setDashboard(failed(error)); }
   }

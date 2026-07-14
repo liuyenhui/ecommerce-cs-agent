@@ -509,6 +509,7 @@ def test_postgres_system_admin_repository_lists_tasks_and_retries_failed_task() 
                     "task-001",
                     "embedding",
                     "failed",
+                    True,
                     "org-001",
                     "store-001",
                     "asset-001",
@@ -536,11 +537,13 @@ def test_postgres_system_admin_repository_lists_tasks_and_retries_failed_task() 
 
     executed_sql = "\n".join(sql for sql, _params in connection.executed)
     assert tasks["items"][0]["task_id"] == "task-001"
+    assert tasks["items"][0]["retryable"] is True
     assert tasks["items"][0]["error_summary"] == "provider timeout"
     assert retry["task_id"] == "task-001"
     assert retry["status"] == "queued"
     assert retry["audit_log_id"]
     assert "FROM background_task task" in executed_sql
+    assert "FOR UPDATE" in executed_sql
     assert "UPDATE background_task" in executed_sql
     assert "retry-001" in str(connection.executed)
 

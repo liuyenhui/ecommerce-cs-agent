@@ -57,11 +57,13 @@ def test_system_admin_dashboard_summary_contract() -> None:
         "readiness_blockers",
         "pending_tasks",
         "critical_alerts",
+        "recent_releases",
         "generated_at",
     }
     assert response.json()["auto_reply_rate"] is None
     assert response.json()["handoff_rate"] is None
     assert response.json()["error_rate"] is None
+    assert response.json()["recent_releases"] == []
 
     customer_session = client.get(
         "/v1/system-admin/dashboard-summary",
@@ -106,6 +108,26 @@ def test_in_memory_system_admin_dashboard_summary_uses_explicit_fixture_collecti
         "failed": {"status": "failed"},
         "done": {"status": "completed"},
     }
+    repository.releases = {
+        "release-new": {
+            "release_id": "release-new",
+            "organization_id": "org-active",
+            "config_version_id": "version-2",
+            "version_number": 2,
+            "status": "running",
+            "published_at": "2026-07-15T08:00:00Z",
+            "submitted_at": "2026-07-15T07:00:00Z",
+        },
+        "release-old": {
+            "release_id": "release-old",
+            "organization_id": "org-active",
+            "config_version_id": "version-1",
+            "version_number": 1,
+            "status": "superseded",
+            "published_at": "2026-07-14T08:00:00Z",
+            "submitted_at": "2026-07-14T07:00:00Z",
+        },
+    }
 
     response = repository.dashboard_summary(_system_session())
 
@@ -118,6 +140,7 @@ def test_in_memory_system_admin_dashboard_summary_uses_explicit_fixture_collecti
     assert response["readiness_blockers"] == 1
     assert response["pending_tasks"] == 2
     assert response["critical_alerts"] == 1
+    assert [item["release_id"] for item in response["recent_releases"]] == ["release-new", "release-old"]
 
     repository.price_snapshot_store_ids.add("store-product-only")
     repository.approved_knowledge_store_ids.add("store-product-only")
@@ -185,6 +208,86 @@ def test_system_admin_task_retry_rejects_unknown_or_non_retryable_task() -> None
     assert response.json()["error"]["code"] == "not_found"
 
 
+def test_in_memory_system_admin_tasks_return_persisted_retryable_flag() -> None:
+    repository = InMemorySystemAdminRepository()
+    repository.tasks = {
+        "safe": {"task_id": "safe", "task_type": "embedding", "status": "failed", "retryable": True},
+        "unsafe": {"task_id": "unsafe", "task_type": "bulk_import", "status": "failed", "retryable": False},
+    }
+
+    response = repository.list_tasks(_system_session(), {})
+
+    assert [(item["task_id"], item["retryable"]) for item in response["items"]] == [
+        ("safe", True),
+        ("unsafe", False),
+    ]
+
+    with pytest.raises(Exception, match="not retryable"):
+        repository.retry_task(_system_session(), "unsafe", {"idempotency_key": "unsafe-retry", "reason": "manual"})
+
+
+def test_in_memory_system_admin_audit_filters_actor_scope_action_sensitive_and_half_open_time() -> None:
+    repository = InMemorySystemAdminRepository()
+    repository.audit_logs = [
+        {
+            "audit_log_id": "audit-match",
+            "actor_system_user_id": "sysadmin-001",
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "action": "system_admin.release.publish",
+            "object_type": "llm_release",
+            "object_id": "release-1",
+            "reason": "publish",
+            "diff_summary": {"sensitive_access": True},
+            "sensitive_access": True,
+            "created_at": "2026-07-15T08:30:00Z",
+        },
+        {
+            "audit_log_id": "audit-outside",
+            "actor_system_user_id": "sysadmin-001",
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "action": "system_admin.release.publish",
+            "object_type": "llm_release",
+            "object_id": "release-2",
+            "reason": "publish",
+            "diff_summary": {"sensitive_access": True},
+            "sensitive_access": True,
+            "created_at": "2026-07-15T09:00:00Z",
+        },
+    ]
+
+    response = repository.list_audit_logs(_system_session(), {
+        "actor_user_id": "sysadmin-001",
+        "organization_id": "org-001",
+        "store_id": "store-001",
+        "action": "system_admin.release.publish",
+        "sensitive_access": "true",
+        "time_from": "2026-07-15T08:00:00Z",
+        "time_to": "2026-07-15T09:00:00Z",
+    })
+
+    assert response["page_info"]["total"] == 1
+    assert [item["audit_log_id"] for item in response["items"]] == ["audit-match"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "time_from=not-a-time",
+        "time_from=2026-07-15T09%3A00%3A00Z&time_to=2026-07-15T08%3A00%3A00Z",
+        "sensitive_access=maybe",
+    ],
+)
+def test_system_admin_audit_rejects_invalid_filter_boundaries(query: str) -> None:
+    response = TestClient(_test_app()).get(
+        f"/v1/system-admin/audit-logs?{query}",
+        headers={"Cookie": "agent_system_admin_session=test-system-session"},
+    )
+
+    assert response.status_code == 422
+
+
 def test_system_admin_organization_store_and_audit_are_repository_backed() -> None:
     client = TestClient(_test_app())
     headers = {"Cookie": "agent_system_admin_session=test-system-session"}
@@ -246,7 +349,18 @@ def test_system_admin_dashboard_summary_uses_postgres_total_aggregates(monkeypat
                 11,
                 2,
                 "2026-07-14T08:00:00Z",
-            )
+            ),
+            [
+                (
+                    "release-db",
+                    "org-db",
+                    "version-db",
+                    17,
+                    "running",
+                    "2026-07-14T07:30:00Z",
+                    "2026-07-14T07:00:00Z",
+                )
+            ],
         ]
     )
 
@@ -280,6 +394,15 @@ def test_system_admin_dashboard_summary_uses_postgres_total_aggregates(monkeypat
         "readiness_blockers": 7,
         "pending_tasks": 11,
         "critical_alerts": 2,
+        "recent_releases": [{
+            "release_id": "release-db",
+            "organization_id": "org-db",
+            "config_version_id": "version-db",
+            "version_number": 17,
+            "status": "running",
+            "published_at": "2026-07-14T07:30:00Z",
+            "submitted_at": "2026-07-14T07:00:00Z",
+        }],
         "generated_at": "2026-07-14T08:00:00Z",
     }
     assert "FROM organization" in executed_sql
@@ -290,9 +413,11 @@ def test_system_admin_dashboard_summary_uses_postgres_total_aggregates(monkeypat
     assert "FROM external_api_token" in executed_sql
     assert "FROM decision_record" in executed_sql
     assert "FROM background_task" in executed_sql
+    assert "FROM llm_release_record" in executed_sql
+    assert "LIMIT 5" in executed_sql
     assert "NULLIF" in executed_sql
-    assert "LIMIT" not in executed_sql
-    assert "OFFSET" not in executed_sql
+    assert "LIMIT %s" not in executed_sql
+    assert "OFFSET %s" not in executed_sql
     assert executed_sql.count("INSERT INTO system_admin_audit_log") == 1
     assert "CURRENT_TIMESTAMP AT TIME ZONE 'UTC'" in normalized_sql
     assert "created_at >=" in normalized_sql
@@ -305,7 +430,7 @@ def test_system_admin_dashboard_summary_uses_postgres_total_aggregates(monkeypat
 
 
 def test_postgres_system_admin_dashboard_summary_maps_zero_denominator_rates_to_none() -> None:
-    connection = _FakeConnection(fetch_rows=[(0, 0, 0, None, None, None, 0, 0, 0, "2026-07-14T08:00:00Z")])
+    connection = _FakeConnection(fetch_rows=[(0, 0, 0, None, None, None, 0, 0, 0, "2026-07-14T08:00:00Z"), []])
     repository = PostgresSystemAdminRepository.__new__(PostgresSystemAdminRepository)
     repository._database_url = "postgresql://example"
     repository._connect = lambda _url: connection
@@ -315,6 +440,41 @@ def test_postgres_system_admin_dashboard_summary_maps_zero_denominator_rates_to_
     assert response["auto_reply_rate"] is None
     assert response["handoff_rate"] is None
     assert response["error_rate"] is None
+
+
+def test_postgres_system_admin_tasks_select_and_map_retryable() -> None:
+    connection = _FakeConnection(fetch_rows=[(1,), [("task-db", "embedding", "failed", True, "org-db", "store-db", "in", None, "failed", 1, None, "2026-07-15T08:00:00Z")]])
+    repository = PostgresSystemAdminRepository.__new__(PostgresSystemAdminRepository)
+    repository._database_url = "postgresql://example"
+    repository._connect = lambda _url: connection
+
+    response = repository.list_tasks(_system_session(), {})
+
+    assert response["items"][0]["retryable"] is True
+    assert "task.retryable" in "\n".join(sql for sql, _params in connection.executed)
+
+
+def test_postgres_system_admin_audit_applies_all_filters_to_count_and_page_queries() -> None:
+    connection = _FakeConnection(fetch_rows=[(0,), []])
+    repository = PostgresSystemAdminRepository.__new__(PostgresSystemAdminRepository)
+    repository._database_url = "postgresql://example"
+    repository._connect = lambda _url: connection
+
+    repository.list_audit_logs(_system_session(), {
+        "actor_user_id": "sysadmin-001",
+        "organization_id": "org-db",
+        "store_id": "store-db",
+        "action": "system_admin.release.publish",
+        "sensitive_access": "true",
+        "time_from": "2026-07-15T08:00:00Z",
+        "time_to": "2026-07-15T09:00:00Z",
+    })
+
+    select_sql = [sql for sql, _params in connection.executed if "FROM system_admin_audit_log audit" in sql]
+    assert len(select_sql) == 2
+    assert all("audit.action =" in sql for sql in select_sql)
+    assert all("audit.created_at >=" in sql for sql in select_sql)
+    assert all("audit.created_at <" in sql for sql in select_sql)
 
 
 def test_system_admin_api_uses_postgres_repository_when_database_url_is_configured(monkeypatch) -> None:

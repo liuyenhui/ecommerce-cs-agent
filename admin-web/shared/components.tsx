@@ -10,8 +10,7 @@ import {
   ShieldCheck
 } from "lucide-react";
 import { buildSystemUserSummary, fieldLabel, renderCell, tableEmptyState } from "./data";
-import type { EmptyStateProps, JsonRecord, NavItem, ToastState } from "./types";
-import type { RequestState } from "../system-admin/src/system-types";
+import type { EmptyStateProps, JsonRecord, NavItem, RequestState, ToastState } from "./types";
 
 export function useCloseOnEscape(open: boolean, close: () => void) {
   React.useEffect(() => {
@@ -82,7 +81,8 @@ export function Navigation<T extends string>({
   onChange,
   ariaLabel,
   defaultGroup,
-  onNavigate
+  onNavigate,
+  showTooltips = false
 }: {
   items: Array<NavItem<T>>;
   activeTab: T;
@@ -90,6 +90,7 @@ export function Navigation<T extends string>({
   ariaLabel: string;
   defaultGroup?: string;
   onNavigate?: () => void;
+  showTooltips?: boolean;
 }) {
   const groups = Array.from(new Set(items.map((item) => item.group || defaultGroup || "")));
   return (
@@ -98,7 +99,7 @@ export function Navigation<T extends string>({
         <React.Fragment key={group || "default"}>
           {group ? <span className="navGroup">{group}</span> : null}
           {items.filter((item) => (item.group || defaultGroup || "") === group).map((item) => (
-            <button key={item.key} className={activeTab === item.key ? "active" : ""} onClick={() => {
+            <button key={item.key} className={activeTab === item.key ? "active" : ""} title={showTooltips ? item.label : undefined} onClick={() => {
               onChange(item.key);
               onNavigate?.();
             }}>

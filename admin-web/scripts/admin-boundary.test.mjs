@@ -162,6 +162,14 @@ test("system admin source stays inside system auth boundary", () => {
   assert.doesNotMatch(source, /\b(CustomerSite|CustomerAdminShell|CustomerWorkspace|CustomerOverview|ProductContent|KnowledgeReview|ProductUploadModal)\b/);
 });
 
+test("shared components do not import System Admin request-state types", () => {
+  const sharedComponents = readRelative("shared/components.tsx");
+  const systemTypes = readRelative("system-admin/src/system-types.ts");
+
+  assert.doesNotMatch(sharedComponents, /system-admin\/src/);
+  assert.match(systemTypes, /export type RequestState/);
+});
+
 test("runtime workspace detection is removed from admin web sources", () => {
   const source = [
     collectSource("customer-admin/src"),

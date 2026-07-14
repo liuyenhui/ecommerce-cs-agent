@@ -97,6 +97,7 @@ class InMemorySystemAdminRepository:
         self.active_integration_store_ids: set[str] = set()
         self.decisions: dict[str, dict[str, Any]] = {}
         self.tasks: dict[str, dict[str, Any]] = {}
+        self.releases: dict[str, dict[str, Any]] = {}
         self.audit_logs: list[dict[str, Any]] = []
 
     def dashboard_summary(self, session: SystemAdminSession) -> dict[str, Any]:
@@ -119,6 +120,11 @@ class InMemorySystemAdminRepository:
             ),
             "pending_tasks": sum(item.get("status") in {"queued", "running"} for item in self.tasks.values()),
             "critical_alerts": sum(item.get("status") == "failed" for item in self.tasks.values()),
+            "recent_releases": sorted(
+                (_recent_release(item) for item in self.releases.values()),
+                key=lambda item: str(item.get("published_at") or item.get("submitted_at") or ""),
+                reverse=True,
+            )[:5],
             "generated_at": _now(),
         }
 
@@ -269,14 +275,15 @@ class InMemorySystemAdminRepository:
         for key in ("organization_id", "store_id", "task_type", "status"):
             if filters.get(key):
                 items = [item for item in items if item.get(key) == filters[key]]
-        return _page_response(*_slice_page(items, filters))
+        persisted_items = [{**item, "retryable": bool(item.get("retryable", False))} for item in items]
+        return _page_response(*_slice_page(persisted_items, filters))
 
     def retry_task(self, session: SystemAdminSession, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_any_role(session, {"super_admin", "technical_support", "platform_operator"})
         task = self.tasks.get(task_id)
         if not task:
             raise api_error(404, "not_found", f"task {task_id} not found")
-        if task["status"] != "failed":
+        if task["status"] != "failed" or task.get("retryable") is not True:
             replay = self._idempotency_replay("system_admin.task.retry", payload)
             if replay and replay["object_id"] == task_id:
                 return {"task_id": task_id, "status": "queued", "audit_log_id": replay["audit_log_id"]}
@@ -287,11 +294,29 @@ class InMemorySystemAdminRepository:
         return {"task_id": task_id, "status": "queued", "audit_log_id": audit_id}
 
     def list_audit_logs(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
+        filters = _normalize_audit_filters(filters)
         self._audit(session, "system_admin.audit.list", "system_admin_audit_log", "list", filters)
-        items = self.audit_logs
+        items = list(self.audit_logs)
+        for key, item_key in (
+            ("actor_user_id", "actor_system_user_id"),
+            ("organization_id", "organization_id"),
+            ("store_id", "store_id"),
+            ("action", "action"),
+        ):
+            if filters.get(key):
+                items = [
+                    item for item in items
+                    if str(item.get(item_key) or (item.get("actor_id") if key == "actor_user_id" else "") or "") == str(filters[key])
+                ]
         if filters.get("sensitive_access") is not None:
-            expected = _truthy(filters.get("sensitive_access"))
+            expected = bool(filters["sensitive_access"])
             items = [item for item in items if bool(item.get("sensitive_access")) is expected]
+        if filters.get("time_from"):
+            lower = _parse_filter_datetime(filters["time_from"], "time_from")
+            items = [item for item in items if _parse_filter_datetime(item.get("created_at"), "created_at") >= lower]
+        if filters.get("time_to"):
+            upper = _parse_filter_datetime(filters["time_to"], "time_to")
+            items = [item for item in items if _parse_filter_datetime(item.get("created_at"), "created_at") < upper]
         return _page_response(*_slice_page(items, filters))
 
     def system_health(self, session: SystemAdminSession) -> dict[str, Any]:
@@ -460,6 +485,19 @@ class PostgresSystemAdminRepository:
                     """
                 )
                 row = cur.fetchone()
+                cur.execute(
+                    """
+                    SELECT release.id::text, org.external_organization_id,
+                           release.config_version_id::text, version.version_number,
+                           release.status, release.published_at, release.submitted_at
+                    FROM llm_release_record release
+                    JOIN organization org ON org.id = release.organization_id
+                    JOIN llm_config_version version ON version.id = release.config_version_id
+                    ORDER BY COALESCE(release.published_at, release.submitted_at) DESC, release.id DESC
+                    LIMIT 5
+                    """
+                )
+                recent_releases = [_recent_release_from_row(item) for item in cur.fetchall()]
         return {
             "active_organizations": int(row[0] or 0),
             "active_stores": int(row[1] or 0),
@@ -470,6 +508,7 @@ class PostgresSystemAdminRepository:
             "readiness_blockers": int(row[6] or 0),
             "pending_tasks": int(row[7] or 0),
             "critical_alerts": int(row[8] or 0),
+            "recent_releases": recent_releases,
             "generated_at": row[9],
         }
 
@@ -1014,7 +1053,8 @@ class PostgresSystemAdminRepository:
                 total = int(cur.fetchone()[0])
                 cur.execute(
                     """
-                    SELECT task.task_id, task.task_type, task.status, org.external_organization_id, st.external_store_id,
+                    SELECT task.task_id, task.task_type, task.status, task.retryable,
+                           org.external_organization_id, st.external_store_id,
                            task.input_ref, task.output_ref, task.error_summary, task.retry_count, task.next_retry_at, task.created_at
                     FROM background_task task
                     JOIN organization org ON org.id = task.organization_id
@@ -1044,6 +1084,7 @@ class PostgresSystemAdminRepository:
                     JOIN organization org ON org.id = task.organization_id
                     LEFT JOIN store st ON st.id = task.store_id AND st.organization_id = task.organization_id
                     WHERE task.task_id = %s
+                    FOR UPDATE OF task
                     """,
                     (task_id,),
                 )
@@ -1069,11 +1110,24 @@ class PostgresSystemAdminRepository:
                 return {"task_id": task_id, "status": "queued", "audit_log_id": audit_id}
 
     def list_audit_logs(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
+        filters = _normalize_audit_filters(filters)
         organization_id = filters.get("organization_id")
         store_id = filters.get("store_id")
         actor_user_id = filters.get("actor_user_id")
+        action = filters.get("action")
         sensitive_access = filters.get("sensitive_access")
+        time_from = filters.get("time_from")
+        time_to = filters.get("time_to")
         page = _pagination(filters)
+        query_params = (
+            organization_id, organization_id,
+            store_id, store_id,
+            actor_user_id, actor_user_id,
+            action, action,
+            sensitive_access, sensitive_access,
+            time_from, time_from,
+            time_to, time_to,
+        )
         with self._connect(self._database_url) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1085,9 +1139,12 @@ class PostgresSystemAdminRepository:
                     WHERE (%s::text IS NULL OR org.external_organization_id = %s)
                       AND (%s::text IS NULL OR st.external_store_id = %s)
                       AND (%s::text IS NULL OR audit.system_admin_user_id::text = %s)
-                      AND (%s::text IS NULL OR COALESCE((audit.diff_summary->>'sensitive_access')::boolean, false) = %s)
+                      AND (%s::text IS NULL OR audit.action = %s)
+                      AND (%s::boolean IS NULL OR COALESCE((audit.diff_summary->>'sensitive_access')::boolean, false) = %s::boolean)
+                      AND (%s::timestamptz IS NULL OR audit.created_at >= %s::timestamptz)
+                      AND (%s::timestamptz IS NULL OR audit.created_at < %s::timestamptz)
                     """,
-                    (organization_id, organization_id, store_id, store_id, actor_user_id, actor_user_id, sensitive_access, _truthy(sensitive_access)),
+                    query_params,
                 )
                 total = int(cur.fetchone()[0])
                 cur.execute(
@@ -1100,22 +1157,14 @@ class PostgresSystemAdminRepository:
                     WHERE (%s::text IS NULL OR org.external_organization_id = %s)
                       AND (%s::text IS NULL OR st.external_store_id = %s)
                       AND (%s::text IS NULL OR audit.system_admin_user_id::text = %s)
-                      AND (%s::text IS NULL OR COALESCE((audit.diff_summary->>'sensitive_access')::boolean, false) = %s)
+                      AND (%s::text IS NULL OR audit.action = %s)
+                      AND (%s::boolean IS NULL OR COALESCE((audit.diff_summary->>'sensitive_access')::boolean, false) = %s::boolean)
+                      AND (%s::timestamptz IS NULL OR audit.created_at >= %s::timestamptz)
+                      AND (%s::timestamptz IS NULL OR audit.created_at < %s::timestamptz)
                     ORDER BY audit.created_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (
-                        organization_id,
-                        organization_id,
-                        store_id,
-                        store_id,
-                        actor_user_id,
-                        actor_user_id,
-                        sensitive_access,
-                        _truthy(sensitive_access),
-                        page["limit"],
-                        page["offset"],
-                    ),
+                    (*query_params, page["limit"], page["offset"]),
                 )
                 rows = [_audit_from_row(row) for row in cur.fetchall()]
                 self._audit(cur, session, organization_id, store_id, "system_admin.audit.list", "system_admin_audit_log", "list", filters)
@@ -1340,15 +1389,40 @@ def _task_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         "task_id": str(row[0]),
         "task_type": str(row[1]),
         "status": str(row[2]),
-        "organization_id": str(row[3]),
-        "store_id": str(row[4]) if row[4] is not None else None,
-        "input_ref": str(row[5] or ""),
-        "output_ref": str(row[6]) if row[6] is not None else None,
-        "error_summary": str(row[7]) if row[7] is not None else None,
-        "retry_count": int(row[8] or 0),
-        "next_retry_at": _iso(row[9]) if row[9] else None,
-        "created_at": _iso(row[10]),
+        "retryable": bool(row[3]),
+        "organization_id": str(row[4]),
+        "store_id": str(row[5]) if row[5] is not None else None,
+        "input_ref": str(row[6] or ""),
+        "output_ref": str(row[7]) if row[7] is not None else None,
+        "error_summary": str(row[8]) if row[8] is not None else None,
+        "retry_count": int(row[9] or 0),
+        "next_retry_at": _iso(row[10]) if row[10] else None,
+        "created_at": _iso(row[11]),
     }
+
+
+def _recent_release(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "release_id": str(item["release_id"]),
+        "organization_id": str(item["organization_id"]),
+        "config_version_id": str(item["config_version_id"]),
+        "version_number": int(item["version_number"]),
+        "status": str(item["status"]),
+        "published_at": item.get("published_at"),
+        "submitted_at": item.get("submitted_at"),
+    }
+
+
+def _recent_release_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
+    return _recent_release({
+        "release_id": row[0],
+        "organization_id": row[1],
+        "config_version_id": row[2],
+        "version_number": row[3],
+        "status": row[4],
+        "published_at": _iso(row[5]) if row[5] is not None else None,
+        "submitted_at": _iso(row[6]) if row[6] is not None else None,
+    })
 
 
 def _message_trace_summary_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -1543,6 +1617,44 @@ def _readiness_status(has_product: bool, has_price: bool, has_knowledge: bool, h
     if has_product:
         return "warning"
     return "blocked"
+
+
+def _parse_filter_datetime(value: Any, field: str) -> datetime:
+    try:
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        raise api_error(422, "validation_error", f"{field} must be an ISO 8601 timestamp with timezone") from None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise api_error(422, "validation_error", f"{field} must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def _normalize_audit_filters(filters: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(filters)
+    for field in ("actor_user_id", "organization_id", "store_id", "action"):
+        if normalized.get(field) is None:
+            continue
+        value = str(normalized[field]).strip()
+        if not value or len(value) > 256 or any(ord(char) < 32 for char in value):
+            raise api_error(422, "validation_error", f"{field} is invalid")
+        normalized[field] = value
+    if normalized.get("sensitive_access") is not None:
+        value = normalized["sensitive_access"]
+        if isinstance(value, bool):
+            normalized["sensitive_access"] = value
+        elif str(value).lower() in {"true", "false"}:
+            normalized["sensitive_access"] = str(value).lower() == "true"
+        else:
+            raise api_error(422, "validation_error", "sensitive_access must be true or false")
+    parsed_bounds: dict[str, datetime] = {}
+    for field in ("time_from", "time_to"):
+        if normalized.get(field) is not None:
+            parsed = _parse_filter_datetime(normalized[field], field)
+            parsed_bounds[field] = parsed
+            normalized[field] = parsed.isoformat().replace("+00:00", "Z")
+    if parsed_bounds.get("time_from") and parsed_bounds.get("time_to") and parsed_bounds["time_from"] >= parsed_bounds["time_to"]:
+        raise api_error(422, "validation_error", "time_from must be earlier than time_to")
+    return normalized
 
 
 def _truthy(value: Any) -> bool:

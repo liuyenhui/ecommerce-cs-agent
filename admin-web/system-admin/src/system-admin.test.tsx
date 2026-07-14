@@ -1,24 +1,58 @@
+// @vitest-environment jsdom
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { RequestStateView } from "../../shared/components";
 import { DashboardPage } from "./pages/DashboardPage";
+import { AuditPage } from "./pages/AuditPage";
 import { HealthPage } from "./pages/HealthPage";
 import { ReadinessPage } from "./pages/ReadinessPage";
 import { TasksPage } from "./pages/TasksPage";
 import { TenantsPage } from "./pages/TenantsPage";
 import { TracesPage } from "./pages/TracesPage";
+import { App } from "./App";
 import { SYSTEM_ADMIN_URLS, systemAdminPaths } from "./system-api";
 import {
   RAIL_COLLAPSED_STORAGE_KEY,
   SystemNavigation,
   loadDashboardSupportingData,
   persistRailCollapsed,
-  readRailCollapsed
+  readRailCollapsed,
+  systemNavigationItems
 } from "./SystemWorkspace";
 
 const markup = (node: React.ReactNode) => renderToStaticMarkup(<>{node}</>);
+
+function response(payload: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: status === 200 ? "OK" : "Error",
+    headers: new Headers({ "Content-Type": "application/json" }),
+    json: async () => payload,
+    text: async () => JSON.stringify(payload)
+  } as Response;
+}
+
+beforeEach(() => {
+  const values = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      clear: () => values.clear(),
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key)
+    }
+  });
+});
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("System Admin operations shell", () => {
   it("renders all nine task-oriented navigation destinations with icons", () => {
@@ -52,6 +86,44 @@ describe("System Admin operations shell", () => {
     expect(RAIL_COLLAPSED_STORAGE_KEY).toBe("system-admin:rail-collapsed");
     expect(values.get(RAIL_COLLAPSED_STORAGE_KEY)).toBe("true");
     expect(readRailCollapsed(storage)).toBe(true);
+  });
+
+  it("renders the authenticated App and persists a real collapse click with nine tooltips", async () => {
+    const requested: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requested.push(path);
+      if (path === SYSTEM_ADMIN_URLS.me) return response({ user: { system_user_id: "sys-1", display_name: "Operator", roles: ["super_admin"] } });
+      if (path === SYSTEM_ADMIN_URLS.dashboardSummary) return response({
+        active_organizations: 1,
+        active_stores: 1,
+        decisions_today: 0,
+        auto_reply_rate: null,
+        handoff_rate: null,
+        error_rate: null,
+        readiness_blockers: 0,
+        pending_tasks: 0,
+        critical_alerts: 0,
+        recent_releases: [],
+        generated_at: "2026-07-15T00:00:00Z"
+      });
+      return response({ items: [], page_info: { page: 1, page_size: 5, total: 0 } });
+    }));
+
+    render(<App />);
+    const collapse = await screen.findByRole("button", { name: "收起桌面导航" });
+    for (const label of systemNavigationItems.map((item) => item.label)) {
+      expect(screen.getByRole("button", { name: label }).getAttribute("title")).toBeNull();
+    }
+    fireEvent.click(collapse);
+
+    expect(collapse.getAttribute("aria-expanded")).toBe("false");
+    expect(window.localStorage.getItem(RAIL_COLLAPSED_STORAGE_KEY)).toBe("true");
+    for (const label of systemNavigationItems.map((item) => item.label)) {
+      expect(screen.getByRole("button", { name: label }).getAttribute("title")).toBe(label);
+    }
+    await waitFor(() => expect(requested).toContain(SYSTEM_ADMIN_URLS.dashboardSummary));
+    expect(requested.every((path) => path.startsWith("/v1/system-admin/"))).toBe(true);
   });
 
   it("keeps every System Admin API URL in the isolated API namespace", () => {
@@ -91,11 +163,11 @@ describe("DashboardPage", () => {
           readiness_blockers: 6,
           pending_tasks: 9,
           critical_alerts: 2,
+          recent_releases: [{ release_id: "release-real", organization_id: "org-1", config_version_id: "version-1", version_number: 1, status: "running", published_at: "2026-07-15T00:00:00Z", submitted_at: "2026-07-14T23:00:00Z" }],
           generated_at: "2026-07-15T00:00:00Z"
         },
         readiness: { items: [{ store_id: "store-1" }], page: { page: 1, page_size: 20, total: 999 } },
         tasks: { items: [{ task_id: "task-1" }], page: { page: 1, page_size: 20, total: 888 } },
-        releases: { items: [], page: { page: 1, page_size: 20, total: 0 } },
         decisions: { items: [], page: { page: 1, page_size: 20, total: 0 } }
       }
     }} />);
@@ -104,11 +176,29 @@ describe("DashboardPage", () => {
     expect(html).toContain("82");
     expect(html).toContain("301");
     expect(html).toContain("暂无可计算数据");
-    expect(html).not.toContain(">1<");
+    expect(html).toContain("release-real");
+    expect(html).not.toContain("999");
+    expect(html).not.toContain("888");
   });
 });
 
 describe("operational pages", () => {
+  it("submits datetime-local audit bounds as timezone-aware ISO timestamps", () => {
+    let submitted: Record<string, string> | undefined;
+    render(<AuditPage
+      state={{ kind: "empty", title: "暂无审计记录", description: "没有记录" }}
+      onSearch={(filters) => { submitted = filters; }}
+    />);
+
+    fireEvent.change(screen.getByLabelText("time_from"), { target: { value: "2026-07-15T08:30" } });
+    fireEvent.change(screen.getByLabelText("time_to"), { target: { value: "2026-07-15T09:30" } });
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+
+    expect(submitted).toBeDefined();
+    expect(submitted?.time_from).toBe(new Date(submitted?.time_from || "").toISOString());
+    expect(submitted?.time_to).toBe(new Date(submitted?.time_to || "").toISOString());
+  });
+
   it("uses paginated totals and keeps tenant details separate from readiness", () => {
     const html = markup(<TenantsPage state={{
       kind: "success",
