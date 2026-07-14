@@ -1,13 +1,33 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from ecommerce_cs_agent.api.app import create_app
 from ecommerce_cs_agent.core.config import Settings, load_settings
+from ecommerce_cs_agent.services.admin_auth import (
+    InMemorySystemAdminAuthService,
+    system_admin_auth_service_for,
+)
+
+
+def _test_app():
+    return create_app(Settings(environment="test", database_url=None))
+
+
+def test_system_admin_auth_service_allows_in_memory_only_in_test() -> None:
+    service = system_admin_auth_service_for(Settings(environment="test", database_url=None))
+
+    assert isinstance(service, InMemorySystemAdminAuthService)
+
+
+def test_system_admin_auth_service_requires_database_outside_test() -> None:
+    with pytest.raises(RuntimeError, match="DATABASE_URL is required for System Admin"):
+        system_admin_auth_service_for(Settings(environment="development", database_url=None))
 
 
 def test_external_api_token_cannot_call_customer_admin():
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
 
     response = client.get(
         "/v1/admin/auth/me",
@@ -19,7 +39,7 @@ def test_external_api_token_cannot_call_customer_admin():
 
 
 def test_customer_admin_session_cannot_call_system_admin():
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
 
     response = client.get(
         "/v1/system-admin/health",
@@ -31,7 +51,7 @@ def test_customer_admin_session_cannot_call_system_admin():
 
 
 def test_system_admin_session_cannot_call_customer_admin():
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
 
     response = client.get(
         "/v1/admin/auth/me",
@@ -43,7 +63,7 @@ def test_system_admin_session_cannot_call_customer_admin():
 
 
 def test_external_api_token_cannot_call_system_admin():
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
 
     response = client.get(
         "/v1/system-admin/auth/me",
@@ -55,7 +75,7 @@ def test_external_api_token_cannot_call_system_admin():
 
 
 def test_customer_admin_me_and_core_lists():
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
     headers = {"Cookie": "agent_admin_session=test-admin-session"}
 
     me = client.get("/v1/admin/auth/me", headers=headers)
@@ -75,7 +95,7 @@ def test_customer_admin_me_and_core_lists():
 
 
 def test_product_content_upsert_writes_audit_and_health():
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
     headers = {"Cookie": "agent_admin_session=test-admin-session"}
 
     product = client.post(
@@ -104,7 +124,7 @@ def test_product_content_upsert_writes_audit_and_health():
 
 
 def test_product_content_ids_are_tenant_scoped():
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
     headers = {"Cookie": "agent_admin_session=test-admin-session"}
 
     first = client.post(
@@ -134,7 +154,7 @@ def test_product_content_ids_are_tenant_scoped():
 
 
 def test_system_admin_core_health_and_readiness():
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
     headers = {"Cookie": "agent_system_admin_session=test-system-session"}
 
     me = client.get("/v1/system-admin/auth/me", headers=headers)
@@ -161,7 +181,7 @@ def test_system_admin_core_health_and_readiness():
 
 
 def test_admin_login_rejects_bad_credentials_and_sets_spec_cookie_for_valid_credentials():
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
 
     bad = client.post("/v1/admin/auth/login", json={"email": "admin@example.test", "password": "bad"})
     good = client.post(
@@ -175,7 +195,7 @@ def test_admin_login_rejects_bad_credentials_and_sets_spec_cookie_for_valid_cred
 
 
 def test_system_admin_login_rejects_bad_credentials_and_sets_spec_cookie_for_valid_credentials():
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
 
     bad = client.post(
         "/v1/system-admin/auth/login",
@@ -192,7 +212,7 @@ def test_system_admin_login_rejects_bad_credentials_and_sets_spec_cookie_for_val
 
 
 def test_system_admin_logout_revokes_server_session():
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
     login = client.post(
         "/v1/system-admin/auth/login",
         json={"email": "system-admin@example.test", "password": "system-admin-password"},

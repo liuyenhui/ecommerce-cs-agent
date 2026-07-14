@@ -2,18 +2,38 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 import ecommerce_cs_agent.api.app as app_module
 from ecommerce_cs_agent.api.app import create_app
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.admin_auth import InMemorySystemAdminAuthService
-from ecommerce_cs_agent.services.system_admin import PostgresSystemAdminRepository
+from ecommerce_cs_agent.services.system_admin import (
+    InMemorySystemAdminRepository,
+    PostgresSystemAdminRepository,
+    system_admin_repository_for,
+)
 from tests.api.test_v1_api import auth_headers, minimal_reply_request
 
 
+def _test_app():
+    return create_app(Settings(environment="test", database_url=None))
+
+
+def test_system_admin_repository_allows_in_memory_only_in_test() -> None:
+    repository = system_admin_repository_for(Settings(environment="test", database_url=None))
+
+    assert isinstance(repository, InMemorySystemAdminRepository)
+
+
+def test_system_admin_repository_requires_database_outside_test() -> None:
+    with pytest.raises(RuntimeError, match="DATABASE_URL is required for System Admin"):
+        system_admin_repository_for(Settings(environment="development", database_url=None))
+
+
 def test_system_admin_message_traces_require_scope_and_use_repository_policy() -> None:
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
     client.post(
         "/v1/reply-decisions",
         headers=auth_headers(),
@@ -36,7 +56,7 @@ def test_system_admin_message_traces_require_scope_and_use_repository_policy() -
 
 
 def test_system_admin_task_retry_rejects_unknown_or_non_retryable_task() -> None:
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
 
     response = client.post(
         "/v1/system-admin/tasks/task-missing/retry",
@@ -49,7 +69,7 @@ def test_system_admin_task_retry_rejects_unknown_or_non_retryable_task() -> None
 
 
 def test_system_admin_organization_store_and_audit_are_repository_backed() -> None:
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
     headers = {"Cookie": "agent_system_admin_session=test-system-session"}
 
     organization = client.post(
@@ -173,7 +193,7 @@ def test_system_admin_message_traces_use_postgres_repository_when_database_url_i
 
 
 def test_system_admin_pagination_parameters_are_applied() -> None:
-    client = TestClient(create_app())
+    client = TestClient(_test_app())
     headers = {"Cookie": "agent_system_admin_session=test-system-session"}
     for index in range(3):
         client.post(

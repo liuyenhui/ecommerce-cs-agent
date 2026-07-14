@@ -1078,9 +1078,11 @@ class PostgresSystemAdminRepository:
 
 
 def system_admin_repository_for(settings: Settings) -> SystemAdminRepository:
-    if settings.database_url and settings.environment.lower() not in {"test"}:
-        return PostgresSystemAdminRepository(settings.database_url)
-    return InMemorySystemAdminRepository()
+    if settings.environment.lower() == "test":
+        return InMemorySystemAdminRepository()
+    if not settings.database_url:
+        raise RuntimeError("DATABASE_URL is required for System Admin outside test")
+    return PostgresSystemAdminRepository(settings.database_url)
 
 
 def _slice_page(items: list[dict[str, Any]], filters: dict[str, Any]) -> tuple[list[dict[str, Any]], int, int, int]:

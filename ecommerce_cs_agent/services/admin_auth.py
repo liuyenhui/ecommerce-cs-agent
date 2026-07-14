@@ -1319,9 +1319,11 @@ def admin_auth_service_for(settings: Settings) -> InMemoryAdminAuthService | Pos
 
 
 def system_admin_auth_service_for(settings: Settings) -> InMemorySystemAdminAuthService | PostgresSystemAdminAuthService:
-    if settings.database_url and settings.environment.lower() not in {"test"}:
-        return PostgresSystemAdminAuthService(settings)
-    return InMemorySystemAdminAuthService(settings)
+    if settings.environment.lower() == "test":
+        return InMemorySystemAdminAuthService(settings)
+    if not settings.database_url:
+        raise RuntimeError("DATABASE_URL is required for System Admin outside test")
+    return PostgresSystemAdminAuthService(settings)
 
 
 def _system_admin_me_payload(session: SystemAdminSession) -> dict[str, Any]:
