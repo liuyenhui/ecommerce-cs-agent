@@ -171,6 +171,10 @@ class ConfigVersionsQuery(StrictRequest):
     limit: int = Field(default=50, ge=1, le=100)
     cursor: str | None = Field(default=None, min_length=1, max_length=1024)
 
+
+class ReleaseRecordsQuery(ConfigVersionsQuery):
+    pass
+
 def _query_model(request: Request, model: type[StrictRequest]) -> StrictRequest:
     try:
         return model.model_validate(dict(request.query_params))
@@ -231,6 +235,12 @@ def register_system_admin_llm_routes(
         organization_id = str(query.organization_id)
         page = repository.list_versions_page(session, organization_id, limit=query.limit, cursor=query.cursor)
         return {"items": [_version_response(item) for item in page["items"]], "page_info": page["page_info"]}
+
+    @app.get("/v1/system-admin/llm/releases")
+    def list_llm_release_records(request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
+        query = _query_model(request, ReleaseRecordsQuery)
+        assert isinstance(query, ReleaseRecordsQuery)
+        return repository.list_release_records_page(session, str(query.organization_id), limit=query.limit, cursor=query.cursor)
 
     @app.get("/v1/system-admin/llm/config-versions/{version_id}")
     def get_llm_config_version(version_id: ResourceId, session: Any = Depends(system_session)) -> dict[str, Any]:

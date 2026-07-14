@@ -141,6 +141,7 @@ CORE_JSON_RESPONSES = {
     ("patch", "/v1/system-admin/llm/providers/{provider_id}", "200"): "#/components/schemas/LlmProvider",
     ("post", "/v1/system-admin/llm/providers/{provider_id}/connection-tests", "202"): "#/components/schemas/LlmConnectionTest",
     ("get", "/v1/system-admin/llm/config-versions", "200"): "#/components/schemas/LlmConfigVersionListResponse",
+    ("get", "/v1/system-admin/llm/releases", "200"): "#/components/schemas/LlmReleaseRecordListResponse",
     ("post", "/v1/system-admin/llm/config-versions/drafts", "201"): "#/components/schemas/LlmConfigVersion",
     ("get", "/v1/system-admin/llm/config-versions/{version_id}", "200"): "#/components/schemas/LlmConfigVersion",
     ("put", "/v1/system-admin/llm/config-versions/{version_id}/routes", "200"): "#/components/schemas/LlmConfigVersion",
@@ -841,6 +842,10 @@ class OpenApiContractTest(unittest.TestCase):
             version["properties"]["routes"]["items"]["$ref"],
             "#/components/schemas/LlmScenarioRouteView",
         )
+        audit_parameters = {item.get("name") for item in paths["/v1/system-admin/audit-logs"]["get"]["parameters"] if "name" in item}
+        self.assertIn("action_prefix", audit_parameters)
+        release = self.document["components"]["schemas"]["LlmReleaseRecord"]
+        self.assertIn("rollback_of_release_id", release["properties"])
 
     def test_llm_operations_document_exact_roles_base_errors_and_safe_request_examples(self):
         read_roles = {"super_admin", "release_admin", "technical_support", "security_auditor"}
@@ -1035,6 +1040,7 @@ class OpenApiContractTest(unittest.TestCase):
             (client.get("/v1/system-admin/llm/providers", headers=headers), "LlmProviderListResponse"),
             (draft_response, "LlmConfigVersion"),
             (client.get("/v1/system-admin/llm/config-versions?organization_id=11111111-1111-1111-1111-111111111111", headers=headers), "LlmConfigVersionListResponse"),
+            (client.get("/v1/system-admin/llm/releases?organization_id=11111111-1111-1111-1111-111111111111", headers=headers), "LlmReleaseRecordListResponse"),
             (connection_response, "LlmConnectionTest"),
             (client.get("/v1/system-admin/llm/usage/summary", headers=headers), "LlmUsageSummary"),
             (client.get("/v1/system-admin/llm/usage/timeseries", headers=headers), "LlmUsageTimeseriesResponse"),

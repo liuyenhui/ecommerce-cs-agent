@@ -119,6 +119,12 @@ export type LlmVersion = {
   rollback_of_version_id: string | null; release_record_id: string | null; release_status: string | null;
   evaluation_run_id: string | null; routes: LlmRoute[]; release_record: JsonRecord | null; evaluation: { evaluation_run_id: string } | null;
 };
+export type LlmReleaseRecord = {
+  release_record_id: string; organization_id: string; config_version_id: string;
+  status: string; revision: number; evaluation_run_id: string; evaluation_config_version_id: string; submitted_by_system_admin_user_id: string;
+  submitted_at: string; published_by_system_admin_user_id: string | null; published_at: string | null;
+  rollback_of_release_id: string | null; rollback_of_version_id: string | null;
+};
 export type CursorEnvelope<T> = { items: T[]; page_info: { limit: number; has_more: boolean; next_cursor: string | null } };
 export type LlmUsageFilters = {
   start_at?: string; end_at?: string; provider_config_id?: string; model?: string; scenario?: string;

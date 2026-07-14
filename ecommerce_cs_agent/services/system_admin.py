@@ -317,6 +317,8 @@ class InMemorySystemAdminRepository:
                     item for item in items
                     if str(item.get(item_key) or (item.get("actor_id") if key == "actor_user_id" else "") or "") == str(filters[key])
                 ]
+        if filters.get("action_prefix"):
+            items = [item for item in items if str(item.get("action") or "").startswith(str(filters["action_prefix"]))]
         if filters.get("sensitive_access") is not None:
             expected = bool(filters["sensitive_access"])
             items = [item for item in items if bool(item.get("sensitive_access")) is expected]
@@ -1163,6 +1165,7 @@ class PostgresSystemAdminRepository:
         store_id = filters.get("store_id")
         actor_user_id = filters.get("actor_user_id")
         action = filters.get("action")
+        action_prefix = filters.get("action_prefix")
         sensitive_access = filters.get("sensitive_access")
         time_from = filters.get("time_from")
         time_to = filters.get("time_to")
@@ -1172,6 +1175,7 @@ class PostgresSystemAdminRepository:
             store_id, store_id,
             actor_user_id, actor_user_id,
             action, action,
+            action_prefix, f"{action_prefix}%" if action_prefix else None,
             sensitive_access, sensitive_access,
             time_from, time_from,
             time_to, time_to,
@@ -1188,6 +1192,7 @@ class PostgresSystemAdminRepository:
                       AND (%s::text IS NULL OR st.external_store_id = %s)
                       AND (%s::text IS NULL OR audit.system_admin_user_id::text = %s)
                       AND (%s::text IS NULL OR audit.action = %s)
+                      AND (%s::text IS NULL OR audit.action LIKE %s ESCAPE '\\')
                       AND (%s::boolean IS NULL OR COALESCE((audit.diff_summary->>'sensitive_access')::boolean, false) = %s::boolean)
                       AND (%s::timestamptz IS NULL OR audit.created_at >= %s::timestamptz)
                       AND (%s::timestamptz IS NULL OR audit.created_at < %s::timestamptz)
@@ -1206,6 +1211,7 @@ class PostgresSystemAdminRepository:
                       AND (%s::text IS NULL OR st.external_store_id = %s)
                       AND (%s::text IS NULL OR audit.system_admin_user_id::text = %s)
                       AND (%s::text IS NULL OR audit.action = %s)
+                      AND (%s::text IS NULL OR audit.action LIKE %s ESCAPE '\\')
                       AND (%s::boolean IS NULL OR COALESCE((audit.diff_summary->>'sensitive_access')::boolean, false) = %s::boolean)
                       AND (%s::timestamptz IS NULL OR audit.created_at >= %s::timestamptz)
                       AND (%s::timestamptz IS NULL OR audit.created_at < %s::timestamptz)
@@ -1725,13 +1731,15 @@ def _parse_filter_datetime(value: Any, field: str) -> datetime:
 
 def _normalize_audit_filters(filters: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(filters)
-    for field in ("actor_user_id", "organization_id", "store_id", "action"):
+    for field in ("actor_user_id", "organization_id", "store_id", "action", "action_prefix"):
         if normalized.get(field) is None:
             continue
         value = str(normalized[field]).strip()
         if not value or len(value) > 256 or any(ord(char) < 32 for char in value):
             raise api_error(422, "validation_error", f"{field} is invalid")
         normalized[field] = value
+    if normalized.get("action_prefix") and any(char in normalized["action_prefix"] for char in ("%", "_", "\\")):
+        raise api_error(422, "validation_error", "action_prefix must not contain SQL wildcard characters")
     if normalized.get("sensitive_access") is not None:
         value = normalized["sensitive_access"]
         if isinstance(value, bool):

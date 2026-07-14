@@ -269,6 +269,11 @@ def test_draft_routes_validate_submit_publish_and_rollback_flow(monkeypatch: pyt
     assert rolled_back.status_code == 200
     assert rolled_back.json()["status"] == "running"
     assert rolled_back.json()["rollback_of_version_id"] == draft.json()["version_id"]
+    releases = client.get(f"/v1/system-admin/llm/releases?organization_id={ORG_ID}&limit=1", headers=SYSTEM_HEADERS)
+    assert releases.status_code == 200
+    assert releases.json()["items"][0]["release_record_id"] == rolled_back.json()["release_record_id"]
+    assert releases.json()["items"][0]["rollback_of_version_id"] == draft.json()["version_id"]
+    assert releases.json()["page_info"]["has_more"] is True
 
 
 def test_incomplete_routes_stale_revision_and_release_gate_have_exact_conflicts(monkeypatch: pytest.MonkeyPatch) -> None:

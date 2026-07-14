@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 from psycopg import OperationalError, ProgrammingError
 from fastapi.testclient import TestClient
 
@@ -415,6 +416,38 @@ def test_in_memory_audit_list_excludes_its_own_read_audit_from_items_and_total()
     assert len(repository.audit_logs) == 2
 
 
+def test_in_memory_audit_action_prefix_filters_before_pagination_and_total() -> None:
+    repository = InMemorySystemAdminRepository()
+    repository.audit_logs = [
+        {
+            "audit_log_id": f"audit-other-{index}", "actor_system_user_id": "sysadmin-001",
+            "organization_id": None, "store_id": None, "action": "system_admin.health.get",
+            "object_type": "health", "object_id": str(index), "reason": None,
+            "diff_summary": {}, "sensitive_access": False, "created_at": "2026-07-15T08:30:00Z",
+        }
+        for index in range(101)
+    ] + [{
+        "audit_log_id": "audit-llm", "actor_system_user_id": "sysadmin-llm",
+        "organization_id": None, "store_id": None, "action": "llm.config.publish",
+        "object_type": "llm_config_version", "object_id": "version-1", "reason": "approved",
+        "diff_summary": {"result": "running", "secret": "must-not-render"},
+        "sensitive_access": False, "created_at": "2026-07-15T08:31:00Z",
+    }]
+
+    response = repository.list_audit_logs(_system_session(), {"action_prefix": "llm.", "page": 1, "page_size": 20})
+
+    assert response["page_info"] == {"page": 1, "page_size": 20, "total": 1}
+    assert response["items"][0]["actor_system_user_id"] == "sysadmin-llm"
+    assert response["items"][0]["diff_summary"]["result"] == "running"
+
+
+def test_system_admin_audit_rejects_wildcard_action_prefix() -> None:
+    repository = InMemorySystemAdminRepository()
+    with pytest.raises(HTTPException) as invalid:
+        repository.list_audit_logs(_system_session(), {"action_prefix": "llm.%"})
+    assert invalid.value.status_code == 422
+
+
 @pytest.mark.parametrize(
     "query",
     [
@@ -666,6 +699,20 @@ def test_postgres_system_admin_audit_applies_all_filters_to_count_and_page_queri
     assert all("audit.action =" in sql for sql in select_sql)
     assert all("audit.created_at >=" in sql for sql in select_sql)
     assert all("audit.created_at <" in sql for sql in select_sql)
+
+
+def test_postgres_system_admin_audit_parameterizes_action_prefix_for_count_and_page() -> None:
+    connection = _FakeConnection(fetch_rows=[(0,), []])
+    repository = PostgresSystemAdminRepository.__new__(PostgresSystemAdminRepository)
+    repository._database_url = "postgresql://example"
+    repository._connect = lambda _url: connection
+
+    repository.list_audit_logs(_system_session(), {"action_prefix": "llm."})
+
+    selects = [(sql, params) for sql, params in connection.executed if "FROM system_admin_audit_log audit" in sql]
+    assert len(selects) == 2
+    assert all("audit.action LIKE %s ESCAPE" in sql for sql, _ in selects)
+    assert all("llm.%" in params for _, params in selects)
 
 
 def test_system_admin_api_uses_postgres_repository_when_database_url_is_configured(monkeypatch) -> None:

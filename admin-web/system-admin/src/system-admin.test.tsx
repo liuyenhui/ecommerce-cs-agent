@@ -12,7 +12,7 @@ import { ReadinessPage } from "./pages/ReadinessPage";
 import { TasksPage } from "./pages/TasksPage";
 import { TenantsPage } from "./pages/TenantsPage";
 import { TracesPage } from "./pages/TracesPage";
-import { LlmGovernancePage } from "./pages/LlmGovernancePage";
+import { LlmGovernancePage, validateLlmRoute } from "./pages/LlmGovernancePage";
 import { ReleasesPage } from "./pages/ReleasesPage";
 import { App } from "./App";
 import { SYSTEM_ADMIN_URLS, systemAdminPaths } from "./system-api";
@@ -387,7 +387,7 @@ describe("LLM governance and releases", () => {
   it("separates provider, route and runtime panels and exposes four governance tabs", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path.includes("/providers")) return response({ items: [provider] });
+      if (path.includes("/providers")) return response({ items: [{ ...provider, secret_value: "must-never-render", authorization: "Bearer must-never-render" }] });
       if (path.includes("/config-versions?")) return response({ items: [version], page_info: { limit: 50, has_more: false, next_cursor: null } });
       return response({});
     }));
@@ -400,6 +400,7 @@ describe("LLM governance and releases", () => {
     }
     expect(screen.queryByLabelText(/secret value/i)).toBeNull();
     expect(screen.queryByDisplayValue(/sk-/i)).toBeNull();
+    expect(screen.queryByText(/must-never-render/i)).toBeNull();
     expect(screen.getByText(/agent\/llm-provider:api-key/)).toBeTruthy();
   });
 
@@ -424,9 +425,10 @@ describe("LLM governance and releases", () => {
 
   it("requires confirmation, reason and idempotency key before publishing a passed evaluation", async () => {
     const published = { ...version, status: "pending_publish", evaluation_run_id: "eval-passed", evaluation: { evaluation_run_id: "eval-passed" } };
-    const requests: Array<{ path: string; body?: Record<string, unknown> }> = [];
+    const requests: Array<{ path: string; body?: Record<string, unknown> }> = []; const reads: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
+      if (!init?.method) reads.push(path);
       if (init?.method === "POST") requests.push({ path, body: JSON.parse(String(init.body)) });
       if (path.includes("/config-versions?")) return response({ items: [published], page_info: { limit: 50, has_more: false, next_cursor: null } });
       if (path.endsWith("/publish")) return response({ ...published, status: "running", revision: 4 });
@@ -444,6 +446,53 @@ describe("LLM governance and releases", () => {
     await waitFor(() => expect(requests).toHaveLength(1));
     expect(requests[0].path).toContain(`/config-versions/${published.version_id}/publish`);
     expect(requests[0].body).toMatchObject({ expected_revision: 3, reason: "评测通过，批准发布", idempotency_key: "release-4-approved" });
+    await waitFor(() => expect(reads.filter((path) => path.includes("/config-versions?")).length).toBeGreaterThanOrEqual(2));
+    expect(reads.filter((path) => path.includes("/llm/releases?")).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps Releases read-only for auditors and follows the real release cursor", async () => {
+    const paths: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input); paths.push(path);
+      if (path.includes("/config-versions?")) return response({ items: [{ ...version, status: "pending_publish", evaluation: { evaluation_run_id: "eval-real" } }], page_info: { limit: 50, has_more: false, next_cursor: null } });
+      if (path.includes("/llm/releases?")) return response({ items: [{ release_record_id: "rel-1", organization_id: version.organization_id, config_version_id: version.version_id, evaluation_run_id: "eval-real", evaluation_config_version_id: version.version_id, status: "running", revision: 2, submitted_by_system_admin_user_id: "sys-1", submitted_at: "2026-07-15T00:00:00Z", published_by_system_admin_user_id: "sys-2", published_at: "2026-07-15T00:01:00Z", rollback_of_release_id: null, rollback_of_version_id: null }], page_info: { limit: 50, has_more: !path.includes("cursor=release-next"), next_cursor: path.includes("cursor=release-next") ? null : "release-next" } });
+      return response({ items: [] });
+    }));
+    render(<ReleasesPage roles={["security_auditor"]} />);
+    fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" }));
+    expect(await screen.findByText("发布记录：rel-1")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /发布版本|回滚到此版本/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "加载更多发布记录" }));
+    await waitFor(() => expect(paths.some((path) => path.includes("/llm/releases?") && path.includes("cursor=release-next"))).toBe(true));
+  });
+
+  it("clears old release data and cursors before a different organization finishes loading", async () => {
+    let hold = false;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (hold) return new Promise<Response>(() => undefined);
+      const path = String(input);
+      if (path.includes("/config-versions?")) return response({ items: [version], page_info: { limit: 50, has_more: true, next_cursor: "old-version" } });
+      return response({ items: [{ release_record_id: "old-release", organization_id: version.organization_id, config_version_id: version.version_id, evaluation_run_id: "eval-real", evaluation_config_version_id: version.version_id, status: "running", revision: 2, submitted_by_system_admin_user_id: "sys-1", submitted_at: "2026-07-15T00:00:00Z", published_by_system_admin_user_id: "sys-2", published_at: "2026-07-15T00:01:00Z", rollback_of_release_id: null, rollback_of_version_id: null }], page_info: { limit: 50, has_more: true, next_cursor: "old-release-cursor" } });
+    }));
+    render(<ReleasesPage />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" })); expect(await screen.findByText("发布记录：old-release")).toBeTruthy();
+    hold = true; fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" }));
+    expect(screen.queryByText("发布记录：old-release")).toBeNull(); expect(screen.queryByRole("button", { name: "加载更多发布记录" })).toBeNull();
+  });
+
+  it("confirms rollback and refetches versions plus release records", async () => {
+    const reads: string[] = []; const writes: Array<{ path: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input); if (!init?.method) reads.push(path);
+      if (path.endsWith("/rollback") && init?.method === "POST") { writes.push({ path, body: JSON.parse(String(init.body)) }); return response({ ...version, status: "running" }); }
+      if (path.includes("/config-versions?")) return response({ items: [{ ...version, status: "running" }], page_info: { limit: 50, has_more: false, next_cursor: null } });
+      if (path.includes("/llm/releases?")) return response({ items: [{ release_record_id: "rel-running", organization_id: version.organization_id, config_version_id: version.version_id, evaluation_run_id: "eval-real", evaluation_config_version_id: version.version_id, status: "running", revision: 2, submitted_by_system_admin_user_id: "sys-1", submitted_at: "2026-07-15T00:00:00Z", published_by_system_admin_user_id: "sys-2", published_at: "2026-07-15T00:01:00Z", rollback_of_release_id: null, rollback_of_version_id: null }], page_info: { limit: 50, has_more: false, next_cursor: null } });
+      return response({ items: [] });
+    }));
+    vi.spyOn(window, "prompt").mockReturnValue("生产回归"); vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<ReleasesPage roles={["release_admin"]} />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "查询版本" }));
+    fireEvent.click(await screen.findByRole("button", { name: "回滚到此版本" }));
+    await waitFor(() => expect(writes).toHaveLength(1)); expect(writes[0].path).toContain(`/config-versions/${version.version_id}/rollback`); expect(writes[0].body.reason).toBe("生产回归");
+    await waitFor(() => expect(reads.filter((path) => path.includes("/config-versions?")).length).toBeGreaterThanOrEqual(2)); expect(reads.filter((path) => path.includes("/llm/releases?")).length).toBeGreaterThanOrEqual(2);
   });
 
   it("creates a provider with Kubernetes Secret references but never accepts a secret value", async () => {
@@ -557,6 +606,114 @@ describe("LLM governance and releases", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认创建草稿" }));
     await waitFor(() => expect(writes).toHaveLength(1));
     expect(writes[0]).toEqual({ organization_id: version.organization_id, description: "路由参数调整", reason: "准备评测", idempotency_key: "draft-route-4" });
+  });
+
+  it("clears old organization routes and version cursor before a new organization loads", async () => {
+    let hold = false;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input); if (path.includes("/providers")) return response({ items: [] }); if (hold) return new Promise<Response>(() => undefined);
+      return response({ items: [version], page_info: { limit: 50, has_more: true, next_cursor: "old-version-cursor" } });
+    }));
+    render(<LlmGovernancePage />); fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "加载组织配置" })); expect(await screen.findByText(/版本 4 · draft/)).toBeTruthy();
+    hold = true; fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" } }); fireEvent.click(screen.getByRole("button", { name: "加载组织配置" }));
+    expect(screen.queryByText(/版本 4 · draft/)).toBeNull(); expect(screen.getByText("加载草稿后编辑真实运行参数。")).toBeTruthy();
+  });
+
+  it("does not show synthetic zero metrics while usage is loading", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      if (String(input).includes("/providers")) return Promise.resolve(response({ items: [] }));
+      return new Promise<Response>(() => undefined);
+    }));
+    render(<LlmGovernancePage roles={["security_auditor"]} />);
+    fireEvent.click(screen.getByRole("tab", { name: "调用与成本" }));
+    expect(await screen.findByText("正在加载用量与成本数据")).toBeTruthy();
+    expect(screen.queryByText("总请求数")).toBeNull();
+  });
+
+  it("shows complete real usage and requests failed-only error breakdown", async () => {
+    const paths: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input); paths.push(path);
+      if (path.includes("/providers")) return response({ items: [] });
+      if (path.includes("/usage/summary")) return response({ calls: 7, input_tokens: 11, output_tokens: 13, total_tokens: 24, estimated_cost_micros: null, cost_by_currency: { CNY: 2000000, USD: 1000000 }, p95_latency_ms: 250, error_rate: .25, fallback_rate: .1 });
+      if (path.includes("/usage/invocations")) return response({ items: [{ invocation_id: "inv-1", occurred_at: "2026-07-15T00:00:00Z", provider_config_id: provider.provider_id, provider_name: provider.name, model: "gpt-5-mini", scenario: "reply_generation", organization_id: version.organization_id, store_id: null, route_role: "fallback", input_tokens: 11, output_tokens: 13, latency_ms: 250, status: "failed", error_code: "timeout", estimated_cost_micros: 1000000, currency: "USD" }], page_info: { limit: 100, has_more: false, next_cursor: null } });
+      return response({ items: [] });
+    }));
+    render(<LlmGovernancePage roles={["technical_support"]} />);
+    fireEvent.click(screen.getByRole("tab", { name: "调用与成本" }));
+    expect(await screen.findByText("总请求数")).toBeTruthy();
+    for (const text of ["总 Token", "P95 延迟", "错误率", "降级率", "CNY 2.000000", "USD 1.000000", "inv-1", provider.provider_id, "Production OpenAI", "reply_generation", "fallback", "输入 11", "输出 13", "250 ms", "timeout"]) expect(screen.getByText(text)).toBeTruthy();
+    expect(paths.some((path) => path.includes("group_by=error_code") && path.includes("status=failed"))).toBe(true);
+  });
+
+  it("uses the invocation cursor only for the same successful filter result", async () => {
+    const paths: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input); paths.push(path);
+      if (path.includes("/providers")) return response({ items: [] });
+      if (path.includes("/usage/summary")) return response({ calls: 1, input_tokens: 1, output_tokens: 1, total_tokens: 2, estimated_cost_micros: 1, cost_by_currency: { USD: 1 }, p95_latency_ms: 1, error_rate: 0, fallback_rate: 0 });
+      if (path.includes("/usage/invocations")) return response({ items: [], page_info: { limit: 100, has_more: !path.includes("cursor=inv-next"), next_cursor: path.includes("cursor=inv-next") ? null : "inv-next" } });
+      return response({ items: [] });
+    }));
+    render(<LlmGovernancePage roles={["technical_support"]} />); fireEvent.click(screen.getByRole("tab", { name: "调用与成本" }));
+    fireEvent.click(await screen.findByRole("button", { name: "加载更多调用" }));
+    await waitFor(() => expect(paths.some((path) => path.includes("/usage/invocations") && path.includes("cursor=inv-next"))).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "查询用量" }));
+    expect(screen.queryByRole("button", { name: "加载更多调用" })).toBeNull();
+  });
+
+  it("hides high-risk writes from read-only roles and allows technical support connection tests only", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("/providers") ? response({ items: [provider] }) : response({ items: [] })));
+    const { rerender } = render(<LlmGovernancePage roles={["security_auditor"]} />);
+    await screen.findByText("Production OpenAI");
+    expect(screen.queryByRole("button", { name: "新增 Provider" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "测试连接" })).toBeNull();
+    rerender(<LlmGovernancePage roles={["technical_support"]} />);
+    expect(await screen.findByRole("button", { name: "测试连接" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "新增 Provider" })).toBeNull();
+  });
+
+  it("shows connection-test progress and a safe failed result", async () => {
+    let finish!: (value: Response) => void; const pending = new Promise<Response>((resolve) => { finish = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.includes("/providers") && !init?.method) return response({ items: [provider] });
+      if (path.includes("/config-versions?") && !init?.method) return response({ items: [version], page_info: { limit: 50, has_more: false, next_cursor: null } });
+      if (path.includes("/connection-tests") && init?.method === "POST") return pending;
+      return response({ items: [] });
+    }));
+    vi.spyOn(window, "prompt").mockReturnValue("验证生产连接");
+    render(<LlmGovernancePage roles={["technical_support"]} />);
+    fireEvent.change(screen.getByLabelText("组织 ID"), { target: { value: version.organization_id } }); fireEvent.click(screen.getByRole("button", { name: "加载组织配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "测试连接" }));
+    expect(screen.getByRole("button", { name: "测试中…" }).hasAttribute("disabled")).toBe(true); expect(screen.getByText("连接测试进行中…")).toBeTruthy();
+    finish(response({ status: "failed", latency_ms: 321, error_code: "upstream_timeout", redacted_error_message: "safe failure" }, 202));
+    expect(await screen.findByText("连接测试失败，耗时 321ms")).toBeTruthy();
+  });
+
+  it("validates every route numeric boundary including finite integer constraints", () => {
+    expect(validateLlmRoute(version.routes[0])).toBeNull();
+    for (const patch of [
+      { temperature: Number.NaN }, { temperature: 2.01 }, { max_output_tokens: 0 }, { max_output_tokens: 1.5 },
+      { timeout_seconds: 301 }, { max_retries: 20.5 }, { circuit_breaker_threshold: 0 }, { recovery_probe_seconds: 86401 }
+    ]) expect(validateLlmRoute({ ...version.routes[0], ...patch })).not.toBeNull();
+    expect(validateLlmRoute({ ...version.routes[0], temperature: 2, max_output_tokens: 1000000, timeout_seconds: 300, max_retries: 20, circuit_breaker_threshold: 10000, recovery_probe_seconds: 86400 })).toBeNull();
+  });
+
+  it("uses server-side LLM audit pagination and safe audit fields", async () => {
+    const paths: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input); paths.push(path);
+      if (path.includes("/providers")) return response({ items: [] });
+      return response({ items: [{ audit_log_id: "audit-1", actor_system_user_id: "sys-real", action: "llm.config.publish", reason: "approved", diff_summary: { response_snapshot: { status: "running", secret: "never-show" }, secret: "never-show" }, created_at: "2026-07-15T00:00:00Z" }], page_info: { page: path.includes("page=2") ? 2 : 1, page_size: 20, total: 101 } });
+    }));
+    render(<LlmGovernancePage roles={["security_auditor"]} />);
+    fireEvent.click(screen.getByRole("tab", { name: "变更审计" }));
+    expect(await screen.findByText("sys-real")).toBeTruthy();
+    expect(screen.getByText("running")).toBeTruthy();
+    expect(screen.queryByText("never-show")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    await waitFor(() => expect(paths.some((path) => path.includes("action_prefix=llm.") && path.includes("page=2") && path.includes("page_size=20"))).toBe(true));
   });
 });
 

@@ -108,6 +108,27 @@ def test_provider_response_uses_allowlist_and_never_contains_secret_value() -> N
     assert "Bearer private" not in flattened
 
 
+def test_release_records_are_real_cursor_paginated_history() -> None:
+    service = InMemoryLlmGovernanceRepository(
+        connection_tester=lambda _provider, _request: {"status": "passed", "latency_ms": 4},
+        release_gate_checker=lambda _version, _run_id: {"status": "passed"},
+    )
+    primary = _create_provider(service, name="primary", idem="release-list-provider")
+    routes = _all_routes(primary["provider_id"])
+    first = _release(service, routes, suffix="release-list-one")
+    second = _release(service, routes, suffix="release-list-two")
+
+    first_page = service.list_release_records_page(_session("security_auditor"), ORG_ID, limit=1)
+    second_page = service.list_release_records_page(_session(), ORG_ID, limit=1, cursor=first_page["page_info"]["next_cursor"])
+
+    assert first_page["page_info"]["has_more"] is True
+    assert first_page["items"][0]["config_version_id"] == second["version_id"]
+    assert first_page["items"][0]["status"] == "running"
+    assert second_page["items"][0]["config_version_id"] == first["version_id"]
+    assert second_page["items"][0]["status"] == "superseded"
+    assert second_page["page_info"]["next_cursor"] is None
+
+
 def test_all_writes_require_live_system_session_role_reason_and_idempotency_key() -> None:
     service = InMemoryLlmGovernanceRepository()
     with pytest.raises(HTTPException) as expired:

@@ -2093,6 +2093,15 @@ paths:
             type: string
             maxLength: 256
           description: 审计动作精确值，例如 `system_admin.release.publish`。
+        - name: action_prefix
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+            pattern: "^[^%_\\\\]+$"
+          description: 审计动作安全前缀，例如 `llm.`；服务端在 total 和分页前过滤，不接受 SQL 通配符。
         - name: sensitive_access
           in: query
           required: false
@@ -2350,6 +2359,39 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/InternalError"
+
+  /v1/system-admin/llm/releases:
+    get:
+      tags: [System Admin LLM Governance]
+      operationId: listSystemAdminLlmReleaseRecords
+      summary: 按组织查询真实 LLM 发布记录
+      description: super_admin、release_admin、technical_support 和 security_auditor 可读；返回 llm_release_record 持久化记录，不从配置版本状态推断。
+      x-roles: [super_admin, release_admin, technical_support, security_auditor]
+      security:
+        - SystemAdminSession: []
+      parameters:
+        - name: organization_id
+          in: query
+          required: true
+          schema: {type: string, format: uuid, minLength: 36, maxLength: 36}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+        - name: cursor
+          in: query
+          description: Opaque exclusive cursor；只能在相同 organization_id 下复用，无下一页时为 null。
+          schema: {type: string, minLength: 1, maxLength: 1024}
+      responses:
+        "200":
+          description: 真实发布记录 cursor 分页列表。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmReleaseRecordListResponse"
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+        "500": {$ref: "#/components/responses/InternalError"}
 
   /v1/system-admin/llm/config-versions/drafts:
     post:
@@ -3289,6 +3331,37 @@ components:
         status: {type: [string, "null"], enum: [pending, running, superseded, rolled_back, null]}
         rollback_of_version_id:
           oneOf: [{type: string, format: uuid}, {type: "null"}]
+
+    LlmReleaseRecord:
+      type: object
+      additionalProperties: false
+      required: [release_record_id, organization_id, config_version_id, evaluation_run_id, evaluation_config_version_id, status, revision, submitted_by_system_admin_user_id, submitted_at, published_by_system_admin_user_id, published_at, rollback_of_release_id, rollback_of_version_id]
+      properties:
+        release_record_id: {type: string, format: uuid}
+        organization_id: {type: string, format: uuid}
+        config_version_id: {type: string, format: uuid}
+        evaluation_run_id: {type: string, minLength: 1, maxLength: 128}
+        evaluation_config_version_id: {type: string, format: uuid}
+        status: {type: string, enum: [pending, running, superseded, rolled_back]}
+        revision: {type: integer, minimum: 1}
+        submitted_by_system_admin_user_id: {type: string}
+        submitted_at: {type: string, format: date-time}
+        published_by_system_admin_user_id: {type: [string, "null"]}
+        published_at: {type: [string, "null"], format: date-time}
+        rollback_of_release_id:
+          oneOf: [{type: string, format: uuid}, {type: "null"}]
+        rollback_of_version_id:
+          oneOf: [{type: string, format: uuid}, {type: "null"}]
+
+    LlmReleaseRecordListResponse:
+      type: object
+      additionalProperties: false
+      required: [items, page_info]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/LlmReleaseRecord"}
+        page_info: {$ref: "#/components/schemas/LlmPageInfo"}
 
     LlmEvaluationSummary:
       type: object

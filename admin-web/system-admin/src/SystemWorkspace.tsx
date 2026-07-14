@@ -61,6 +61,8 @@ export async function loadDashboardSupportingData(api: Pick<typeof systemApi, "r
 }
 
 export function SystemWorkspace({ activePage, session, setToast }: { activePage: SystemPage; session?: JsonRecord; setToast: (toast: ToastState) => void }) {
+  const sessionUser = (session?.user as JsonRecord | undefined) || {};
+  const roles = Array.isArray(sessionUser.roles) ? sessionUser.roles.map(String) : [];
   const [dashboard, setDashboard] = React.useState<RequestState<DashboardData>>(loading);
   const [tenants, setTenants] = React.useState<RequestState<TenantData>>(loading);
   const [readiness, setReadiness] = React.useState<RequestState<PageEnvelope<ReadinessRecord>>>(loading);
@@ -228,8 +230,8 @@ export function SystemWorkspace({ activePage, session, setToast }: { activePage:
       {activePage === "dashboard" ? <DashboardPage state={dashboard} /> : null}
       {activePage === "tenants" ? <TenantsPage state={tenants} onTenantPageChange={(page) => void loadTenantPage(page)} onStorePageChange={(page) => void loadStorePage(page)} /> : null}
       {activePage === "readiness" ? <ReadinessPage state={readiness} onPageChange={(page) => void loadReadiness(page)} /> : null}
-      {activePage === "llm" ? <LlmGovernancePage /> : null}
-      {activePage === "releases" ? <ReleasesPage /> : null}
+      {activePage === "llm" ? <LlmGovernancePage roles={roles} /> : null}
+      {activePage === "releases" ? <ReleasesPage roles={roles} /> : null}
       {activePage === "traces" ? <TracesPage state={traces} detail={traceDetail} onSearch={(filters) => void searchTraces({ ...filters, page: 1 })} onPageChange={(page) => void searchTraces({ ...traceQuery.current, page })} onOpen={(id) => void openTrace(id)} onClose={() => { controllers.current.get("trace-detail")?.abort(); setTraceDetail(null); }} /> : null}
       {activePage === "tasks" ? <TasksPage state={tasks} onRetry={(task) => void retryTask(task)} onPageChange={(page) => void loadTasks(page)} /> : null}
       {activePage === "audit" ? <AuditPage state={audit} onSearch={(filters) => void loadAudit({ ...filters, page: 1 })} onPageChange={(page) => void loadAudit({ ...auditQuery.current, page })} /> : null}

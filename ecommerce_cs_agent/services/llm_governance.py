@@ -52,6 +52,7 @@ class LlmGovernanceRepository(Protocol):
     def test_connection(self, session: SystemAdminSession, provider_id: str, payload: dict[str, Any]) -> dict[str, Any]: ...
     def list_versions(self, session: SystemAdminSession, organization_id: str) -> list[dict[str, Any]]: ...
     def list_versions_page(self, session: SystemAdminSession, organization_id: str, *, limit: int = 50, cursor: str | None = None) -> dict[str, Any]: ...
+    def list_release_records_page(self, session: SystemAdminSession, organization_id: str, *, limit: int = 50, cursor: str | None = None) -> dict[str, Any]: ...
     def get_version(self, session: SystemAdminSession, version_id: str) -> dict[str, Any]: ...
     def create_draft(self, session: SystemAdminSession, payload: dict[str, Any]) -> dict[str, Any]: ...
     def replace_routes(self, session: SystemAdminSession, version_id: str, routes: list[dict[str, Any]], *, expected_revision: int, payload: dict[str, Any]) -> dict[str, Any]: ...
@@ -479,6 +480,27 @@ class InMemoryLlmGovernanceRepository:
         if not version:
             raise api_error(404, "config_version_not_found", "config version was not found")
         return copy.deepcopy(version)
+
+    def list_release_records_page(self, session: SystemAdminSession, organization_id: str, *, limit: int = 50, cursor: str | None = None) -> dict[str, Any]:
+        _require_role(session, _READ_ROLES)
+        limit = min(max(int(limit), 1), 100)
+        scope_hash = _cursor_scope_hash("release_records", {"organization_id": organization_id, "sort": ["submitted_at:desc", "release_record_id:desc"]})
+        decoded = _decode_cursor(cursor, kind="release_records", scope_hash=scope_hash)
+        boundary = (str(decoded["submitted_at"]), str(decoded["id"])) if decoded else None
+        candidates = sorted(
+            (copy.deepcopy(item) for item in self.release_records.values() if item["organization_id"] == organization_id),
+            key=lambda item: (str(item["submitted_at"]), str(item["release_record_id"])), reverse=True,
+        )
+        if boundary:
+            candidates = [item for item in candidates if (str(item["submitted_at"]), str(item["release_record_id"])) < boundary]
+        selected = candidates[: limit + 1]
+        has_more = len(selected) > limit
+        items = selected[:limit]
+        next_cursor = None
+        if has_more:
+            last = items[-1]
+            next_cursor = _encode_cursor({"version": 1, "kind": "release_records", "scope_hash": scope_hash, "submitted_at": last["submitted_at"], "id": last["release_record_id"]})
+        return {"items": items, "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
 
     def replace_routes(self, session: SystemAdminSession, version_id: str, routes: list[dict[str, Any]], *, expected_revision: int, payload: dict[str, Any]) -> dict[str, Any]:
         clean_routes = _validate_route_collection(routes)
@@ -988,6 +1010,37 @@ class PostgresLlmGovernanceRepository:
     def get_version(self, session: SystemAdminSession, version_id: str) -> dict[str, Any]:
         _require_role(session, _READ_ROLES)
         return self._read(lambda cur: self._fetch_version(cur, version_id))
+
+    def list_release_records_page(self, session: SystemAdminSession, organization_id: str, *, limit: int = 50, cursor: str | None = None) -> dict[str, Any]:
+        _require_role(session, _READ_ROLES)
+        limit = min(max(int(limit), 1), 100)
+        scope_hash = _cursor_scope_hash("release_records", {"organization_id": organization_id, "sort": ["submitted_at:desc", "release_record_id:desc"]})
+        decoded = _decode_cursor(cursor, kind="release_records", scope_hash=scope_hash)
+        boundary_at = decoded.get("submitted_at") if decoded else None
+        boundary_id = decoded.get("id") if decoded else None
+        def op(cur: Any) -> dict[str, Any]:
+            cur.execute(
+                "SELECT id::text, organization_id::text, config_version_id::text, evaluation_run_id, "
+                "evaluation_config_version_id::text, status, revision, submitted_by_system_admin_user_id::text, submitted_at, "
+                "published_by_system_admin_user_id::text, published_at, rollback_of_release_id::text, rollback_of_version_id::text "
+                "FROM llm_release_record WHERE organization_id=%s "
+                "AND (%s::timestamptz IS NULL OR (submitted_at, id) < (%s::timestamptz, %s::uuid)) "
+                "ORDER BY submitted_at DESC, id DESC LIMIT %s",
+                (organization_id, boundary_at, boundary_at, boundary_id, limit + 1),
+            )
+            keys = ("release_record_id", "organization_id", "config_version_id", "evaluation_run_id", "evaluation_config_version_id", "status", "revision", "submitted_by_system_admin_user_id", "submitted_at", "published_by_system_admin_user_id", "published_at", "rollback_of_release_id", "rollback_of_version_id")
+            items = [dict(zip(keys, row)) for row in cur.fetchall()]
+            for item in items:
+                item["submitted_at"] = _iso(item["submitted_at"])
+                item["published_at"] = _iso(item["published_at"])
+            has_more = len(items) > limit
+            items = items[:limit]
+            next_cursor = None
+            if has_more:
+                last = items[-1]
+                next_cursor = _encode_cursor({"version": 1, "kind": "release_records", "scope_hash": scope_hash, "submitted_at": last["submitted_at"], "id": last["release_record_id"]})
+            return {"items": items, "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
+        return self._read(op)
 
     def _fetch_version(self, cur: Any, version_id: str, *, lock: bool = False) -> dict[str, Any]:
         cur.execute("SELECT id::text, organization_id::text, version_number, status, revision, description, configuration_hash, created_by_system_admin_user_id::text, created_at, published_by_system_admin_user_id::text, published_at, rollback_of_version_id::text FROM llm_config_version WHERE id=%s" + (" FOR UPDATE" if lock else ""), (version_id,))
