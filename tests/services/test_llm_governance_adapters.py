@@ -716,14 +716,25 @@ def test_default_kubernetes_transport_ignores_https_proxy_and_targets_only_clust
 
     class RawSocket:
         def settimeout(self, timeout: float) -> None: calls["socket_timeout"] = timeout
+        def do_handshake(self) -> None: calls["tls_handshake"] = True
         def shutdown(self, _how: int) -> None: return None
         def close(self) -> None: calls["socket_closed"] = True
 
     raw_socket = RawSocket()
 
     class Context:
-        def wrap_socket(self, sock: object, *, server_hostname: str) -> object:
-            calls.update(wrapped_socket=sock, server_hostname=server_hostname)
+        def wrap_socket(
+            self,
+            sock: object,
+            *,
+            server_hostname: str,
+            do_handshake_on_connect: bool,
+        ) -> object:
+            calls.update(
+                wrapped_socket=sock,
+                server_hostname=server_hostname,
+                do_handshake_on_connect=do_handshake_on_connect,
+            )
             return sock
 
     class Response:
@@ -771,8 +782,84 @@ def test_default_kubernetes_transport_ignores_https_proxy_and_targets_only_clust
     assert calls["port"] == 443
     assert calls["socket_address"] == ("10.96.0.1", 443)
     assert calls["server_hostname"] == "kubernetes.default.svc"
+    assert calls["do_handshake_on_connect"] is False
+    assert calls["tls_handshake"] is True
     assert calls["path"] == "/api/v1/namespaces/runtime/secrets/llm"
     assert "attacker.invalid" not in repr(calls)
+
+
+@pytest.mark.parametrize("transport_kind", ["kubernetes", "provider"])
+def test_tls_socket_is_owned_before_post_wrap_deadline_check(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    transport_kind: str,
+) -> None:
+    clock = [0.0]
+
+    class Socket:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def settimeout(self, _timeout: float) -> None:
+            return None
+
+        def shutdown(self, _how: int) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    raw_socket = Socket()
+    tls_socket = Socket()
+
+    class Context:
+        def wrap_socket(
+            self,
+            _sock: object,
+            *,
+            server_hostname: str,
+            do_handshake_on_connect: bool = True,
+        ) -> object:
+            assert do_handshake_on_connect is False
+            assert server_hostname in {
+                "kubernetes.default.svc",
+                "models.example.test",
+            }
+            clock[0] = 2.0
+            return tls_socket
+
+    deadline_type = getattr(adapter_module, "_Deadline")
+    monkeypatch.setattr(
+        adapter_module.socket,
+        "create_connection",
+        lambda *_args, **_kwargs: raw_socket,
+    )
+    monkeypatch.setattr(
+        adapter_module.ssl,
+        "create_default_context",
+        lambda **_kwargs: Context(),
+    )
+
+    with pytest.raises(TimeoutError):
+        if transport_kind == "kubernetes":
+            ca_file = tmp_path / "ca.crt"
+            ca_file.write_text("ca", encoding="utf-8")
+            _KubernetesApiTransport()(
+                adapter_module.Request(
+                    "https://10.96.0.1/api/v1/namespaces/runtime/secrets/llm"
+                ),
+                deadline_type(1.0, lambda: clock[0]),
+                str(ca_file),
+            )
+        else:
+            _PinnedProviderTransport()(
+                adapter_module.Request("https://models.example.test/models"),
+                deadline_type(1.0, lambda: clock[0]),
+                "93.184.216.34",
+                "models.example.test",
+            )
+
+    assert tls_socket.closed is True
 
 
 def test_kubernetes_redirect_is_rejected_without_reusing_service_account_token(tmp_path: Path) -> None:
@@ -815,14 +902,25 @@ def test_default_provider_transport_connects_to_pinned_ip_with_original_tls_sni(
     calls: dict[str, object] = {}
     class RawSocket:
         def settimeout(self, timeout: float) -> None: calls["socket_timeout"] = timeout
+        def do_handshake(self) -> None: calls["tls_handshake"] = True
         def shutdown(self, _how: int) -> None: return None
         def close(self) -> None: calls["socket_closed"] = True
 
     raw_socket = RawSocket()
 
     class Context:
-        def wrap_socket(self, sock: object, *, server_hostname: str) -> object:
-            calls.update(wrapped_socket=sock, server_hostname=server_hostname)
+        def wrap_socket(
+            self,
+            sock: object,
+            *,
+            server_hostname: str,
+            do_handshake_on_connect: bool,
+        ) -> object:
+            calls.update(
+                wrapped_socket=sock,
+                server_hostname=server_hostname,
+                do_handshake_on_connect=do_handshake_on_connect,
+            )
             return sock
 
     class Response:
@@ -866,6 +964,8 @@ def test_default_provider_transport_connects_to_pinned_ip_with_original_tls_sni(
     assert status == 200
     assert calls["socket_address"] == ("93.184.216.34", 443)
     assert calls["server_hostname"] == "models.example.test"
+    assert calls["do_handshake_on_connect"] is False
+    assert calls["tls_handshake"] is True
     assert calls["headers"] == {"Host": "models.example.test", "Authorization": "Bearer secret"}
 
 
@@ -874,13 +974,21 @@ def test_provider_transport_enforces_one_deadline_across_tcp_tls_and_http_stages
 ) -> None:
     class SlowSocket:
         def settimeout(self, _timeout: float) -> None: return None
+        def do_handshake(self) -> None: return None
         def shutdown(self, _how: int) -> None: return None
         def close(self) -> None: return None
 
     slow_socket = SlowSocket()
 
     class Context:
-        def wrap_socket(self, sock: object, *, server_hostname: str) -> object:
+        def wrap_socket(
+            self,
+            sock: object,
+            *,
+            server_hostname: str,
+            do_handshake_on_connect: bool,
+        ) -> object:
+            assert do_handshake_on_connect is False
             assert server_hostname == "models.example.test"
             time.sleep(0.04)
             return sock
@@ -923,13 +1031,21 @@ def test_deadline_guard_socket_oserror_and_close_error_remain_canonical_timeout(
 
     class Socket:
         def settimeout(self, _timeout: float) -> None: return None
+        def do_handshake(self) -> None: return None
         def shutdown(self, _how: int) -> None: return None
         def close(self) -> None: return None
 
     sock = Socket()
 
     class Context:
-        def wrap_socket(self, value: object, *, server_hostname: str) -> object:
+        def wrap_socket(
+            self,
+            value: object,
+            *,
+            server_hostname: str,
+            do_handshake_on_connect: bool,
+        ) -> object:
+            assert do_handshake_on_connect is False
             return value
 
     class Connection:
@@ -992,13 +1108,21 @@ def test_kubernetes_transport_enforces_one_deadline_across_tls_and_body_stages(
 ) -> None:
     class SlowSocket:
         def settimeout(self, _timeout: float) -> None: return None
+        def do_handshake(self) -> None: return None
         def shutdown(self, _how: int) -> None: return None
         def close(self) -> None: return None
 
     slow_socket = SlowSocket()
 
     class Context:
-        def wrap_socket(self, sock: object, *, server_hostname: str) -> object:
+        def wrap_socket(
+            self,
+            sock: object,
+            *,
+            server_hostname: str,
+            do_handshake_on_connect: bool,
+        ) -> object:
+            assert do_handshake_on_connect is False
             assert server_hostname == "kubernetes.default.svc"
             time.sleep(0.03)
             return sock
@@ -1091,6 +1215,9 @@ def test_http_proxy_uses_connect_to_pinned_ip_before_tls_and_never_receives_prov
         def settimeout(self, timeout: float) -> None:
             calls["socket_timeout"] = timeout
 
+        def do_handshake(self) -> None:
+            calls["tls_handshake"] = True
+
         def shutdown(self, _how: int) -> None:
             return None
 
@@ -1100,7 +1227,14 @@ def test_http_proxy_uses_connect_to_pinned_ip_before_tls_and_never_receives_prov
     proxy_socket = ProxySocket()
 
     class Context:
-        def wrap_socket(self, sock: object, *, server_hostname: str) -> object:
+        def wrap_socket(
+            self,
+            sock: object,
+            *,
+            server_hostname: str,
+            do_handshake_on_connect: bool,
+        ) -> object:
+            assert do_handshake_on_connect is False
             calls.update(server_hostname=server_hostname)
             return sock
 
@@ -1162,6 +1296,7 @@ def test_proxy_dns_is_resolved_once_and_connects_to_the_first_pinned_ip(
 
     class ProxySocket:
         def settimeout(self, _timeout: float) -> None: return None
+        def do_handshake(self) -> None: return None
         def sendall(self, _value: bytes) -> None: return None
         def recv(self, _size: int) -> bytes:
             return b"HTTP/1.1 200 Connection established\r\n\r\n"
@@ -1176,7 +1311,15 @@ def test_proxy_dns_is_resolved_once_and_connects_to_the_first_pinned_ip(
         return ["10.0.0.5"] if calls["resolver"] == 1 else ["10.0.0.6"]
 
     class Context:
-        def wrap_socket(self, sock: object, *, server_hostname: str) -> object: return sock
+        def wrap_socket(
+            self,
+            sock: object,
+            *,
+            server_hostname: str,
+            do_handshake_on_connect: bool,
+        ) -> object:
+            assert do_handshake_on_connect is False
+            return sock
 
     class Response:
         status = 200
@@ -1255,7 +1398,14 @@ def test_raw_socket_is_closed_when_tls_initialization_fails(
     raw_socket = RawSocket()
 
     class FailingContext:
-        def wrap_socket(self, _sock: object, *, server_hostname: str) -> object:
+        def wrap_socket(
+            self,
+            _sock: object,
+            *,
+            server_hostname: str,
+            do_handshake_on_connect: bool,
+        ) -> object:
+            assert do_handshake_on_connect is False
             raise RuntimeError("tls setup failed")
 
     monkeypatch.setattr(adapter_module.socket, "create_connection", lambda *_args, **_kwargs: raw_socket)

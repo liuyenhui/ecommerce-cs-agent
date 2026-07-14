@@ -274,11 +274,15 @@ class _KubernetesApiTransport:
         try:
             _set_deadline_timeout(raw_socket, deadline)
             tls_socket = context.wrap_socket(
-                raw_socket, server_hostname=self._tls_server_hostname
+                raw_socket,
+                server_hostname=self._tls_server_hostname,
+                do_handshake_on_connect=False,
             )
-            deadline.remaining()
-            guard.replace_socket(tls_socket)
             active_socket = tls_socket
+            guard.replace_socket(tls_socket)
+            _set_deadline_timeout(tls_socket, deadline)
+            tls_socket.do_handshake()
+            deadline.remaining()
             connection = http.client.HTTPConnection(kubernetes_ip, port, timeout=deadline.remaining())
             connection.sock = tls_socket
             _set_deadline_timeout(tls_socket, deadline)
@@ -398,10 +402,16 @@ class _PinnedProviderTransport:
         try:
             context = ssl.create_default_context()
             _set_deadline_timeout(raw_socket, deadline)
-            tls_socket = context.wrap_socket(raw_socket, server_hostname=server_hostname)
-            deadline.remaining()
-            guard.replace_socket(tls_socket)
+            tls_socket = context.wrap_socket(
+                raw_socket,
+                server_hostname=server_hostname,
+                do_handshake_on_connect=False,
+            )
             active_socket = tls_socket
+            guard.replace_socket(tls_socket)
+            _set_deadline_timeout(tls_socket, deadline)
+            tls_socket.do_handshake()
+            deadline.remaining()
             connection = http.client.HTTPConnection(
                 pinned_ip, port, timeout=deadline.remaining()
             )
