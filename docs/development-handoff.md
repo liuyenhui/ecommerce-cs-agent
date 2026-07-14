@@ -6,7 +6,7 @@
 
 ### 2026-07-15
 
-- LLM Provider 凭据从运行时 Secret 中分离：连接测试仅可读取 `api.secretAccess.allowedSecretRefs` 指定的专用 Secret 与 key；禁止复用 `ecommerce-cs-agent-runtime`，API ServiceAccount 继续使用 namespaced `secrets/get/resourceNames` 最小权限。
+- LLM Provider 凭据从运行时 Secret 中分离：连接测试仅可读取 `api.secretAccess.allowedSecretRefs` 指定的专用 Secret 与 key；API Deployment 的 `LLM_API_KEY` 通过同一专用 `(name,key)` 的 `api.runtimeLlmSecretRef` / `secretKeyRef` 注入。禁止复用 `ecommerce-cs-agent-runtime`，API ServiceAccount 继续使用 namespaced `secrets/get/resourceNames` 最小权限。
 
 ### 2026-07-14
 

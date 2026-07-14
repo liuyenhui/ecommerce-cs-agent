@@ -124,6 +124,10 @@ def test_helm_api_uses_dedicated_service_account_and_secret_allowlist() -> None:
     assert api["secretAccess"]["allowedSecretRefs"] == [
         {"name": "ecommerce-cs-agent-llm-provider", "keys": ["api-key"]}
     ]
+    assert api["runtimeLlmSecretRef"] == {
+        "name": "ecommerce-cs-agent-llm-provider",
+        "key": "api-key",
+    }
     assert api["secretAccess"]["allowedSecretRefs"][0]["name"] != api["envFromSecret"]
 
     deployment = (chart_dir / "templates/api-deployment.yaml").read_text(encoding="utf-8")
@@ -169,6 +173,17 @@ def test_helm_rendered_secret_access_is_dedicated_and_key_scoped() -> None:
     env = {item["name"]: item for item in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
     refs = json.loads(env["LLM_GOVERNANCE_ALLOWED_SECRET_REFS"]["value"])
     assert refs == [{"name": "ecommerce-cs-agent-llm-provider", "keys": ["api-key"]}]
+    assert env["LLM_API_KEY"] == {
+        "name": "LLM_API_KEY",
+        "valueFrom": {
+            "secretKeyRef": {
+                "name": "ecommerce-cs-agent-llm-provider",
+                "key": "api-key",
+            }
+        },
+    }
+    env_from = deployment["spec"]["template"]["spec"]["containers"][0]["envFrom"]
+    assert env_from == [{"secretRef": {"name": "ecommerce-cs-agent-runtime"}}]
     serialized = json.dumps(refs)
     assert "ecommerce-cs-agent-runtime" not in serialized
     for forbidden_key in ("DATABASE_URL", "JWT_SECRET", "SESSION_SECRET"):
@@ -213,8 +228,40 @@ def test_helm_rejects_empty_or_runtime_secret_access_refs() -> None:
     assert ".keys[0] is invalid" in invalid_key
 
 
+def test_helm_rejects_runtime_llm_ref_outside_dedicated_allowlist() -> None:
+    runtime_secret = _render_helm(
+        "--set", "api.runtimeLlmSecretRef.name=ecommerce-cs-agent-runtime", expect_success=False
+    )
+    missing_tuple = _render_helm(
+        "--set", "api.runtimeLlmSecretRef.key=other-key", expect_success=False
+    )
+
+    assert "runtimeLlmSecretRef must not use api.envFromSecret" in runtime_secret
+    assert "runtimeLlmSecretRef tuple must exist in allowedSecretRefs" in missing_tuple
+
+
+def test_helm_external_service_account_keeps_dedicated_llm_secret_injection() -> None:
+    rendered = _render_helm(
+        "--set", "api.serviceAccount.create=false", "--set", "api.serviceAccount.name=external-api"
+    )
+    documents = [document for document in yaml.safe_load_all(rendered) if document]
+    deployment = next(
+        document
+        for document in documents
+        if document.get("kind") == "Deployment" and document["metadata"]["name"].endswith("-api")
+    )
+    env = {item["name"]: item for item in deployment["spec"]["template"]["spec"]["containers"][0]["env"]}
+
+    assert deployment["spec"]["template"]["spec"]["serviceAccountName"] == "external-api"
+    assert env["LLM_API_KEY"]["valueFrom"]["secretKeyRef"] == {
+        "name": "ecommerce-cs-agent-llm-provider",
+        "key": "api-key",
+    }
+
+
 def test_deployment_docs_separate_llm_credentials_from_runtime_secret() -> None:
     deployment = Path("docs/deployment.md").read_text(encoding="utf-8")
+    runbook = Path("docs/runbook.md").read_text(encoding="utf-8")
 
     assert "模型凭据 Secret：`ecommerce-cs-agent-llm-provider`" in deployment
     assert "禁止复用 `ecommerce-cs-agent-runtime`" in deployment
@@ -222,6 +269,9 @@ def test_deployment_docs_separate_llm_credentials_from_runtime_secret() -> None:
         "模型凭据 Secret：", 1
     )[0]
     assert "`LLM_API_KEY`" not in runtime_section
+    assert "LLM_API_KEY` 通过 `secretKeyRef`" in deployment
+    assert "ecommerce-cs-agent-llm-provider" in runbook
+    assert "runtimeLlmSecretRef" in runbook
 
 
 def test_dev_dependencies_include_draft_2020_json_schema_validator() -> None:

@@ -9,6 +9,9 @@ proxy:
 api:
   replicas: 1
   envFromSecret: ecommerce-cs-agent-runtime
+  runtimeLlmSecretRef:
+    name: ecommerce-cs-agent-llm-provider
+    key: api-key
   serviceAccount:
     create: true
     name: ""

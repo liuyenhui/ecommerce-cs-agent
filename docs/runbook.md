@@ -127,7 +127,9 @@ KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent
 
 常见原因：
 
-- `LLM_BASE_URL`、`LLM_MODEL` 或 `LLM_API_KEY` 未注入。
+- runtime 中的 `LLM_BASE_URL`、`LLM_MODEL` 未注入，或专用 `ecommerce-cs-agent-llm-provider` Secret 的 `api-key` 未通过 `secretKeyRef` 注入为 `LLM_API_KEY`。
+- Helm `api.runtimeLlmSecretRef` 与 `api.secretAccess.allowedSecretRefs` 的 `(name, key)` 不一致，或错误复用了 `api.envFromSecret`。
+- API ServiceAccount 的 namespaced Role 未对专用模型 Secret 授予精确的 `secrets/get/resourceNames` 权限。
 - API Pod 代理配置错误。
 - `NO_PROXY` 未包含 `.svc`、`.cluster.local`、PostgreSQL 或 MinIO 内网域名。
 - LLM provider 超时或返回非 2xx。
@@ -138,6 +140,8 @@ KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent
 KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev describe deploy ecommerce-cs-agent-api
 KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev logs deploy/ecommerce-cs-agent-api --tail=100
 ```
+
+检查 Deployment 的 `LLM_API_KEY.valueFrom.secretKeyRef` 是否指向专用 Secret，并检查 Role 的 `resourceNames` 是否包含相同 Secret 名。不要要求或恢复 `ecommerce-cs-agent-runtime` 中的 `LLM_API_KEY`，也不要输出 Secret 数据、环境变量值或解码结果。
 
 日志中如包含 provider 请求头、key、prompt 原文或客户 payload，先脱敏再分享。
 

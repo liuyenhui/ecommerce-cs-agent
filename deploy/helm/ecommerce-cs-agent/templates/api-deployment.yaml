@@ -44,6 +44,11 @@ spec:
                   fieldPath: metadata.namespace
             - name: LLM_GOVERNANCE_ALLOWED_SECRET_REFS
               value: {{ toJson .Values.api.secretAccess.allowedSecretRefs | quote }}
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.runtimeLlmSecretRef.name }}
+                  key: {{ .Values.api.runtimeLlmSecretRef.key }}
             {{- if .Values.proxy.enabled }}
             - name: HTTP_PROXY
               value: {{ .Values.proxy.httpProxy | quote }}
