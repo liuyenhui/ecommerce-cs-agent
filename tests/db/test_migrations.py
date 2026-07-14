@@ -251,6 +251,7 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "secret_namespace text not null",
             "secret_name text not null",
             "secret_key text not null",
+            "check ((enabled and status <> 'disabled') or (not enabled and status = 'disabled'))",
         ]),
         (version_sql, [
             "check (status in ('draft', 'validated', 'pending_publish', 'running', 'superseded', 'rolled_back'))",
@@ -260,6 +261,10 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "published_by_system_admin_user_id uuid references system_admin_user(id) on delete restrict",
             "published_at timestamptz",
             "rollback_of_version_id uuid references llm_config_version(id) on delete restrict",
+            "status in ('draft', 'validated', 'pending_publish') and published_at is null and published_by_system_admin_user_id is null",
+            "status in ('running', 'superseded', 'rolled_back') and published_at is not null and published_by_system_admin_user_id is not null",
+            "rollback_of_version_id is null or status in ('running', 'superseded')",
+            "rollback_of_version_id is null or rollback_of_version_id <> id",
             "create unique index if not exists idx_llm_config_version_one_running on llm_config_version (status) where status = 'running'",
         ]),
         (route_sql, [
@@ -282,24 +287,42 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "checked_at timestamptz not null default now()",
             "error_code text",
             "redacted_error_message text",
+            "create index if not exists idx_llm_connection_test_version_checked on llm_connection_test (config_version_id, checked_at desc)",
         ]),
         (invocation_sql, [
+            "scenario_route_id uuid not null references llm_scenario_route(id) on delete restrict",
+            "route_role text not null check (route_role in ('primary', 'fallback'))",
             "input_tokens integer not null default 0 check (input_tokens >= 0)",
             "output_tokens integer not null default 0 check (output_tokens >= 0)",
             "latency_ms integer not null check (latency_ms >= 0)",
             "status text not null check (status in ('succeeded', 'failed', 'timed_out', 'rejected'))",
             "error_code text",
-            "estimated_cost_minor bigint not null default 0 check (estimated_cost_minor >= 0)",
-            "currency char(3) not null default 'usd' check (currency = upper(currency))",
-            "create index if not exists idx_llm_invocation_metric_provider_model_occurred on llm_invocation_metric (provider_config_id, model, occurred_at desc)",
-            "create index if not exists idx_llm_invocation_metric_scenario_occurred on llm_invocation_metric (scenario, occurred_at desc)",
+            "estimated_cost_micros bigint not null default 0 check (estimated_cost_micros >= 0)",
+            "currency char(3) not null default 'usd' check (currency in ('cny', 'usd'))",
+            "create index if not exists idx_llm_invocation_metric_route_occurred on llm_invocation_metric (scenario_route_id, occurred_at desc)",
             "create index if not exists idx_llm_invocation_metric_organization_store_occurred on llm_invocation_metric (organization_id, store_id, occurred_at desc)",
+            "create index if not exists idx_llm_invocation_metric_store_occurred on llm_invocation_metric (store_id, occurred_at desc)",
             "create index if not exists idx_llm_invocation_metric_occurred on llm_invocation_metric (occurred_at desc)",
+            "conrelid = 'llm_invocation_metric'::regclass",
+            "create or replace function validate_llm_invocation_metric_route_role()",
+            "new.route_role = 'fallback'",
+            "route.fallback_provider_config_id is not null",
+            "route.fallback_model is not null",
+            "create trigger trg_validate_llm_invocation_metric_route_role",
         ]),
     ]
     for scoped_sql, required_snippets in required_by_section:
         for snippet in required_snippets:
             assert snippet in scoped_sql
+
+    for redundant_attribution_column in [
+        "provider_config_id uuid",
+        "config_version_id uuid",
+        "model text",
+        "scenario text",
+        "estimated_cost_minor",
+    ]:
+        assert redundant_attribution_column not in invocation_sql
 
     column_names = {
         match.group(1)

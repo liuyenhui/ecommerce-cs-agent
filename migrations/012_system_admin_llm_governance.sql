@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS llm_provider_config (
     last_connection_tested_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    revision integer NOT NULL DEFAULT 1 CHECK (revision > 0)
+    revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
+    CHECK ((enabled AND status <> 'disabled') OR (NOT enabled AND status = 'disabled'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_llm_provider_config_type_status
@@ -44,10 +45,17 @@ CREATE TABLE IF NOT EXISTS llm_config_version (
     rollback_of_version_id uuid
         REFERENCES llm_config_version(id) ON DELETE RESTRICT,
     CHECK (
-        (status IN ('running', 'superseded', 'rolled_back') AND published_at IS NOT NULL
+        (status IN ('draft', 'validated', 'pending_publish')
+            AND published_at IS NULL
+            AND published_by_system_admin_user_id IS NULL)
+        OR (status IN ('running', 'superseded', 'rolled_back')
+            AND published_at IS NOT NULL
             AND published_by_system_admin_user_id IS NOT NULL)
-        OR status IN ('draft', 'validated', 'pending_publish')
-    )
+    ),
+    -- Rollback creates a new running version from a historical source. Once
+    -- superseded, that derived version retains the source link for history.
+    CHECK (rollback_of_version_id IS NULL OR status IN ('running', 'superseded')),
+    CHECK (rollback_of_version_id IS NULL OR rollback_of_version_id <> id)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_config_version_one_running
@@ -128,12 +136,9 @@ CREATE INDEX IF NOT EXISTS idx_llm_connection_test_version_checked
 CREATE TABLE IF NOT EXISTS llm_invocation_metric (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     occurred_at timestamptz NOT NULL DEFAULT now(),
-    provider_config_id uuid NOT NULL
-        REFERENCES llm_provider_config(id) ON DELETE RESTRICT,
-    config_version_id uuid NOT NULL
-        REFERENCES llm_config_version(id) ON DELETE RESTRICT,
-    model text NOT NULL,
-    scenario text NOT NULL,
+    scenario_route_id uuid NOT NULL
+        REFERENCES llm_scenario_route(id) ON DELETE RESTRICT,
+    route_role text NOT NULL CHECK (route_role IN ('primary', 'fallback')),
     organization_id uuid REFERENCES organization(id) ON DELETE RESTRICT,
     store_id uuid REFERENCES store(id) ON DELETE RESTRICT,
     input_tokens integer NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
@@ -141,20 +146,20 @@ CREATE TABLE IF NOT EXISTS llm_invocation_metric (
     latency_ms integer NOT NULL CHECK (latency_ms >= 0),
     status text NOT NULL CHECK (status IN ('succeeded', 'failed', 'timed_out', 'rejected')),
     error_code text,
-    estimated_cost_minor bigint NOT NULL DEFAULT 0 CHECK (estimated_cost_minor >= 0),
+    estimated_cost_micros bigint NOT NULL DEFAULT 0 CHECK (estimated_cost_micros >= 0),
     currency char(3) NOT NULL DEFAULT 'USD'
-        CHECK (currency = upper(currency)),
+        CHECK (currency IN ('CNY', 'USD')),
     CHECK (store_id IS NULL OR organization_id IS NOT NULL)
 );
 
-CREATE INDEX IF NOT EXISTS idx_llm_invocation_metric_provider_model_occurred
-    ON llm_invocation_metric (provider_config_id, model, occurred_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_llm_invocation_metric_scenario_occurred
-    ON llm_invocation_metric (scenario, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_invocation_metric_route_occurred
+    ON llm_invocation_metric (scenario_route_id, occurred_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_llm_invocation_metric_organization_store_occurred
     ON llm_invocation_metric (organization_id, store_id, occurred_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_llm_invocation_metric_store_occurred
+    ON llm_invocation_metric (store_id, occurred_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_llm_invocation_metric_status_occurred
     ON llm_invocation_metric (status, occurred_at DESC);
@@ -168,6 +173,7 @@ BEGIN
         SELECT 1
         FROM pg_constraint
         WHERE conname = 'fk_llm_invocation_metric_store_organization'
+          AND conrelid = 'llm_invocation_metric'::regclass
     ) THEN
         ALTER TABLE llm_invocation_metric
             ADD CONSTRAINT fk_llm_invocation_metric_store_organization
@@ -176,3 +182,31 @@ BEGIN
             ON DELETE RESTRICT;
     END IF;
 END $$;
+
+CREATE OR REPLACE FUNCTION validate_llm_invocation_metric_route_role()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.route_role = 'fallback' AND NOT EXISTS (
+        SELECT 1
+        FROM llm_scenario_route AS route
+        WHERE route.id = NEW.scenario_route_id
+          AND route.fallback_provider_config_id IS NOT NULL
+          AND route.fallback_model IS NOT NULL
+    ) THEN
+        RAISE EXCEPTION 'fallback route role requires a configured fallback model'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_validate_llm_invocation_metric_route_role
+    ON llm_invocation_metric;
+
+CREATE TRIGGER trg_validate_llm_invocation_metric_route_role
+    BEFORE INSERT OR UPDATE OF scenario_route_id, route_role
+    ON llm_invocation_metric
+    FOR EACH ROW
+    EXECUTE FUNCTION validate_llm_invocation_metric_route_role();
