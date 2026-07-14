@@ -192,6 +192,7 @@ def test_admin_login_rejects_bad_credentials_and_sets_spec_cookie_for_valid_cred
     assert bad.status_code == 401
     assert good.status_code == 200
     assert "agent_admin_session=" in good.headers["set-cookie"]
+    assert "agent_system_admin_session=" not in good.headers["set-cookie"]
 
 
 def test_system_admin_login_rejects_bad_credentials_and_sets_spec_cookie_for_valid_credentials():
@@ -209,6 +210,7 @@ def test_system_admin_login_rejects_bad_credentials_and_sets_spec_cookie_for_val
     assert bad.status_code == 401
     assert good.status_code == 200
     assert "agent_system_admin_session=" in good.headers["set-cookie"]
+    assert "agent_admin_session=" not in good.headers["set-cookie"]
 
 
 def test_system_admin_logout_revokes_server_session():
@@ -241,6 +243,7 @@ def test_production_settings_fail_fast_without_required_secrets(monkeypatch):
         "DATABASE_URL",
         "OPEN_ERP_INTEGRATION_TOKEN",
         "OPEN_ERP_BILLING_LEASE_SECRET",
+        "LLM_CURSOR_SIGNING_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -248,8 +251,31 @@ def test_production_settings_fail_fast_without_required_secrets(monkeypatch):
         load_settings()
     except RuntimeError as exc:
         assert "Missing required production settings" in str(exc)
+        assert "LLM_CURSOR_SIGNING_KEY" in str(exc)
     else:
         raise AssertionError("production settings should require external secrets")
+
+
+def test_production_settings_fail_fast_when_only_llm_cursor_signing_key_is_missing(monkeypatch):
+    required = {
+        "AGENT_API_TOKEN": "agent-token",
+        "ADMIN_SESSION_SECRET": "admin-session",
+        "SYSTEM_ADMIN_SESSION_SECRET": "system-session",
+        "ADMIN_INITIAL_EMAIL": "admin@example.test",
+        "ADMIN_INITIAL_PASSWORD_HASH": "plain:admin-password",
+        "SYSTEM_ADMIN_INITIAL_EMAIL": "system-admin@example.test",
+        "SYSTEM_ADMIN_INITIAL_PASSWORD_HASH": "plain:system-admin-password",
+        "DATABASE_URL": "postgresql://example",
+        "OPEN_ERP_INTEGRATION_TOKEN": "open-erp-token",
+        "OPEN_ERP_BILLING_LEASE_SECRET": "billing-secret",
+    }
+    monkeypatch.setenv("APP_ENV", "production")
+    for key, value in required.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("LLM_CURSOR_SIGNING_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="LLM_CURSOR_SIGNING_KEY"):
+        load_settings()
 
 
 def test_production_settings_accept_existing_runtime_secret_keys(monkeypatch):

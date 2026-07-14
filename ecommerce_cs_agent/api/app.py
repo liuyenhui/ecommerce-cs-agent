@@ -822,14 +822,14 @@ def _system_user() -> dict[str, Any]:
 
 
 def _organization() -> dict[str, Any]:
-    return {"id": "org-001", "name": "Demo Organization", "status": "active", "metadata": {}}
+    return {"id": "org-001", "name": "Test Organization", "status": "active", "metadata": {}}
 
 
 def _store() -> dict[str, Any]:
     return {
         "id": "store-001",
         "organization_id": "org-001",
-        "name": "Demo PDD Store",
+        "name": "Test PDD Store",
         "platform": "pdd",
         "status": "active",
         "metadata": {},

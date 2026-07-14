@@ -141,6 +141,8 @@ def test_helm_api_uses_dedicated_service_account_and_secret_allowlist() -> None:
     schema = json.loads((chart_dir / "values.schema.json").read_text(encoding="utf-8"))
     cursor_schema = schema["properties"]["api"]["properties"]["cursorSigningSecretRef"]
     assert cursor_schema["required"] == ["name", "key"]
+    assert cursor_schema["properties"]["name"]["pattern"] == r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+    assert cursor_schema["properties"]["key"]["pattern"] == r"^[A-Za-z0-9._-]+$"
     assert api["secretAccess"]["allowedSecretRefs"][0]["name"] != api["envFromSecret"]
 
     deployment = (chart_dir / "templates/api-deployment.yaml").read_text(encoding="utf-8")
@@ -286,6 +288,43 @@ def test_helm_rejects_runtime_llm_ref_outside_dedicated_allowlist() -> None:
 
     assert "runtimeLlmSecretRef must not use api.envFromSecret" in runtime_secret
     assert "runtimeLlmSecretRef tuple must exist in allowedSecretRefs" in missing_tuple
+
+
+def test_helm_rejects_invalid_or_provider_reused_cursor_signing_secret_ref() -> None:
+    invalid_name = _render_helm(
+        "--set", "api.cursorSigningSecretRef.name=Invalid_Name", expect_success=False
+    )
+    invalid_key = _render_helm(
+        "--set", "api.cursorSigningSecretRef.key=bad/key", expect_success=False
+    )
+    provider_reuse = _render_helm(
+        "--set", "api.cursorSigningSecretRef.name=ecommerce-cs-agent-llm-provider",
+        "--set", "api.cursorSigningSecretRef.key=api-key",
+        expect_success=False,
+    )
+
+    assert "/api/cursorSigningSecretRef/name" in invalid_name
+    assert "/api/cursorSigningSecretRef/key" in invalid_key
+    assert "cursorSigningSecretRef must be separate from runtimeLlmSecretRef" in provider_reuse
+
+
+def test_api_deployment_is_stateless_and_uses_shared_external_state() -> None:
+    rendered = _render_helm()
+    documents = [document for document in yaml.safe_load_all(rendered) if document]
+    deployment = next(
+        document
+        for document in documents
+        if document.get("kind") == "Deployment" and document["metadata"]["name"].endswith("-api")
+    )
+    pod_spec = deployment["spec"]["template"]["spec"]
+    serialized = json.dumps(deployment)
+
+    assert "hostPath" not in serialized
+    assert "PersistentVolumeClaim" not in serialized
+    assert not pod_spec.get("volumes")
+    assert pod_spec["containers"][0]["envFrom"] == [
+        {"secretRef": {"name": "ecommerce-cs-agent-runtime"}}
+    ]
 
 
 def test_helm_external_service_account_keeps_dedicated_llm_secret_injection() -> None:

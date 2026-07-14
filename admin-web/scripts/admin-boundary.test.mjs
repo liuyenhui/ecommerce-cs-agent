@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const adminRoot = path.resolve(scriptDir, "..");
+const projectRoot = path.resolve(adminRoot, "..");
 
 function repoPath(...parts) {
   return path.join(adminRoot, ...parts);
@@ -15,7 +16,23 @@ function readRelative(file) {
   return readFileSync(repoPath(file), "utf8");
 }
 
-function collectSource(dir) {
+function readProjectRelative(file) {
+  return readFileSync(path.join(projectRoot, file), "utf8");
+}
+
+function assertNoAdminDemoFallback(source) {
+  assert.doesNotMatch(source, /Demo Organization|Demo PDD Store/);
+  assert.doesNotMatch(source, /(?:demo|sample|fake)[_-]?(?:organization|tenant|store|admin)[_-]?(?:fallback|default|seed)?/i);
+}
+
+function assertLlmUiUsesSecretReferencesOnly(source) {
+  assert.doesNotMatch(source, /\b(?:secret_value|api_key|raw_secret)\b/i);
+  assert.match(source, /secret_ref/);
+  assert.match(source, /secret_name/);
+  assert.match(source, /secret_key/);
+}
+
+function collectSource(dir, { includeTests = true } = {}) {
   const root = repoPath(dir);
   assert.ok(existsSync(root), `${dir} must exist`);
   const files = [];
@@ -24,7 +41,7 @@ function collectSource(dir) {
       const next = path.join(current, entry.name);
       if (entry.isDirectory()) {
         walk(next);
-      } else if (/\.(tsx?|css)$/.test(entry.name)) {
+      } else if (/\.(tsx?|css)$/.test(entry.name) && (includeTests || !/\.test\.[^.]+$/.test(entry.name))) {
         files.push(next);
       }
     }
@@ -160,6 +177,57 @@ test("system admin source stays inside system auth boundary", () => {
   assert.doesNotMatch(source, /\/v1\/admin\/auth\/me/);
   assert.doesNotMatch(source, /agent_admin_session/);
   assert.doesNotMatch(source, /\b(CustomerSite|CustomerAdminShell|CustomerWorkspace|CustomerOverview|ProductContent|KnowledgeReview|ProductUploadModal)\b/);
+});
+
+test("system admin keeps all nine task-oriented destinations reachable", () => {
+  const source = readRelative("system-admin/src/SystemWorkspace.tsx");
+  const labels = [
+    "系统总览",
+    "租户与店铺",
+    "配置完成度",
+    "LLM 治理",
+    "评测与发布",
+    "决策追踪",
+    "任务中心",
+    "安全审计",
+    "系统健康"
+  ];
+
+  for (const label of labels) assert.match(source, new RegExp(label));
+  assert.equal((source.match(/\{ key: "/g) || []).length, labels.length);
+});
+
+test("admin production sources contain no demo organization or store fallback", () => {
+  const source = [
+    collectSource("customer-admin/src", { includeTests: false }),
+    collectSource("system-admin/src", { includeTests: false }),
+    collectSource("shared", { includeTests: false }),
+    readProjectRelative("ecommerce_cs_agent/api/app.py"),
+    readProjectRelative("ecommerce_cs_agent/services/admin_auth.py"),
+    readProjectRelative("ecommerce_cs_agent/services/system_admin.py")
+  ].join("\n");
+
+  assertNoAdminDemoFallback(source);
+});
+
+test("demo fallback guard rejects an isolated forbidden seed", () => {
+  assert.throws(
+    () => assertNoAdminDemoFallback('const organization = { name: "Demo Organization" };'),
+    /Demo Organization/
+  );
+});
+
+test("LLM governance UI accepts Kubernetes Secret references but no raw secret fields", () => {
+  const source = collectSource("system-admin/src", { includeTests: false });
+
+  assertLlmUiUsesSecretReferencesOnly(source);
+});
+
+test("LLM raw-secret source guard rejects an isolated forbidden field", () => {
+  assert.throws(
+    () => assertLlmUiUsesSecretReferencesOnly("const form = { secret_value: value, secret_ref, secret_name, secret_key };"),
+    /secret_value/
+  );
 });
 
 test("shared components do not import System Admin request-state types", () => {

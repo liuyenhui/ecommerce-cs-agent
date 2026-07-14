@@ -41,13 +41,13 @@ class InMemoryAdminAuthService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.organizations: dict[str, dict[str, Any]] = {
-            "org-001": {"id": "org-001", "name": "Demo Organization", "status": "active", "metadata": {}}
+            "org-001": {"id": "org-001", "name": "Test Organization", "status": "active", "metadata": {}}
         }
         self.stores: dict[str, dict[str, Any]] = {
             "store-001": {
                 "id": "store-001",
                 "organization_id": "org-001",
-                "name": "Demo PDD Store",
+                "name": "Test PDD Store",
                 "platform": "pdd",
                 "status": "active",
                 "metadata": {},

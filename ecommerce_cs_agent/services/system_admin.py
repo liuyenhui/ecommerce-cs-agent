@@ -72,7 +72,7 @@ class InMemorySystemAdminRepository:
             "org-001": {
                 "id": "org-001",
                 "organization_id": "org-001",
-                "name": "Demo Organization",
+                "name": "Test Organization",
                 "status": "active",
                 "metadata": {},
                 "external_ref": "org-001",
@@ -85,7 +85,7 @@ class InMemorySystemAdminRepository:
                 "id": "store-001",
                 "store_id": "store-001",
                 "organization_id": "org-001",
-                "name": "Demo PDD Store",
+                "name": "Test PDD Store",
                 "platform": "pdd",
                 "status": "active",
                 "metadata": {},
