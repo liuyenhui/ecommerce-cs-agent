@@ -382,6 +382,7 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
     assert "terminal release records are immutable" in compact_sql
     assert "source.config_version_id = new.rollback_of_version_id" in compact_sql
     assert "source.status in ('superseded', 'rolled_back')" in compact_sql
+    assert "for key share of source, source_version" not in compact_sql
     assert "target_version.rollback_of_version_id is not distinct from new.rollback_of_version_id" in compact_sql
     assert "perform lock_llm_config_versions(new.config_version_id)" in compact_sql
     assert "perform lock_llm_config_versions(old.config_version_id)" in compact_sql
@@ -399,6 +400,13 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
     assert "before insert or update or delete on llm_connection_test" in compact_sql
     assert "create or replace function protect_llm_provider_endpoint()" in compact_sql
     assert "provider endpoint and secret reference are immutable" in compact_sql
+    provider_history_sql = compact_sql.split(
+        "create or replace function protect_llm_provider_endpoint()",
+        maxsplit=1,
+    )[1]
+    assert "new.id is distinct from old.id" in provider_history_sql
+    assert "new.created_at is distinct from old.created_at" in provider_history_sql
+    assert "provider identity and creation metadata are immutable" in provider_history_sql
 
     for redundant_attribution_column in [
         "provider_config_id uuid",

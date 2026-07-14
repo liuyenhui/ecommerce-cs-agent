@@ -615,8 +615,7 @@ BEGIN
               AND source.organization_id = NEW.organization_id
               AND source_version.organization_id = NEW.organization_id
               AND source.status IN ('superseded', 'rolled_back')
-              AND source_version.status = source.status
-            FOR KEY SHARE OF source, source_version;
+              AND source_version.status = source.status;
             IF NOT FOUND THEN
                 RAISE EXCEPTION 'rollback release and version must identify matching terminal history'
                     USING ERRCODE = '23514';
@@ -626,6 +625,13 @@ BEGIN
     END IF;
 
     IF TG_OP = 'DELETE' THEN
+        -- Terminal rows can never be deleted. Reject before taking a version
+        -- advisory lock so the rollback-source FK cannot form a release-row /
+        -- version-lock cycle with a concurrent rollback insert.
+        IF OLD.status IN ('superseded', 'rolled_back') THEN
+            RAISE EXCEPTION 'terminal release records are immutable'
+                USING ERRCODE = '23514';
+        END IF;
         PERFORM 1
         FROM llm_config_version AS release_version
         WHERE release_version.id = OLD.config_version_id
@@ -822,6 +828,12 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF NEW.id IS DISTINCT FROM OLD.id
+        OR NEW.created_at IS DISTINCT FROM OLD.created_at
+    THEN
+        RAISE EXCEPTION 'provider identity and creation metadata are immutable'
+            USING ERRCODE = '23514';
+    END IF;
     IF NEW.provider_type IS DISTINCT FROM OLD.provider_type
         OR NEW.base_url IS DISTINCT FROM OLD.base_url
         OR NEW.secret_namespace IS DISTINCT FROM OLD.secret_namespace

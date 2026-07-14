@@ -1,7 +1,7 @@
 import os
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import psycopg
@@ -68,6 +68,36 @@ def wait_for_backend_lock(application_name: str, timeout_seconds: float = 3.0) -
     raise AssertionError(f"backend {application_name!r} did not enter a lock wait")
 
 
+def wait_for_backend_lock_or_completion(
+    future: Future[str],
+    application_name: str,
+    timeout_seconds: float = 3.0,
+) -> tuple[int, str] | None:
+    deadline = time.monotonic() + timeout_seconds
+    with psycopg.connect(DATABASE_URL, autocommit=True) as observer_connection:
+        with observer_connection.cursor() as cursor:
+            while time.monotonic() < deadline:
+                if future.done():
+                    return None
+                cursor.execute(
+                    """
+                    SELECT pid, wait_event
+                    FROM pg_stat_activity
+                    WHERE application_name = %s
+                      AND state = 'active'
+                      AND wait_event_type = 'Lock'
+                    """,
+                    (application_name,),
+                )
+                observed_lock = cursor.fetchone()
+                if observed_lock is not None:
+                    return observed_lock
+                time.sleep(0.02)
+    raise AssertionError(
+        f"backend {application_name!r} neither completed nor entered a lock wait"
+    )
+
+
 def execute_concurrent_statement(
     schema_name: str,
     statement: str,
@@ -81,9 +111,9 @@ def execute_concurrent_statement(
             cursor.execute(statement, parameters)
         connection.commit()
         return "committed"
-    except psycopg.IntegrityError as exc:
+    except psycopg.Error as exc:
         connection.rollback()
-        return exc.sqlstate or "integrity_error"
+        return exc.sqlstate or "postgres_error"
     finally:
         connection.close()
 
@@ -184,6 +214,16 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
             assert_integrity_error(
                 cursor,
                 "UPDATE llm_provider_config SET name='missing-revision' WHERE id=%s",
+                (provider_id,),
+            )
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_provider_config SET id=%s, revision=revision+1 WHERE id=%s",
+                (uuid.uuid4(), provider_id),
+            )
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_provider_config SET created_at=created_at + interval '1 second', revision=revision+1 WHERE id=%s",
                 (provider_id,),
             )
             cursor.execute(
@@ -1370,6 +1410,91 @@ def test_llm_version_lock_serializes_route_metric_and_release_writes() -> None:
             wait_for_backend_lock(release_worker_name)
             transition_connection.commit()
             assert release_future.result(timeout=8) == "23514"
+        transition_connection.close()
+        transition_connection = None
+
+        source_release_mutations = (
+            (
+                "update",
+                "UPDATE llm_release_record SET status='rolled_back', revision=revision+1 WHERE id=%s",
+            ),
+            ("delete", "DELETE FROM llm_release_record WHERE id=%s"),
+        )
+        for offset, (mutation_name, mutation_statement) in enumerate(
+            source_release_mutations,
+            start=4,
+        ):
+            transition_connection = psycopg.connect(DATABASE_URL)
+            with transition_connection.cursor() as cursor:
+                set_test_search_path(cursor, schema_name)
+                cursor.execute(
+                    """
+                    INSERT INTO llm_config_version (
+                        organization_id, version_number, configuration_hash,
+                        created_by_system_admin_user_id, rollback_of_version_id
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        organization_id,
+                        offset,
+                        f"rollback-deadlock-{mutation_name}",
+                        system_admin_user_id,
+                        metric_race_version_id,
+                    ),
+                )
+                rollback_race_version_id = cursor.fetchone()[0]
+
+            mutation_worker_name = f"migration-release-{mutation_name}-{uuid.uuid4().hex}"
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                mutation_future = executor.submit(
+                    execute_concurrent_statement,
+                    schema_name,
+                    mutation_statement,
+                    (metric_race_release_id,),
+                    mutation_worker_name,
+                )
+                observed_mutation_lock = wait_for_backend_lock_or_completion(
+                    mutation_future,
+                    mutation_worker_name,
+                )
+                mutation_result = (
+                    mutation_future.result(timeout=8)
+                    if observed_mutation_lock is None
+                    else None
+                )
+                with transition_connection.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE llm_config_version SET status='validated', revision=revision+1 WHERE id=%s",
+                        (rollback_race_version_id,),
+                    )
+                    cursor.execute(
+                        "UPDATE llm_config_version SET status='pending_publish', revision=revision+1 WHERE id=%s",
+                        (rollback_race_version_id,),
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO llm_release_record (
+                            organization_id, config_version_id, evaluation_run_id,
+                            submitted_by_system_admin_user_id,
+                            rollback_of_release_id, rollback_of_version_id
+                        ) VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            organization_id,
+                            rollback_race_version_id,
+                            f"rollback-deadlock-{mutation_name}",
+                            system_admin_user_id,
+                            metric_race_release_id,
+                            metric_race_version_id,
+                        ),
+                    )
+                transition_connection.commit()
+                if mutation_result is None:
+                    mutation_result = mutation_future.result(timeout=8)
+                assert mutation_result == "23514"
+            transition_connection.close()
+            transition_connection = None
     finally:
         if transition_connection is not None:
             transition_connection.rollback()
