@@ -439,8 +439,13 @@ def test_postgres_idempotency_returns_stable_snapshot_and_rejects_conflict() -> 
 
 
 class _FakeConnection:
-    def __init__(self, fetch_rows: list[Any] | None = None) -> None:
+    def __init__(
+        self,
+        fetch_rows: list[Any] | None = None,
+        execute_errors: list[Exception | None] | None = None,
+    ) -> None:
         self.fetch_rows = fetch_rows or []
+        self.execute_errors = execute_errors or []
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
         self.commits = 0
         self.rollbacks = 0
@@ -470,6 +475,9 @@ class _FakeCursor:
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         self.connection.executed.append((sql, params))
+        error = self.connection.execute_errors.pop(0) if self.connection.execute_errors else None
+        if error is not None:
+            raise error
 
     def fetchone(self) -> tuple[Any, ...] | None:
         return self.connection.fetch_rows.pop(0) if self.connection.fetch_rows else None
@@ -477,6 +485,64 @@ class _FakeCursor:
     def fetchall(self) -> list[tuple[Any, ...]]:
         row = self.connection.fetch_rows.pop(0) if self.connection.fetch_rows else []
         return row if isinstance(row, list) else [row]
+
+
+class _FakePostgresError(Exception):
+    def __init__(self, sqlstate: str, raw_message: str) -> None:
+        super().__init__(raw_message)
+        self.sqlstate = sqlstate
+        self.diag = type("FakeDiag", (), {"constraint_name": "secret_constraint_name"})()
+
+
+@pytest.mark.parametrize("read_operation", ["get_version", "list_versions", "preload"])
+def test_postgres_reads_map_invalid_uuid_without_leaking_database_text(
+    read_operation: str,
+) -> None:
+    raw_message = "invalid input syntax for uuid: raw-db-value SELECT private_table"
+    execute_errors: list[Exception | None] = [
+        None,
+        _FakePostgresError("22P02", raw_message),
+    ] if read_operation == "preload" else [_FakePostgresError("22P02", raw_message)]
+    connection = _FakeConnection(execute_errors=execute_errors)
+    service = PostgresLlmGovernanceRepository("postgresql://example")
+    service._connect = lambda _url: connection
+
+    with pytest.raises(HTTPException) as invalid:
+        if read_operation == "get_version":
+            service.get_version(_session(), "not-a-uuid")
+        elif read_operation == "list_versions":
+            service.list_versions(_session(), "not-a-uuid")
+        else:
+            service.test_connection(
+                _session("technical_support"),
+                "not-a-uuid",
+                {"reason": "preload", "idempotency_key": "invalid-preload"},
+            )
+
+    assert invalid.value.status_code == 422
+    assert invalid.value.detail["error"]["code"] == "invalid_governance_input"
+    public_error = json.dumps(invalid.value.detail)
+    assert raw_message not in public_error
+    assert "secret_constraint_name" not in public_error
+    assert connection.rollbacks == 1
+
+
+def test_postgres_reads_map_unknown_database_errors_to_safe_500() -> None:
+    raw_message = "internal SQL SELECT private_table secret_constraint_name"
+    connection = _FakeConnection(
+        execute_errors=[_FakePostgresError("XX000", raw_message)]
+    )
+    service = PostgresLlmGovernanceRepository("postgresql://example")
+    service._connect = lambda _url: connection
+
+    with pytest.raises(HTTPException) as failed:
+        service.get_version(_session(), "not-a-uuid")
+
+    assert failed.value.status_code == 500
+    assert failed.value.detail["error"]["code"] == "governance_database_error"
+    public_error = json.dumps(failed.value.detail)
+    assert raw_message not in public_error
+    assert "secret_constraint_name" not in public_error
 
 
 def test_postgres_service_full_lifecycle_when_database_is_available() -> None:

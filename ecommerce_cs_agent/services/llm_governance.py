@@ -624,40 +624,59 @@ class PostgresLlmGovernanceRepository:
             lambda _version, _evaluation_run_id: {"status": "failed", "error_code": "release_gate_unavailable"}
         )
 
+    @staticmethod
+    def _map_postgres_error(exc: Exception) -> Exception:
+        if getattr(exc, "status_code", None) is not None:
+            return exc
+        sqlstate = getattr(exc, "sqlstate", None)
+        constraint = str(getattr(getattr(exc, "diag", None), "constraint_name", "") or "")
+        if sqlstate == "23505" and "provider" in constraint:
+            return api_error(409, "provider_name_conflict", "provider name already exists")
+        if sqlstate == "23505":
+            return api_error(409, "governance_conflict", "LLM governance record conflicts with existing state")
+        if sqlstate == "23503":
+            return api_error(422, "invalid_governance_reference", "referenced governance resource does not exist")
+        if sqlstate in {"22P02", "22001"}:
+            return api_error(422, "invalid_governance_input", "governance identifier or text input is invalid")
+        if sqlstate == "23514":
+            return api_error(409, "invalid_governance_state", "LLM governance state transition was rejected")
+        return api_error(500, "governance_database_error", "LLM governance database operation failed")
+
     def _transaction(self, operation: Callable[[Any], dict[str, Any] | list[dict[str, Any]]]) -> Any:
-        conn = self._connect(self._database_url)
+        conn = None
         try:
+            conn = self._connect(self._database_url)
             with conn.cursor() as cur:
                 result = operation(cur)
             conn.commit()
             return result
         except Exception as exc:
-            conn.rollback()
-            if getattr(exc, "status_code", None) is not None:
+            if conn is not None:
+                conn.rollback()
+            mapped = self._map_postgres_error(exc)
+            if mapped is exc:
                 raise
-            sqlstate = getattr(exc, "sqlstate", None)
-            constraint = str(getattr(getattr(exc, "diag", None), "constraint_name", "") or "")
-            if sqlstate == "23505" and "provider" in constraint:
-                raise api_error(409, "provider_name_conflict", "provider name already exists") from None
-            if sqlstate == "23505":
-                raise api_error(409, "governance_conflict", "LLM governance record conflicts with existing state") from None
-            if sqlstate == "23503":
-                raise api_error(422, "invalid_governance_reference", "referenced governance resource does not exist") from None
-            if sqlstate in {"22P02", "22001"}:
-                raise api_error(422, "invalid_governance_input", "governance identifier or text input is invalid") from None
-            if sqlstate == "23514":
-                raise api_error(409, "invalid_governance_state", "LLM governance state transition was rejected") from None
-            raise
+            raise mapped from exc
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
     def _read(self, operation: Callable[[Any], Any]) -> Any:
-        conn = self._connect(self._database_url)
+        conn = None
         try:
+            conn = self._connect(self._database_url)
             with conn.cursor() as cur:
                 return operation(cur)
+        except Exception as exc:
+            if conn is not None:
+                conn.rollback()
+            mapped = self._map_postgres_error(exc)
+            if mapped is exc:
+                raise
+            raise mapped from exc
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
     def _find_idempotency(self, cur: Any, action: str, key: str, request_data: Any) -> dict[str, Any] | None:
         # Serialize same-key writers before reading the unique audit record so concurrent

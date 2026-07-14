@@ -11,10 +11,10 @@ from psycopg import sql
 from ecommerce_cs_agent.db.migrations import load_migrations
 
 
-DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
+DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(
     not DATABASE_URL,
-    reason="set TEST_DATABASE_URL or DATABASE_URL to run PostgreSQL migration integration tests",
+    reason="set TEST_DATABASE_URL to run PostgreSQL migration integration tests",
 )
 
 
@@ -150,6 +150,17 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 (schema_name,),
             )
             assert cursor.fetchone() == (6,)
+            cursor.execute(
+                """
+                SELECT is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND table_name = 'llm_invocation_metric'
+                  AND column_name = 'organization_id'
+                """,
+                (schema_name,),
+            )
+            assert cursor.fetchone() == ("NO",)
 
             cursor.execute(
                 """
@@ -393,6 +404,15 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
             )
             scenario_route_id = cursor.fetchone()[0]
 
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_invocation_metric (
+                    scenario_route_id, route_role, latency_ms, status, currency
+                ) VALUES (%s, 'primary', 10, 'succeeded', 'USD')
+                """,
+                (scenario_route_id,),
+            )
             assert_integrity_error(
                 cursor,
                 """
@@ -1358,10 +1378,11 @@ def test_llm_version_lock_serializes_route_metric_and_release_writes() -> None:
                 schema_name,
                 """
                 INSERT INTO llm_invocation_metric (
-                    scenario_route_id, route_role, latency_ms, status, currency
-                ) VALUES (%s, 'primary', 10, 'succeeded', 'USD')
+                    scenario_route_id, route_role, organization_id,
+                    latency_ms, status, currency
+                ) VALUES (%s, 'primary', %s, 10, 'succeeded', 'USD')
                 """,
-                (metric_race_route_id,),
+                (metric_race_route_id, organization_id),
                 metric_worker_name,
             )
             wait_for_backend_lock(metric_worker_name)

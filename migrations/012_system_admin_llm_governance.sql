@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS llm_invocation_metric (
     scenario_route_id uuid NOT NULL
         REFERENCES llm_scenario_route(id) ON DELETE RESTRICT,
     route_role text NOT NULL CHECK (route_role IN ('primary', 'fallback')),
-    organization_id uuid REFERENCES organization(id) ON DELETE RESTRICT,
+    organization_id uuid NOT NULL REFERENCES organization(id) ON DELETE RESTRICT,
     store_id uuid REFERENCES store(id) ON DELETE RESTRICT,
     input_tokens integer NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
     output_tokens integer NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),

@@ -309,6 +309,7 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
         (invocation_sql, [
             "scenario_route_id uuid not null references llm_scenario_route(id) on delete restrict",
             "route_role text not null check (route_role in ('primary', 'fallback'))",
+            "organization_id uuid not null references organization(id) on delete restrict",
             "input_tokens integer not null default 0 check (input_tokens >= 0)",
             "output_tokens integer not null default 0 check (output_tokens >= 0)",
             "latency_ms integer not null check (latency_ms >= 0)",
@@ -407,6 +408,13 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
     assert "new.id is distinct from old.id" in provider_history_sql
     assert "new.created_at is distinct from old.created_at" in provider_history_sql
     assert "provider identity and creation metadata are immutable" in provider_history_sql
+
+    postgres_test_source = Path("tests/db/test_migrations_postgres.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'os.environ.get("TEST_DATABASE_URL")' in postgres_test_source
+    assert 'os.environ.get("DATABASE_URL")' not in postgres_test_source
+    assert "set TEST_DATABASE_URL to run PostgreSQL migration integration tests" in postgres_test_source
 
     for redundant_attribution_column in [
         "provider_config_id uuid",
