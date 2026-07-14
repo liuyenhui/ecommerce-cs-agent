@@ -9,6 +9,14 @@ proxy:
 api:
   replicas: 1
   envFromSecret: ecommerce-cs-agent-runtime
+  serviceAccount:
+    create: true
+    name: ""
+    automount: true
+  secretAccess:
+    enabled: true
+    allowedSecretNames:
+      - ecommerce-cs-agent-runtime
   image:
     repository: ghcr.io/liuyenhui/ecommerce-cs-agent-api
     tag: dev

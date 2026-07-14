@@ -1,4 +1,5 @@
 from pathlib import Path
+import tomllib
 
 import yaml
 
@@ -95,6 +96,43 @@ def test_helm_values_define_dev_runtime_contract() -> None:
     )
     assert values["admin"]["ingress"]["tlsSecretName"] == "cs-agent-dev-tls"
     assert values["proxy"]["enabled"] is True
+
+
+def test_helm_api_uses_dedicated_service_account_and_secret_allowlist() -> None:
+    chart_dir = Path("deploy/helm/ecommerce-cs-agent")
+    values = yaml.safe_load((chart_dir / "values.yaml").read_text(encoding="utf-8"))
+    api = values["api"]
+
+    assert api["serviceAccount"] == {"create": True, "name": "", "automount": True}
+    assert api["secretAccess"]["enabled"] is True
+    assert api["secretAccess"]["allowedSecretNames"] == [api["envFromSecret"]]
+
+    deployment = (chart_dir / "templates/api-deployment.yaml").read_text(encoding="utf-8")
+    service_account = (chart_dir / "templates/api-service-account.yaml").read_text(encoding="utf-8")
+    rbac = (chart_dir / "templates/api-secret-rbac.yaml").read_text(encoding="utf-8")
+    all_rbac = "\n".join([service_account, rbac])
+
+    assert "serviceAccountName:" in deployment
+    assert "automountServiceAccountToken:" in deployment
+    assert "LLM_GOVERNANCE_SECRET_NAMESPACE" in deployment
+    assert "fieldPath: metadata.namespace" in deployment
+    assert "LLM_GOVERNANCE_ALLOWED_SECRET_NAMES" in deployment
+    assert "kind: ServiceAccount" in service_account
+    assert "kind: Role" in rbac
+    assert "kind: RoleBinding" in rbac
+    assert "resources: [\"secrets\"]" in rbac
+    assert "verbs: [\"get\"]" in rbac
+    assert "resourceNames:" in rbac
+    assert "ClusterRole" not in all_rbac
+    assert "list" not in all_rbac
+    assert "watch" not in all_rbac
+    assert "fail \"api.secretAccess.allowedSecretNames must not be empty\"" in rbac
+
+
+def test_dev_dependencies_include_draft_2020_json_schema_validator() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "jsonschema[format]>=4.23,<5" in project["project"]["optional-dependencies"]["dev"]
 
 
 def test_helm_chart_defines_k8s_security_defaults() -> None:

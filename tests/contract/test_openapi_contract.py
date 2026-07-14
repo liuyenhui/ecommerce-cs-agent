@@ -4,6 +4,9 @@ import unittest
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from jsonschema import Draft202012Validator, FormatChecker, ValidationError
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
 
 from ecommerce_cs_agent.api.app import create_app
 from ecommerce_cs_agent.core.config import Settings
@@ -214,47 +217,23 @@ def json_schema_ref(operation, status_code):
     return response["content"]["application/json"]["schema"]["$ref"]
 
 
-def assert_schema_valid(instance, schema, document, path="$"):
-    if "$ref" in schema:
-        return assert_schema_valid(instance, resolve_pointer(document, schema["$ref"]), document, path)
-    branches = schema.get("oneOf") or schema.get("anyOf")
-    if branches:
-        errors = []
-        for branch in branches:
-            try:
-                assert_schema_valid(instance, branch, document, path)
-                return
-            except AssertionError as exc:
-                errors.append(str(exc))
-        raise AssertionError(f"{path} did not match a schema branch: {errors}")
+def assert_schema_valid(instance, schema, document):
+    schemas = document["components"]["schemas"]
+    schema_name = next((name for name, candidate in schemas.items() if candidate is schema), None)
+    if schema_name is None:
+        raise AssertionError("schema must be a component from the loaded OpenAPI document")
 
-    expected = schema.get("type")
-    expected_types = expected if isinstance(expected, list) else [expected] if expected else []
-    type_checks = {
-        "object": lambda value: isinstance(value, dict),
-        "array": lambda value: isinstance(value, list),
-        "string": lambda value: isinstance(value, str),
-        "integer": lambda value: isinstance(value, int) and not isinstance(value, bool),
-        "number": lambda value: isinstance(value, (int, float)) and not isinstance(value, bool),
-        "boolean": lambda value: isinstance(value, bool),
-        "null": lambda value: value is None,
-    }
-    if expected_types:
-        assert any(type_checks[item](instance) for item in expected_types), f"{path} expected {expected_types}, got {type(instance).__name__}"
-    if isinstance(instance, str) and "minLength" in schema:
-        assert len(instance) >= schema["minLength"], f"{path} is shorter than minLength"
-    if isinstance(instance, dict):
-        required = set(schema.get("required", []))
-        assert required <= set(instance), f"{path} missing {sorted(required - set(instance))}"
-        properties = schema.get("properties", {})
-        if schema.get("additionalProperties") is False:
-            assert set(instance) <= set(properties), f"{path} has unknown {sorted(set(instance) - set(properties))}"
-        for key, value in instance.items():
-            if key in properties:
-                assert_schema_valid(value, properties[key], document, f"{path}.{key}")
-    if isinstance(instance, list) and "items" in schema:
-        for index, value in enumerate(instance):
-            assert_schema_valid(value, schema["items"], document, f"{path}[{index}]")
+    document_uri = "urn:ecommerce-cs-agent:openapi"
+    registry = Registry().with_resource(
+        document_uri,
+        Resource.from_contents(document, default_specification=DRAFT202012),
+    )
+    validator = Draft202012Validator(
+        {"$ref": f"{document_uri}#/components/schemas/{schema_name}"},
+        registry=registry,
+        format_checker=FormatChecker(),
+    )
+    validator.validate(instance)
 
 
 class OpenApiContractTest(unittest.TestCase):
@@ -266,6 +245,80 @@ class OpenApiContractTest(unittest.TestCase):
         self.assertEqual(self.document["openapi"], "3.1.0")
         self.assertIsInstance(self.document["paths"], dict)
         self.assertIsInstance(self.document["components"], dict)
+
+    def test_schema_validator_rejects_formats_enums_bounds_patterns_and_one_of(self):
+        schemas = self.document["components"]["schemas"]
+        connection_test = {
+            "connection_test_id": "11111111-1111-4111-8111-111111111111",
+            "provider_config_id": "22222222-2222-4222-8222-222222222222",
+            "config_version_id": "33333333-3333-4333-8333-333333333333",
+            "provider_revision": 1,
+            "status": "passed",
+            "latency_ms": 1,
+            "checked_at": "2026-07-15T00:00:00Z",
+        }
+        provider_request = {
+            "name": "provider",
+            "provider_type": "openai",
+            "base_url": "https://provider.example/v1",
+            "secret_ref": {"namespace": "runtime", "name": "llm", "key": "api-key"},
+            "reason": "contract",
+            "idempotency_key": "provider-create",
+        }
+        connection_request = {
+            "config_version_id": "33333333-3333-4333-8333-333333333333",
+            "timeout_seconds": 3,
+            "max_tokens": 8,
+            "reason": "contract",
+            "idempotency_key": "connection-test",
+        }
+        route = {
+            "scenario": "reply_generation",
+            "primary_provider_config_id": "22222222-2222-4222-8222-222222222222",
+            "primary_model": "chat-pro",
+            "fallback_provider_config_id": None,
+            "fallback_model": None,
+            "enabled": True,
+            "temperature": 0.2,
+            "max_output_tokens": 1200,
+            "timeout_seconds": 18,
+            "max_retries": 2,
+            "circuit_breaker_threshold": 5,
+            "recovery_probe_seconds": 30,
+        }
+        routes_request = {
+            "routes": [route],
+            "expected_revision": 1,
+            "reason": "contract",
+            "idempotency_key": "routes",
+        }
+        submit_request = {
+            "expected_revision": 1,
+            "evaluation_run_id": "eval-contract",
+            "reason": "contract",
+            "idempotency_key": "submit",
+        }
+
+        invalid_cases = [
+            (schemas["LlmConnectionTest"], {**connection_test, "provider_config_id": "not-a-uuid"}),
+            (schemas["LlmConnectionTest"], {**connection_test, "status": "unknown"}),
+            (schemas["LlmConnectionTest"], {**connection_test, "checked_at": "not-a-date-time"}),
+            (schemas["LlmProviderCreateRequest"], {**provider_request, "base_url": "https:// bad"}),
+            (schemas["LlmConnectionTestRequest"], {**connection_request, "timeout_seconds": 0}),
+            (schemas["LlmConnectionTestRequest"], {**connection_request, "max_tokens": 257}),
+            (schemas["LlmRoutesReplaceRequest"], {**routes_request, "routes": []}),
+            (
+                schemas["LlmRoutesReplaceRequest"],
+                {**routes_request, "routes": [{**route, "fallback_provider_config_id": 42}]},
+            ),
+            (
+                schemas["LlmSubmitPublishRequest"],
+                {**submit_request, "evaluation_run_id": "invalid evaluation id"},
+            ),
+        ]
+        for schema, instance in invalid_cases:
+            with self.assertRaises((AssertionError, ValidationError)):
+                assert_schema_valid(instance, schema, self.document)
 
     def test_local_refs_are_all_resolvable(self):
         refs = [node["$ref"] for node in walk(self.document) if "$ref" in node]

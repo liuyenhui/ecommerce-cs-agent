@@ -38,6 +38,8 @@ class KubernetesSecretProviderConnectionTester:
         kubernetes_port: int,
         service_account_token_file: str,
         kubernetes_ca_file: str,
+        allowed_namespace: str,
+        allowed_secret_names: set[str] | frozenset[str],
         transport: Transport | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -45,10 +47,16 @@ class KubernetesSecretProviderConnectionTester:
             raise RuntimeError("Kubernetes in-cluster host and port are required")
         if not Path(service_account_token_file).is_file() or not Path(kubernetes_ca_file).is_file():
             raise RuntimeError("Kubernetes in-cluster token and CA files are required")
+        if not self._valid_ref(allowed_namespace) or not allowed_secret_names:
+            raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
+        if not all(self._valid_ref(name) for name in allowed_secret_names):
+            raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
         self._host = kubernetes_host
         self._port = int(kubernetes_port)
         self._token_file = service_account_token_file
         self._ca_file = kubernetes_ca_file
+        self._allowed_namespace = allowed_namespace
+        self._allowed_secret_names = frozenset(allowed_secret_names)
         self._transport = transport or _default_transport
         self._monotonic = monotonic
 
@@ -59,6 +67,7 @@ class KubernetesSecretProviderConnectionTester:
         environ: Mapping[str, str] | None = None,
         token_file: str = "/var/run/secrets/kubernetes.io/serviceaccount/token",
         ca_file: str = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+        namespace_file: str = "/var/run/secrets/kubernetes.io/serviceaccount/namespace",
         transport: Transport | None = None,
     ) -> "KubernetesSecretProviderConnectionTester":
         env = os.environ if environ is None else environ
@@ -68,11 +77,21 @@ class KubernetesSecretProviderConnectionTester:
             parsed_port = int(port)
         except ValueError:
             parsed_port = 0
+        namespace = env.get("LLM_GOVERNANCE_SECRET_NAMESPACE", "").strip()
+        if not namespace and Path(namespace_file).is_file():
+            namespace = Path(namespace_file).read_text(encoding="utf-8").strip()
+        allowed_secret_names = {
+            name.strip()
+            for name in env.get("LLM_GOVERNANCE_ALLOWED_SECRET_NAMES", "").split(",")
+            if name.strip()
+        }
         return cls(
             kubernetes_host=host,
             kubernetes_port=parsed_port,
             service_account_token_file=token_file,
             kubernetes_ca_file=ca_file,
+            allowed_namespace=namespace,
+            allowed_secret_names=allowed_secret_names,
             transport=transport,
         )
 
@@ -84,6 +103,8 @@ class KubernetesSecretProviderConnectionTester:
         namespace, name, key = (reference.get(field) for field in ("namespace", "name", "key"))
         if not all(self._valid_ref(value) for value in (namespace, name, key)):
             raise ValueError("invalid_secret_ref")
+        if namespace != self._allowed_namespace or name not in self._allowed_secret_names:
+            raise ValueError("secret_access_denied")
         token = Path(self._token_file).read_text(encoding="utf-8").strip()
         if not token:
             raise RuntimeError("secret_resolution_failed")
@@ -125,7 +146,7 @@ class KubernetesSecretProviderConnectionTester:
             if isinstance(exc.reason, socket.gaierror):
                 return "dns_error"
             return "connection_failed"
-        if isinstance(exc, ValueError) and str(exc) == "invalid_secret_ref":
+        if isinstance(exc, ValueError) and str(exc) in {"invalid_secret_ref", "secret_access_denied"}:
             return "invalid_response"
         return "connection_failed"
 
@@ -148,6 +169,9 @@ class KubernetesSecretProviderConnectionTester:
                 probe_url += "/models"
             elif provider_type == "azure_openai":
                 headers["api-key"] = secret
+                if not probe_url.endswith("/openai/v1"):
+                    probe_url += "/openai/v1"
+                probe_url += "/models"
             else:
                 raise ValueError("invalid_provider_type")
             status, _body = self._transport(Request(probe_url, method="GET", headers=headers), timeout, None)

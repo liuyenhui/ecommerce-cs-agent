@@ -11,6 +11,14 @@ proxy:
 api:
   replicas: 1
   envFromSecret: ecommerce-cs-agent-runtime
+  serviceAccount:
+    create: true
+    name: ""
+    automount: true
+  secretAccess:
+    enabled: true
+    allowedSecretNames:
+      - ecommerce-cs-agent-runtime
   image:
     repository: registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-api
     tag: dev

@@ -46,6 +46,8 @@ def test_kubernetes_secret_tester_resolves_secret_and_probes_openai_without_leak
         kubernetes_port=443,
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
+        allowed_namespace="runtime",
+        allowed_secret_names={"llm"},
         transport=transport,
         monotonic=lambda: 1.0,
     )
@@ -58,7 +60,7 @@ def test_kubernetes_secret_tester_resolves_secret_and_probes_openai_without_leak
 
 @pytest.mark.parametrize(
     ("provider_type", "header"),
-    [("anthropic", "X-api-key"), ("azure_openai", "Api-key")],
+    [("anthropic", "X-api-key")],
 )
 def test_kubernetes_secret_tester_uses_provider_specific_auth_headers(
     tmp_path: Path, provider_type: str, header: str
@@ -82,6 +84,8 @@ def test_kubernetes_secret_tester_uses_provider_specific_auth_headers(
         kubernetes_port=443,
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
+        allowed_namespace="runtime",
+        allowed_secret_names={"llm"},
         transport=transport,
     )
     assert tester(_provider(provider_type), {"timeout_seconds": 3})["status"] == "passed"
@@ -103,6 +107,8 @@ def test_kubernetes_secret_tester_redacts_transport_failures(tmp_path: Path) -> 
         kubernetes_port=443,
         service_account_token_file=str(token_file),
         kubernetes_ca_file=str(ca_file),
+        allowed_namespace="runtime",
+        allowed_secret_names={"llm"},
         transport=transport,
     )
     result = tester(_provider(), {"timeout_seconds": 3})
@@ -115,6 +121,164 @@ def test_kubernetes_secret_tester_requires_in_cluster_prerequisites(tmp_path: Pa
         KubernetesSecretProviderConnectionTester.from_environment(
             environ={}, token_file=str(tmp_path / "missing"), ca_file=str(tmp_path / "missing-ca")
         )
+
+
+@pytest.mark.parametrize(
+    "secret_ref",
+    [
+        {"namespace": "other", "name": "llm", "key": "api-key"},
+        {"namespace": "runtime", "name": "other-llm", "key": "api-key"},
+    ],
+)
+def test_kubernetes_secret_tester_rejects_secret_outside_allowlist_before_transport(
+    tmp_path: Path, secret_ref: dict[str, str]
+) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("sa", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+    transport_calls: list[object] = []
+
+    def transport(request: object, _timeout: float, _ca_file: str | None) -> tuple[int, bytes]:
+        transport_calls.append(request)
+        return 500, b"{}"
+
+    tester = KubernetesSecretProviderConnectionTester(
+        kubernetes_host="kubernetes.default.svc",
+        kubernetes_port=443,
+        service_account_token_file=str(token_file),
+        kubernetes_ca_file=str(ca_file),
+        allowed_namespace="runtime",
+        allowed_secret_names={"llm"},
+        transport=transport,
+    )
+    provider = _provider()
+    provider["secret_ref"] = secret_ref
+
+    assert tester(provider, {"timeout_seconds": 3}) == {
+        "status": "failed",
+        "latency_ms": pytest.approx(0, abs=100),
+        "error_code": "invalid_response",
+    }
+    assert transport_calls == []
+
+
+@pytest.mark.parametrize("downward_namespace", ["runtime", None])
+def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_account_file(
+    tmp_path: Path, downward_namespace: str | None
+) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    namespace_file = tmp_path / "namespace"
+    token_file.write_text("service-account-token", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+    namespace_file.write_text("runtime", encoding="utf-8")
+    secret_requests: list[str] = []
+
+    def transport(request: object, _timeout: float, _ca_file: str | None) -> tuple[int, bytes]:
+        if "/api/v1/namespaces/" in request.full_url:
+            secret_requests.append(request.full_url)
+            return 200, json.dumps({"data": {"api-key": base64.b64encode(b"secret").decode()}}).encode()
+        return 200, b"{}"
+
+    environment = {
+        "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
+        "KUBERNETES_SERVICE_PORT_HTTPS": "443",
+        "LLM_GOVERNANCE_ALLOWED_SECRET_NAMES": "llm, secondary-llm",
+    }
+    if downward_namespace:
+        environment["LLM_GOVERNANCE_SECRET_NAMESPACE"] = downward_namespace
+    tester = KubernetesSecretProviderConnectionTester.from_environment(
+        environ=environment,
+        token_file=str(token_file),
+        ca_file=str(ca_file),
+        namespace_file=str(namespace_file),
+        transport=transport,
+    )
+
+    assert tester(_provider(), {"timeout_seconds": 3})["status"] == "passed"
+    assert secret_requests == [
+        "https://kubernetes.default.svc:443/api/v1/namespaces/runtime/secrets/llm"
+    ]
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {
+            "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
+            "KUBERNETES_SERVICE_PORT_HTTPS": "443",
+            "LLM_GOVERNANCE_ALLOWED_SECRET_NAMES": "llm",
+        },
+        {
+            "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
+            "KUBERNETES_SERVICE_PORT_HTTPS": "443",
+            "LLM_GOVERNANCE_SECRET_NAMESPACE": "runtime",
+        },
+        {
+            "KUBERNETES_SERVICE_HOST": "kubernetes.default.svc",
+            "KUBERNETES_SERVICE_PORT_HTTPS": "443",
+            "LLM_GOVERNANCE_SECRET_NAMESPACE": "runtime",
+            "LLM_GOVERNANCE_ALLOWED_SECRET_NAMES": " , ",
+        },
+    ],
+)
+def test_kubernetes_secret_tester_fails_fast_without_namespace_or_allowlist(
+    tmp_path: Path, environment: dict[str, str]
+) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    namespace_file = tmp_path / "missing-namespace"
+    token_file.write_text("sa", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="namespace and Secret allowlist"):
+        KubernetesSecretProviderConnectionTester.from_environment(
+            environ=environment,
+            token_file=str(token_file),
+            ca_file=str(ca_file),
+            namespace_file=str(namespace_file),
+        )
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected_url"),
+    [
+        ("https://azure.example.test", "https://azure.example.test/openai/v1/models"),
+        ("https://azure.example.test/openai/v1", "https://azure.example.test/openai/v1/models"),
+    ],
+)
+def test_kubernetes_secret_tester_uses_standard_azure_models_url(
+    tmp_path: Path, base_url: str, expected_url: str
+) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("sa", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+
+    def transport(request: object, timeout: float, _ca_file: str | None) -> tuple[int, bytes]:
+        if "/api/v1/namespaces/" in request.full_url:
+            return 200, json.dumps({"data": {"api-key": base64.b64encode(b"secret").decode()}}).encode()
+        assert request.full_url == expected_url
+        assert request.headers == {"Accept": "application/json", "Api-key": "secret"}
+        assert timeout == 3.0
+        assert "secret" not in request.full_url
+        assert "?" not in request.full_url
+        return 200, b"{}"
+
+    tester = KubernetesSecretProviderConnectionTester(
+        kubernetes_host="kubernetes.default.svc",
+        kubernetes_port=443,
+        service_account_token_file=str(token_file),
+        kubernetes_ca_file=str(ca_file),
+        allowed_namespace="runtime",
+        allowed_secret_names={"llm"},
+        transport=transport,
+    )
+    provider = _provider("azure_openai")
+    provider["base_url"] = base_url
+
+    assert tester(provider, {"timeout_seconds": 3})["status"] == "passed"
 
 
 def test_postgres_evaluation_gate_requires_same_completed_passing_run() -> None:
