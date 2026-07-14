@@ -316,7 +316,7 @@ class InMemoryLlmGovernanceRepository:
             return replay
         number = max((int(v["version_number"]) for v in self.versions.values() if v["organization_id"] == organization_id), default=0) + 1
         version_id = f"version-{uuid.uuid4().hex}"
-        version = {"version_id": version_id, "organization_id": organization_id, "version_number": number, "status": "draft", "revision": 1, "description": request_data["description"], "configuration_hash": _configuration_hash([]), "created_by_system_admin_user_id": session.user_id, "created_at": _iso(_now_dt()), "published_by_system_admin_user_id": None, "published_at": None, "rollback_of_version_id": None, "routes": []}
+        version = {"version_id": version_id, "organization_id": organization_id, "version_number": number, "status": "draft", "revision": 1, "description": request_data["description"], "configuration_hash": _configuration_hash([]), "created_by_system_admin_user_id": session.user_id, "created_at": _iso(_now_dt()), "published_by_system_admin_user_id": None, "published_at": None, "rollback_of_version_id": None, "evaluation_run_id": None, "routes": []}
         self.versions[version_id] = version
         return self._finish_write(session, "llm.config.create_draft", "llm_config_version", version_id, reason, key, request_data, copy.deepcopy(version))
 
@@ -441,18 +441,23 @@ class InMemoryLlmGovernanceRepository:
         if replay is not None:
             return replay
         source = self.versions.get(version_id)
-        if not source or source["status"] not in {"superseded", "rolled_back"}:
+        if not source or source["status"] not in {"running", "superseded", "rolled_back"}:
             raise api_error(409, "rollback_source_invalid", "rollback source must be released history")
         self._ensure_version_ready(source)
-        for current in self.versions.values():
-            if current["organization_id"] == source["organization_id"] and current["status"] == "running":
-                current["status"] = "superseded" if current["version_id"] == version_id else "rolled_back"
-                current["revision"] += 1
-        number = max(int(v["version_number"]) for v in self.versions.values() if v["organization_id"] == source["organization_id"]) + 1
-        new_id = f"version-{uuid.uuid4().hex}"
-        rolled_back = {"version_id": new_id, "organization_id": source["organization_id"], "version_number": number, "status": "running", "revision": 4, "description": f"Rollback of version {source['version_number']}", "configuration_hash": source["configuration_hash"], "created_by_system_admin_user_id": session.user_id, "created_at": _iso(_now_dt()), "published_by_system_admin_user_id": session.user_id, "published_at": _iso(_now_dt()), "rollback_of_version_id": version_id, "routes": copy.deepcopy(source["routes"])}
-        self.versions[new_id] = rolled_back
-        return self._finish_write(session, "llm.config.rollback", "llm_config_version", new_id, reason, key, request_data, copy.deepcopy(rolled_back))
+        versions_before = copy.deepcopy(self.versions)
+        try:
+            for current in self.versions.values():
+                if current["organization_id"] == source["organization_id"] and current["status"] == "running":
+                    current["status"] = "superseded" if current["version_id"] == version_id else "rolled_back"
+                    current["revision"] += 1
+            number = max(int(v["version_number"]) for v in self.versions.values() if v["organization_id"] == source["organization_id"]) + 1
+            new_id = f"version-{uuid.uuid4().hex}"
+            rolled_back = {"version_id": new_id, "organization_id": source["organization_id"], "version_number": number, "status": "running", "revision": 4, "description": f"Rollback of version {source['version_number']}", "configuration_hash": source["configuration_hash"], "created_by_system_admin_user_id": session.user_id, "created_at": _iso(_now_dt()), "published_by_system_admin_user_id": session.user_id, "published_at": _iso(_now_dt()), "rollback_of_version_id": version_id, "evaluation_run_id": source.get("evaluation_run_id"), "routes": copy.deepcopy(source["routes"])}
+            self.versions[new_id] = rolled_back
+            return self._finish_write(session, "llm.config.rollback", "llm_config_version", new_id, reason, key, request_data, copy.deepcopy(rolled_back))
+        except Exception:
+            self.versions = versions_before
+            raise
 
     def _filtered_metrics(self, session: SystemAdminSession, filters: dict[str, Any]) -> list[dict[str, Any]]:
         _require_role(session, _READ_ROLES)
@@ -702,6 +707,16 @@ class PostgresLlmGovernanceRepository:
         cur.execute("SELECT id::text, scenario, primary_provider_config_id::text, primary_model, fallback_provider_config_id::text, fallback_model, enabled, temperature, max_output_tokens, timeout_seconds, max_retries, circuit_breaker_threshold, recovery_probe_seconds, revision FROM llm_scenario_route WHERE config_version_id=%s ORDER BY scenario", (version_id,))
         route_keys = ("route_id", "scenario", "primary_provider_config_id", "primary_model", "fallback_provider_config_id", "fallback_model", "enabled", "temperature", "max_output_tokens", "timeout_seconds", "max_retries", "circuit_breaker_threshold", "recovery_probe_seconds", "revision")
         version["routes"] = [{**dict(zip(route_keys, route)), "temperature": float(route[7])} for route in cur.fetchall()]
+        cur.execute(
+            "SELECT diff_summary->'response_snapshot'->>'evaluation_run_id' "
+            "FROM system_admin_audit_log "
+            "WHERE object_id=%s AND action IN ('llm.config.submit_publish','llm.config.rollback') "
+            "AND diff_summary->'response_snapshot' ? 'evaluation_run_id' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (version_id,),
+        )
+        evaluation_row = cur.fetchone()
+        version["evaluation_run_id"] = str(evaluation_row[0]) if evaluation_row and evaluation_row[0] is not None else None
         return version
 
     def replace_routes(self, session: SystemAdminSession, version_id: str, routes: list[dict[str, Any]], *, expected_revision: int, payload: dict[str, Any]) -> dict[str, Any]:
@@ -829,7 +844,7 @@ class PostgresLlmGovernanceRepository:
                 raise api_error(404, "config_version_not_found", "config version was not found")
             cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"llm_publish:{organization_row[0]}",))
             source = self._fetch_version(cur, version_id, lock=True)
-            if source["status"] not in {"superseded", "rolled_back"}:
+            if source["status"] not in {"running", "superseded", "rolled_back"}:
                 raise api_error(409, "rollback_source_invalid", "rollback source must be released history")
             self._ensure_version_ready_pg(cur, source)
             cur.execute("SELECT id::text FROM llm_config_version WHERE organization_id=%s AND status='running' FOR UPDATE", (source["organization_id"],))
@@ -846,6 +861,7 @@ class PostgresLlmGovernanceRepository:
                 cur.execute("UPDATE llm_config_version SET status=%s, revision=revision+1 WHERE id=%s", (state, new_id))
             cur.execute("UPDATE llm_config_version SET status='running', revision=revision+1, published_by_system_admin_user_id=%s, published_at=now() WHERE id=%s", (session.user_id, new_id))
             result = self._fetch_version(cur, new_id)
+            result["evaluation_run_id"] = source.get("evaluation_run_id")
             self._audit(cur, session, "llm.config.rollback", "llm_config_version", new_id, reason, key, request_data, result)
             return result
         return self._transaction(op)

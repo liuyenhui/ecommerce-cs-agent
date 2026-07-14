@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -203,6 +204,30 @@ def test_draft_publish_and_rollback_preserve_immutable_history() -> None:
     assert service.versions[published["version_id"]]["routes"] == published["routes"]
 
 
+def test_running_source_rollback_is_atomic_and_creates_a_new_running_version() -> None:
+    service = InMemoryLlmGovernanceRepository(release_gate_checker=lambda _version, _run: {"status": "passed"})
+    provider = _create_provider(service, name="rollback-running", idem="rollback-running-provider")
+    published = _release(service, _all_routes(provider["provider_id"]), suffix="rollback-running")
+    rolled_back = service.rollback(_session(), published["version_id"], {"reason": "emergency rollback", "idempotency_key": "rollback-running"})
+    assert service.get_version(_session(), published["version_id"])["status"] == "superseded"
+    assert rolled_back["status"] == "running"
+    assert rolled_back["rollback_of_version_id"] == published["version_id"]
+    assert rolled_back["evaluation_run_id"] == published["evaluation_run_id"]
+
+
+def test_in_memory_rollback_restores_running_version_when_audit_fails() -> None:
+    service = InMemoryLlmGovernanceRepository(release_gate_checker=lambda _version, _run: {"status": "passed"})
+    provider = _create_provider(service, name="rollback-failure", idem="rollback-failure-provider")
+    published = _release(service, _all_routes(provider["provider_id"]), suffix="rollback-failure")
+    before = copy.deepcopy(service.versions)
+    original_finish = service._finish_write
+    service._finish_write = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("audit failed"))
+    with pytest.raises(RuntimeError, match="audit failed"):
+        service.rollback(_session(), published["version_id"], {"reason": "emergency rollback", "idempotency_key": "rollback-failure"})
+    service._finish_write = original_finish
+    assert service.versions == before
+
+
 def test_validate_submit_and_publish_are_explicit_and_gate_failure_preserves_state() -> None:
     service = InMemoryLlmGovernanceRepository()
     provider = _create_provider(service, name="explicit", idem="explicit-provider")
@@ -218,8 +243,11 @@ def test_validate_submit_and_publish_are_explicit_and_gate_failure_preserves_sta
     service._release_gate_checker = lambda _version, _run: {"status": "passed"}
     pending = service.submit_publish(_session(), draft["version_id"], {"expected_revision": 3, "evaluation_run_id": "eval-explicit", "reason": "submit", "idempotency_key": "explicit-submit"})
     assert (pending["status"], pending["revision"]) == ("pending_publish", 4)
+    assert service.get_version(_session(), draft["version_id"])["evaluation_run_id"] == "eval-explicit"
+    assert service.list_versions(_session(), ORG_ID)[0]["evaluation_run_id"] == "eval-explicit"
     running = service.publish(_session(), draft["version_id"], {"expected_revision": 4, "reason": "publish", "idempotency_key": "explicit-publish"})
     assert (running["status"], running["revision"]) == ("running", 5)
+    assert running["evaluation_run_id"] == "eval-explicit"
 
 
 def test_route_replacement_rejects_duplicate_scenario_missing_primary_and_stale_revision() -> None:
@@ -383,21 +411,40 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
         scoped_url = psycopg.conninfo.make_conninfo(database_url, options=f"-c search_path={schema_name},public")
         session = SystemAdminSession(token="integration", user_id=user_id, email="llm-service@example.invalid", display_name="LLM Service", role="super_admin", expires_at=datetime.now(timezone.utc) + timedelta(hours=1))
         service = PostgresLlmGovernanceRepository(scoped_url, connection_tester=lambda _provider, _request: {"status": "passed", "latency_ms": 2}, release_gate_checker=lambda _version, _run: {"status": "passed"})
-        provider = service.create_provider(session, dict(PROVIDER_PAYLOAD, idempotency_key="integration-provider"))
+        provider_payload = dict(PROVIDER_PAYLOAD, idempotency_key="integration-provider")
+        provider = service.create_provider(session, provider_payload)
         assert set(provider["secret_ref"]) == {"namespace", "name", "key"}
         draft = service.create_draft(session, {"organization_id": organization_id, "reason": "integration", "idempotency_key": "integration-draft"})
         changed = service.replace_routes(session, draft["version_id"], _all_routes(provider["provider_id"]), expected_revision=1, payload={"reason": "integration", "idempotency_key": "integration-routes"})
         tested = service.test_connection(session, provider["provider_id"], {"config_version_id": draft["version_id"], "reason": "integration", "idempotency_key": "integration-test"})
         assert tested["status"] == "passed"
+        assert service.create_provider(session, provider_payload) == provider
+        with pytest.raises(HTTPException) as create_conflict:
+            service.create_provider(session, dict(provider_payload, base_url="https://other.example.test"))
+        assert create_conflict.value.status_code == 409
         validated = service.validate_draft(session, draft["version_id"], {"expected_revision": changed["revision"], "reason": "integration", "idempotency_key": "integration-validate"})
         pending = service.submit_publish(session, draft["version_id"], {"expected_revision": validated["revision"], "evaluation_run_id": "integration-eval", "reason": "integration", "idempotency_key": "integration-submit"})
+        assert service.get_version(session, draft["version_id"])["evaluation_run_id"] == "integration-eval"
+        assert service.list_versions(session, organization_id)[0]["evaluation_run_id"] == "integration-eval"
         running = service.publish(session, draft["version_id"], {"expected_revision": pending["revision"], "reason": "integration", "idempotency_key": "integration-publish"})
         assert running["status"] == "running"
+        assert running["evaluation_run_id"] == "integration-eval"
         second_draft = service.create_draft(session, {"organization_id": organization_id, "reason": "integration", "idempotency_key": "integration-draft-two"})
         second_changed = service.replace_routes(session, second_draft["version_id"], _all_routes(provider["provider_id"]), expected_revision=1, payload={"reason": "integration", "idempotency_key": "integration-routes-two"})
         service.test_connection(session, provider["provider_id"], {"config_version_id": second_draft["version_id"], "reason": "integration", "idempotency_key": "integration-test-two"})
         second_validated = service.validate_draft(session, second_draft["version_id"], {"expected_revision": second_changed["revision"], "reason": "integration", "idempotency_key": "integration-validate-two"})
         second_pending = service.submit_publish(session, second_draft["version_id"], {"expected_revision": second_validated["revision"], "evaluation_run_id": "integration-eval-two", "reason": "integration", "idempotency_key": "integration-submit-two"})
+        original_audit = service._audit
+        service._audit = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("publish audit failed"))
+        with pytest.raises(RuntimeError, match="publish audit failed"):
+            service.publish(session, second_draft["version_id"], {"expected_revision": second_pending["revision"], "reason": "integration", "idempotency_key": "integration-publish-two-audit-fail"})
+        service._audit = original_audit
+        with psycopg.connect(scoped_url) as verify_publish_rollback:
+            with verify_publish_rollback.cursor() as cur:
+                cur.execute("SELECT status FROM llm_config_version WHERE id=%s", (running["version_id"],))
+                assert cur.fetchone() == ("running",)
+                cur.execute("SELECT status FROM llm_config_version WHERE id=%s", (second_draft["version_id"],))
+                assert cur.fetchone() == ("pending_publish",)
         service.update_provider(session, provider["provider_id"], {"enabled": False, "reason": "integration", "idempotency_key": "integration-disable"}, expected_revision=3)
         with pytest.raises(HTTPException):
             service.publish(session, second_draft["version_id"], {"expected_revision": second_pending["revision"], "reason": "integration", "idempotency_key": "integration-publish-two"})
@@ -418,9 +465,22 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
         service.update_provider(session, provider["provider_id"], {"enabled": True, "reason": "integration", "idempotency_key": "integration-enable"}, expected_revision=4)
         second_running = service.publish(session, second_draft["version_id"], {"expected_revision": second_pending["revision"], "reason": "integration", "idempotency_key": "integration-publish-two-success"})
         assert second_running["status"] == "running"
-        rolled_back = service.rollback(session, running["version_id"], {"reason": "integration", "idempotency_key": "integration-rollback"})
+        original_audit = service._audit
+        service._audit = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("rollback audit failed"))
+        with pytest.raises(RuntimeError, match="rollback audit failed"):
+            service.rollback(session, running["version_id"], {"reason": "integration", "idempotency_key": "integration-rollback-audit-fail"})
+        service._audit = original_audit
+        with psycopg.connect(scoped_url) as verify_rollback:
+            with verify_rollback.cursor() as cur:
+                cur.execute("SELECT status FROM llm_config_version WHERE id=%s", (second_running["version_id"],))
+                assert cur.fetchone() == ("running",)
+                cur.execute("SELECT count(*) FROM llm_config_version WHERE organization_id=%s", (organization_id,))
+                assert cur.fetchone() == (2,)
+        rolled_back = service.rollback(session, second_running["version_id"], {"reason": "integration", "idempotency_key": "integration-rollback-running"})
         assert rolled_back["status"] == "running"
-        assert rolled_back["rollback_of_version_id"] == running["version_id"]
+        assert rolled_back["rollback_of_version_id"] == second_running["version_id"]
+        assert service.get_version(session, second_running["version_id"])["status"] == "superseded"
+        assert rolled_back["evaluation_run_id"] == "integration-eval-two"
     finally:
         setup.close()
         with psycopg.connect(database_url, autocommit=True) as cleanup:
