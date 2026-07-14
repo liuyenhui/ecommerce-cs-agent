@@ -15,6 +15,7 @@ from ecommerce_cs_agent.services.system_admin import _message_trace_summary_from
 
 ROOT = Path(__file__).resolve().parents[2]
 OPENAPI_PATH = ROOT / "docs" / "openapi.yaml"
+SYSTEM_ADMIN_DESIGN_PATH = ROOT / "docs" / "system-admin-design.md"
 
 REQUIRED_PATHS = {
     "/v1/reply-decisions",
@@ -341,6 +342,20 @@ class OpenApiContractTest(unittest.TestCase):
             self.document["components"]["schemas"]["SystemDashboardSummary"],
             self.document,
         )
+
+    def test_system_admin_design_marks_customer_admin_invitations_future_only(self):
+        invitation_lines = [
+            line.strip()
+            for line in SYSTEM_ADMIN_DESIGN_PATH.read_text(encoding="utf-8").splitlines()
+            if "邀请" in line or "客户管理员开通" in line
+        ]
+
+        self.assertTrue(invitation_lines)
+        for line in invitation_lines:
+            self.assertTrue(
+                any(marker in line for marker in ("后续", "当前不可用", "当前不", "不得")),
+                f"customer admin invitation is presented as a current capability: {line}",
+            )
 
     def test_actual_system_admin_organization_store_readiness_and_trace_shapes_validate(self):
         self.assertNotIn("/v1/system-admin/tenants", self.document["paths"])
