@@ -290,9 +290,8 @@
 | --- | --- | --- |
 | 系统登录 | `POST /v1/system-admin/auth/login`、`POST /v1/system-admin/auth/logout`、`GET /v1/system-admin/auth/me` | 系统后台登录、退出和当前系统用户信息。 |
 | 系统用户 | `GET /v1/system-admin/users`、`POST /v1/system-admin/users`、`PATCH /v1/system-admin/users/{user_id}` | 管理系统后台账号、角色和状态。 |
-| 组织管理 | `GET /v1/system-admin/organizations`、`POST /v1/system-admin/organizations`、`PATCH /v1/system-admin/organizations/{organization_id}` | 创建、停用、冻结和查看客户组织。 |
+| 组织管理 | `GET /v1/system-admin/organizations`、`POST /v1/system-admin/organizations` | 创建和查看客户组织。 |
 | 店铺管理 | `GET /v1/system-admin/stores`、`POST /v1/system-admin/stores`、`PATCH /v1/system-admin/stores/{store_id}` | 创建店铺、维护平台、外部引用和启用状态。 |
-| 客户管理员 | `POST /v1/system-admin/organizations/{organization_id}/admin-invitations`、`PATCH /v1/system-admin/admin-users/{user_id}` | 邀请、禁用或恢复客户后台管理员。 |
 | 配置完成度 | `GET /v1/system-admin/readiness/stores`、`GET /v1/system-admin/readiness/stores/{store_id}` | 跨租户查看上线检查项。 |
 | 资料体检 | `GET /v1/system-admin/product-health` | 汇总资料缺口、价格过期、解析失败和知识未审核状态。 |
 | 规则治理 | `GET /v1/system-admin/rules`、`POST /v1/system-admin/rule-templates`、`PATCH /v1/system-admin/rule-templates/{template_id}` | 查看规则状态，维护系统默认规则模板。 |
@@ -308,6 +307,8 @@
 | API 凭据 | `GET /v1/system-admin/api-keys`、`POST /v1/system-admin/api-keys/{key_id}/rotate` | 管理租户接入凭据引用和轮换状态。 |
 | 审计 | `GET /v1/system-admin/audit-logs` | 查询系统后台操作、跨租户访问和敏感数据查看记录。 |
 | 健康检查 | `GET /v1/system-admin/health` | 汇总 API、Worker、存储、队列和部署健康。 |
+
+后续候选（当前 API 与 OpenAPI 均不可用）：组织状态 `PATCH`、组织管理员邀请，以及客户管理员禁用/恢复。实现前不得把这些候选路径作为当前能力展示或调用。
 
 接口约束：
 

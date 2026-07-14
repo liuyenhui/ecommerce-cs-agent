@@ -746,6 +746,52 @@ def test_postgres_system_admin_repository_readiness_reads_db_and_returns_all_che
     assert "knowledge.store_id::text = st.id::text" in executed_sql
 
 
+def test_in_memory_readiness_filters_before_global_total_and_pagination() -> None:
+    repository = InMemorySystemAdminRepository()
+    repository.stores = {
+        "ready-first": {"id": "ready-first", "organization_id": "org-001", "status": "active"},
+        **{
+            f"blocked-{index}": {"id": f"blocked-{index}", "organization_id": "org-001", "status": "active"}
+            for index in range(1, 7)
+        },
+    }
+    repository.product_store_ids = {"ready-first"}
+    repository.price_snapshot_store_ids = {"ready-first"}
+    repository.approved_knowledge_store_ids = {"ready-first"}
+    repository.active_integration_store_ids = {"ready-first"}
+
+    response = repository.store_readiness(
+        _system_session(),
+        {"status": "blocked", "page": "1", "page_size": "5"},
+    )
+
+    assert response["page_info"] == {"page": 1, "page_size": 5, "total": 6}
+    assert len(response["items"]) == 5
+    assert {item["status"] for item in response["items"]} == {"blocked"}
+    assert "ready-first" not in {item["store_id"] for item in response["items"]}
+
+
+def test_postgres_readiness_applies_status_to_count_and_items_before_pagination() -> None:
+    rows = [("org-001", f"blocked-{index}", False, False, False, False) for index in range(1, 6)]
+    connection = _FakeConnection(fetch_rows=[(6,), rows])
+    repository = PostgresSystemAdminRepository("postgresql://example")
+    repository._connect = lambda _url: connection
+
+    response = repository.store_readiness(
+        _system_session(),
+        {"status": "blocked", "page": "1", "page_size": "5"},
+    )
+
+    select_queries = [(sql, params) for sql, params in connection.executed if "WITH readiness_inputs AS" in sql]
+    assert response["page_info"] == {"page": 1, "page_size": 5, "total": 6}
+    assert len(response["items"]) == 5
+    assert len(select_queries) == 2
+    for sql, params in select_queries:
+        assert "readiness_status = %s" in sql
+        assert params[:6] == (None, None, None, None, "blocked", "blocked")
+    assert select_queries[1][1][-2:] == (5, 0)
+
+
 def test_postgres_system_admin_repository_lists_message_traces_with_audit() -> None:
     connection = _FakeConnection(
         fetch_rows=[

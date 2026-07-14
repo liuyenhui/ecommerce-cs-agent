@@ -84,6 +84,46 @@ def test_system_admin_dashboard_summary_contract() -> None:
     assert missing_session.status_code == 401
 
 
+def test_system_admin_readiness_api_filters_before_total_and_page(monkeypatch) -> None:
+    repository = InMemorySystemAdminRepository()
+    repository.stores = {
+        "ready-first": {"id": "ready-first", "organization_id": "org-001", "status": "active"},
+        **{
+            f"blocked-{index}": {"id": f"blocked-{index}", "organization_id": "org-001", "status": "active"}
+            for index in range(1, 7)
+        },
+    }
+    repository.product_store_ids = {"ready-first"}
+    repository.price_snapshot_store_ids = {"ready-first"}
+    repository.approved_knowledge_store_ids = {"ready-first"}
+    repository.active_integration_store_ids = {"ready-first"}
+    monkeypatch.setattr(app_module, "system_admin_repository_for", lambda _settings: repository)
+    client = TestClient(_test_app())
+
+    response = client.get(
+        "/v1/system-admin/readiness/stores?status=blocked&page=1&page_size=5",
+        headers={"Cookie": "agent_system_admin_session=test-system-session"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["page_info"] == {"page": 1, "page_size": 5, "total": 6}
+    assert len(response.json()["items"]) == 5
+    assert {item["status"] for item in response.json()["items"]} == {"blocked"}
+
+    unfiltered = client.get(
+        "/v1/system-admin/readiness/stores?status=&page=1&page_size=5",
+        headers={"Cookie": "agent_system_admin_session=test-system-session"},
+    )
+    invalid = client.get(
+        "/v1/system-admin/readiness/stores?status=unknown",
+        headers={"Cookie": "agent_system_admin_session=test-system-session"},
+    )
+    assert unfiltered.status_code == 200
+    assert unfiltered.json()["page_info"]["total"] == 7
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "validation_error"
+
+
 def test_in_memory_system_admin_dashboard_summary_uses_explicit_fixture_collections() -> None:
     now = datetime.now(timezone.utc)
     repository = InMemorySystemAdminRepository()

@@ -299,9 +299,10 @@ describe("operational pages", () => {
 
   it("does not query organization-scoped Task 7 releases from the global dashboard", async () => {
     let releaseCalled = false;
+    let readinessFilters: unknown;
     const page = { items: [], page: { page: 1, page_size: 5, total: 0 } };
     const api = {
-      readiness: async () => page,
+      readiness: async (filters: unknown) => { readinessFilters = filters; return page; },
       tasks: async () => page,
       traces: async () => page,
       releases: async () => { releaseCalled = true; return page; }
@@ -310,6 +311,7 @@ describe("operational pages", () => {
     const result = await loadDashboardSupportingData(api, new Date("2026-07-15T12:00:00Z"));
 
     expect(releaseCalled).toBe(false);
+    expect(readinessFilters).toEqual({ status: "blocked", page_size: 5 });
     expect(result.pages).toHaveLength(3);
   });
 

@@ -221,23 +221,24 @@ class InMemorySystemAdminRepository:
 
     def store_readiness(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         self._audit(session, "system_admin.readiness.list", "store_readiness", "list", filters)
+        status = _readiness_status_filter(filters)
         items = []
         for item in self.stores.values():
             if filters.get("organization_id") and item["organization_id"] != filters["organization_id"]:
                 continue
             store_id = str(item["id"])
             has_product, has_price, has_knowledge, has_api_integration = self._store_readiness_inputs(store_id)
-            items.append(
-                _readiness_item(
-                    item["organization_id"],
-                    store_id,
-                    _readiness_status(has_product, has_price, has_knowledge, has_api_integration),
-                    has_product,
-                    has_price,
-                    has_knowledge,
-                    has_api_integration,
-                )
+            readiness = _readiness_item(
+                item["organization_id"],
+                store_id,
+                _readiness_status(has_product, has_price, has_knowledge, has_api_integration),
+                has_product,
+                has_price,
+                has_knowledge,
+                has_api_integration,
             )
+            if status is None or readiness["status"] == status:
+                items.append(readiness)
         return _page_response(*_slice_page(items, filters))
 
     def _store_readiness_inputs(self, store_id: str) -> tuple[bool, bool, bool, bool]:
@@ -756,40 +757,55 @@ class PostgresSystemAdminRepository:
     def store_readiness(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         organization_id = filters.get("organization_id")
         store_id = filters.get("store_id")
-        status = filters.get("status")
+        status = _readiness_status_filter(filters)
         page = _pagination(filters)
+        readiness_cte = """
+                    WITH readiness_inputs AS (
+                        SELECT org.external_organization_id, st.external_store_id, st.created_at,
+                               EXISTS(SELECT 1 FROM product p WHERE p.store_id = st.id) AS has_product,
+                               EXISTS(SELECT 1 FROM product_price_snapshot price WHERE price.store_id = st.id) AS has_price,
+                               EXISTS(SELECT 1 FROM knowledge_entry knowledge WHERE knowledge.store_id::text = st.id::text AND knowledge.status = 'approved') AS has_knowledge,
+                               (
+                                   EXISTS(SELECT 1 FROM platform_account account WHERE account.store_id = st.id AND account.status = 'active')
+                                   OR EXISTS(SELECT 1 FROM external_api_token token WHERE token.store_id = st.id AND token.status = 'active')
+                               ) AS has_api_integration
+                        FROM store st
+                        JOIN organization org ON org.id = st.organization_id
+                        WHERE (%s::text IS NULL OR org.external_organization_id = %s)
+                          AND (%s::text IS NULL OR st.external_store_id = %s)
+                    ), readiness AS (
+                        SELECT *,
+                               CASE
+                                   WHEN has_product AND has_price AND has_knowledge AND has_api_integration THEN 'ready'
+                                   WHEN has_product THEN 'warning'
+                                   ELSE 'blocked'
+                               END AS readiness_status
+                        FROM readiness_inputs
+                    )
+        """
+        query_params = (organization_id, organization_id, store_id, store_id, status, status)
         with self._connect(self._database_url) as conn:
             with conn.cursor() as cur:
                 self._audit(cur, session, organization_id, store_id, "system_admin.readiness.list", "store_readiness", "list", filters)
                 cur.execute(
-                    """
+                    readiness_cte + """
                     SELECT count(*)
-                    FROM store st
-                    JOIN organization org ON org.id = st.organization_id
-                    WHERE (%s::text IS NULL OR org.external_organization_id = %s)
-                      AND (%s::text IS NULL OR st.external_store_id = %s)
+                    FROM readiness
+                    WHERE (%s::text IS NULL OR readiness_status = %s)
                     """,
-                    (organization_id, organization_id, store_id, store_id),
+                    query_params,
                 )
                 total = int(cur.fetchone()[0])
                 cur.execute(
-                    """
-                    SELECT org.external_organization_id, st.external_store_id,
-                           EXISTS(SELECT 1 FROM product p WHERE p.store_id = st.id) AS has_product,
-                           EXISTS(SELECT 1 FROM product_price_snapshot price WHERE price.store_id = st.id) AS has_price,
-                           EXISTS(SELECT 1 FROM knowledge_entry knowledge WHERE knowledge.store_id::text = st.id::text AND knowledge.status = 'approved') AS has_knowledge,
-                           (
-                               EXISTS(SELECT 1 FROM platform_account account WHERE account.store_id = st.id AND account.status = 'active')
-                               OR EXISTS(SELECT 1 FROM external_api_token token WHERE token.store_id = st.id AND token.status = 'active')
-                           ) AS has_api_integration
-                    FROM store st
-                    JOIN organization org ON org.id = st.organization_id
-                    WHERE (%s::text IS NULL OR org.external_organization_id = %s)
-                      AND (%s::text IS NULL OR st.external_store_id = %s)
-                    ORDER BY st.created_at DESC
+                    readiness_cte + """
+                    SELECT external_organization_id, external_store_id,
+                           has_product, has_price, has_knowledge, has_api_integration
+                    FROM readiness
+                    WHERE (%s::text IS NULL OR readiness_status = %s)
+                    ORDER BY created_at DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (organization_id, organization_id, store_id, store_id, page["limit"], page["offset"]),
+                    query_params + (page["limit"], page["offset"]),
                 )
                 items = [
                     _readiness_item(
@@ -803,9 +819,6 @@ class PostgresSystemAdminRepository:
                     )
                     for row in cur.fetchall()
                 ]
-                if status:
-                    items = [item for item in items if item["status"] == status]
-                    total = len(items)
                 return _page_response(items, page["page"], page["page_size"], total)
 
     def list_message_traces(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
@@ -1656,6 +1669,15 @@ def _readiness_status(has_product: bool, has_price: bool, has_knowledge: bool, h
     if has_product:
         return "warning"
     return "blocked"
+
+
+def _readiness_status_filter(filters: dict[str, Any]) -> str | None:
+    raw_status = filters.get("status")
+    if raw_status in (None, ""):
+        return None
+    if not isinstance(raw_status, str) or raw_status not in {"ready", "warning", "blocked"}:
+        raise api_error(422, "validation_error", "readiness status must be ready, warning, or blocked")
+    return raw_status
 
 
 def _task_retry_replay_response(

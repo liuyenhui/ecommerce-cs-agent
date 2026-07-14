@@ -332,6 +332,16 @@ class OpenApiContractTest(unittest.TestCase):
         release_ref = schema["properties"]["recent_releases"]["items"]["$ref"]
         self.assertEqual(release_ref, "#/components/schemas/SystemRecentRelease")
 
+    def test_system_dashboard_response_example_validates_with_formats(self):
+        operation = self.document["paths"]["/v1/system-admin/dashboard-summary"]["get"]
+        content = operation["responses"]["200"]["content"]["application/json"]
+
+        assert_schema_valid(
+            content["example"],
+            self.document["components"]["schemas"]["SystemDashboardSummary"],
+            self.document,
+        )
+
     def test_actual_system_admin_organization_store_readiness_and_trace_shapes_validate(self):
         self.assertNotIn("/v1/system-admin/tenants", self.document["paths"])
         for stale_schema in ("SystemTenant", "SystemTenantListResponse", "SystemTenantCreateRequest", "SystemTenantResponse"):

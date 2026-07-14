@@ -1701,6 +1701,8 @@ paths:
                     status: running
                     published_at: "2026-07-15T08:00:00Z"
                     submitted_at: "2026-07-15T07:30:00Z"
+                recent_releases_status: available
+                recent_releases_error: null
                 generated_at: "2026-07-15T08:05:00Z"
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -1877,7 +1879,13 @@ paths:
       parameters:
         - $ref: "#/components/parameters/SystemOrganizationIdQuery"
         - $ref: "#/components/parameters/StoreIdQuery"
-        - $ref: "#/components/parameters/StatusQuery"
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ready, warning, blocked, ""]
+          description: 上线完成度状态；省略或传空值表示不过滤。
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
       responses:
