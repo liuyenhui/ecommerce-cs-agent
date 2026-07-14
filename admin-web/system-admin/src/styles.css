@@ -1,1 +1,146 @@
 @import "../../shared/styles/base.css";
+
+:root {
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+}
+
+.systemWorkspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 16px;
+  align-items: start;
+}
+
+.systemAccount {
+  position: sticky;
+  top: 18px;
+}
+
+.systemMetricGrid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.priorityPanel,
+.readinessCard,
+.healthGroups section,
+.healthSummary,
+.auditFilters {
+  border: 1px solid #c6c6c6;
+  background: #ffffff;
+}
+
+.priorityPanel,
+.readinessCard,
+.healthGroups section { padding: 16px; }
+
+.priorityGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: #c6c6c6;
+}
+
+.priorityGrid article {
+  display: grid;
+  gap: 4px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.priorityGrid strong { font-size: 25px; }
+
+.healthyNotice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  color: #198038;
+}
+
+.pageTotal,
+.dataTimestamp {
+  color: #525252;
+  font-size: 12px;
+}
+
+.readinessList,
+.healthGroups { display: grid; gap: 12px; }
+
+.readinessCard header,
+.healthGroups li,
+.healthSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.readinessCard header div,
+.healthGroups li div { display: grid; gap: 4px; }
+
+.readinessCard header span,
+.healthGroups li span { color: #525252; font-size: 12px; }
+
+.readinessCard em,
+.healthGroups em {
+  border: 1px solid currentColor;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.readinessCard ul,
+.healthGroups ul {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+}
+
+.readinessCheck {
+  border-top: 1px solid #e0e0e0;
+  padding: 12px 0;
+}
+
+.readinessCheck dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 10px 0 0;
+}
+
+.readinessCheck dl div { display: grid; gap: 4px; }
+.readinessCheck dt { color: #525252; font-size: 11px; font-weight: 700; }
+.readinessCheck dd { margin: 0; line-height: 1.5; }
+
+.healthSummary {
+  border-left-width: 5px;
+  padding: 14px 16px;
+}
+
+.healthSummary.healthy { border-left-color: #198038; }
+.healthSummary.degraded { border-left-color: #f1c21b; }
+.healthSummary.unhealthy { border-left-color: #da1e28; }
+.healthGroups { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.healthGroups li { border-top: 1px solid #e0e0e0; padding: 10px 0; }
+
+.auditFilters,
+.systemFilterBar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 8px;
+  padding: 10px;
+}
+
+.placeholderPage { min-height: 320px; padding: 18px; }
+
+@media (max-width: 1180px) {
+  .systemWorkspace { grid-template-columns: 1fr; }
+  .systemAccount { position: static; }
+}
+
+@media (max-width: 900px) {
+  .systemMetricGrid,
+  .priorityGrid,
+  .healthGroups,
+  .auditFilters,
+  .systemFilterBar,
+  .readinessCheck dl { grid-template-columns: 1fr; }
+}

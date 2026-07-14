@@ -5,10 +5,13 @@ import {
   ListFilter,
   Loader2,
   LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
   ShieldCheck
 } from "lucide-react";
 import { buildSystemUserSummary, fieldLabel, renderCell, tableEmptyState } from "./data";
 import type { EmptyStateProps, JsonRecord, NavItem, ToastState } from "./types";
+import type { RequestState } from "../system-admin/src/system-types";
 
 export function useCloseOnEscape(open: boolean, close: () => void) {
   React.useEffect(() => {
@@ -30,7 +33,9 @@ export function AdminFrame({
   children,
   toast,
   onCloseNav,
-  onCloseToast
+  onCloseToast,
+  railCollapsed = false,
+  onToggleRail
 }: {
   isAuthenticated: boolean;
   mobileNavOpen: boolean;
@@ -41,9 +46,11 @@ export function AdminFrame({
   toast: ToastState;
   onCloseNav: () => void;
   onCloseToast: () => void;
+  railCollapsed?: boolean;
+  onToggleRail?: () => void;
 }) {
   return (
-    <main className={`appShell ${isAuthenticated ? "isAuthed" : "isGuest"} ${mobileNavOpen ? "navOpen" : ""}`}>
+    <main className={`appShell ${isAuthenticated ? "isAuthed" : "isGuest"} ${mobileNavOpen ? "navOpen" : ""} ${railCollapsed ? "railCollapsed" : ""}`}>
       {isAuthenticated ? (
         <aside className="rail">
           <div className="brandMark">
@@ -51,6 +58,10 @@ export function AdminFrame({
             <span>{brand}</span>
           </div>
           {navigation}
+          {onToggleRail ? <button className="railCollapseButton" type="button" onClick={onToggleRail} aria-label={railCollapsed ? "展开桌面导航" : "收起桌面导航"} aria-expanded={!railCollapsed} title={railCollapsed ? "展开导航" : "收起导航"}>
+            {railCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            <span>{railCollapsed ? "展开" : "收起"}</span>
+          </button> : null}
         </aside>
       ) : null}
       {isAuthenticated ? <button className="navBackdrop" aria-label="关闭导航" onClick={onCloseNav} /> : null}
@@ -398,4 +409,21 @@ export function EmptyState({ title, description, action }: EmptyStateProps) {
       {action ? <div className="emptyAction">{action}</div> : null}
     </div>
   );
+}
+
+export function RequestStateView<T>({ state, children }: { state: RequestState<T>; children: (data: T) => React.ReactNode }) {
+  if (state.kind === "idle" || state.kind === "loading") {
+    return <div className="requestState" role="status"><Loader2 size={18} className="spin" /><strong>正在加载真实系统数据</strong></div>;
+  }
+  if (state.kind === "empty") return <EmptyState title={state.title} description={state.description} />;
+  if (state.kind === "forbidden") {
+    return <div className="requestState forbidden" role="alert"><ShieldCheck size={18} /><strong>权限不足</strong><p>{state.message}</p></div>;
+  }
+  if (state.kind === "error") {
+    return <div className="requestState error" role="alert"><AlertTriangle size={18} /><strong>加载失败</strong><p>{state.message}</p></div>;
+  }
+  if (state.kind === "partial") {
+    return <><div className="requestState partial" role="status"><AlertTriangle size={18} /><strong>部分数据加载失败</strong><p>{state.failures.join("；")}</p></div>{children(state.data)}</>;
+  }
+  return <>{children(state.data)}</>;
 }
