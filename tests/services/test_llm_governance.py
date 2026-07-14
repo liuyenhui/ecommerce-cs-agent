@@ -637,8 +637,13 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
         second_pending = service.submit_publish(session, second_draft["version_id"], {"expected_revision": second_validated["revision"], "evaluation_run_id": "integration-eval-two", "reason": "integration", "idempotency_key": "integration-submit-two"})
         original_audit = service._audit
         service._audit = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("publish audit failed"))
-        with pytest.raises(RuntimeError, match="publish audit failed"):
+        with pytest.raises(HTTPException) as publish_audit_failure:
             service.publish(session, second_draft["version_id"], {"expected_revision": second_pending["revision"], "reason": "integration", "idempotency_key": "integration-publish-two-audit-fail"})
+        assert publish_audit_failure.value.status_code == 500
+        assert publish_audit_failure.value.detail["error"]["code"] == "governance_database_error"
+        publish_public_error = json.dumps(publish_audit_failure.value.detail)
+        assert "publish audit failed" not in publish_public_error
+        assert "RuntimeError" not in publish_public_error
         service._audit = original_audit
         with psycopg.connect(scoped_url) as verify_publish_rollback:
             with verify_publish_rollback.cursor() as cur:
@@ -672,8 +677,13 @@ def test_postgres_service_full_lifecycle_when_database_is_available() -> None:
         assert second_running["status"] == "running"
         original_audit = service._audit
         service._audit = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("rollback audit failed"))
-        with pytest.raises(RuntimeError, match="rollback audit failed"):
+        with pytest.raises(HTTPException) as rollback_audit_failure:
             service.rollback(session, running["version_id"], {"reason": "integration", "idempotency_key": "integration-rollback-audit-fail"})
+        assert rollback_audit_failure.value.status_code == 500
+        assert rollback_audit_failure.value.detail["error"]["code"] == "governance_database_error"
+        rollback_public_error = json.dumps(rollback_audit_failure.value.detail)
+        assert "rollback audit failed" not in rollback_public_error
+        assert "RuntimeError" not in rollback_public_error
         service._audit = original_audit
         with psycopg.connect(scoped_url) as verify_rollback:
             with verify_rollback.cursor() as cur:
