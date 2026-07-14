@@ -309,6 +309,7 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "new.route_role = 'fallback'",
             "join llm_config_version as route_version",
             "route_version.status = 'running'",
+            "route_version.organization_id = new.organization_id",
             "route.fallback_provider_config_id is not null",
             "route.fallback_model is not null",
             "create trigger trg_validate_llm_invocation_metric_route_role",

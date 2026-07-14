@@ -145,6 +145,15 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
             store_id = cursor.fetchone()[0]
             cursor.execute(
                 """
+                INSERT INTO store (organization_id, name, platform, external_store_id)
+                VALUES (%s, 'Other Migration Test Store', 'test', 'other-migration-test-store')
+                RETURNING id
+                """,
+                (other_organization_id,),
+            )
+            other_store_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
                 INSERT INTO llm_provider_config (
                     name, provider_type, base_url, secret_namespace, secret_name, secret_key
                 ) VALUES ('test-provider', 'openai-compatible', 'https://example.invalid', 'test', 'llm', 'api-key')
@@ -517,6 +526,16 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 ) VALUES (%s, 'primary', %s, %s, 10, 'succeeded', 'USD')
                 """,
                 (scenario_route_id, other_organization_id, store_id),
+            )
+            assert_integrity_error(
+                cursor,
+                """
+                INSERT INTO llm_invocation_metric (
+                    scenario_route_id, route_role, organization_id, store_id,
+                    latency_ms, status, currency
+                ) VALUES (%s, 'primary', %s, %s, 10, 'succeeded', 'USD')
+                """,
+                (scenario_route_id, other_organization_id, other_store_id),
             )
             assert_integrity_error(
                 cursor,

@@ -249,6 +249,16 @@ BEGIN
     FOR KEY SHARE;
     PERFORM lock_llm_config_versions(metric_version_id);
 
+    IF NOT EXISTS (
+        SELECT 1
+        FROM llm_config_version AS route_version
+        WHERE route_version.id = metric_version_id
+          AND route_version.organization_id = NEW.organization_id
+    ) THEN
+        RAISE EXCEPTION 'invocation metric organization must match its route config version'
+            USING ERRCODE = '23514';
+    END IF;
+
     PERFORM 1
     FROM llm_scenario_route AS route
     JOIN llm_config_version AS route_version
