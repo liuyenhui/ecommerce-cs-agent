@@ -257,7 +257,11 @@ def test_system_admin_dashboard_summary_uses_postgres_total_aggregates(monkeypat
     monkeypatch.setattr(app_module, "system_admin_auth_service_for", lambda settings: InMemorySystemAdminAuthService(settings))
     monkeypatch.setattr(PostgresSystemAdminRepository, "__init__", fake_repo_init)
 
-    client = TestClient(create_app(Settings(database_url="postgresql://example", environment="development")))
+    client = TestClient(create_app(
+        Settings(database_url="postgresql://example", environment="development"),
+        llm_connection_tester=lambda _provider, _request: {"status": "failed", "latency_ms": 0, "error_code": "tester_unavailable"},
+        llm_release_gate_checker=lambda _version, _run_id: {"status": "failed", "error_code": "release_gate_unavailable"},
+    ))
     response = client.get(
         "/v1/system-admin/dashboard-summary",
         headers={"Cookie": "agent_system_admin_session=test-system-session"},
@@ -336,7 +340,11 @@ def test_system_admin_api_uses_postgres_repository_when_database_url_is_configur
     monkeypatch.setattr(app_module, "system_admin_auth_service_for", lambda settings: InMemorySystemAdminAuthService(settings))
     monkeypatch.setattr(PostgresSystemAdminRepository, "__init__", fake_repo_init)
 
-    client = TestClient(create_app(Settings(database_url="postgresql://example", environment="development")))
+    client = TestClient(create_app(
+        Settings(database_url="postgresql://example", environment="development"),
+        llm_connection_tester=lambda _provider, _request: {"status": "failed", "latency_ms": 0, "error_code": "tester_unavailable"},
+        llm_release_gate_checker=lambda _version, _run_id: {"status": "failed", "error_code": "release_gate_unavailable"},
+    ))
     response = client.get(
         "/v1/system-admin/organizations?status=active",
         headers={"Cookie": "agent_system_admin_session=test-system-session"},
@@ -376,7 +384,11 @@ def test_system_admin_message_traces_use_postgres_repository_when_database_url_i
     monkeypatch.setattr(app_module, "system_admin_auth_service_for", lambda settings: InMemorySystemAdminAuthService(settings))
     monkeypatch.setattr(PostgresSystemAdminRepository, "__init__", fake_repo_init)
 
-    client = TestClient(create_app(Settings(database_url="postgresql://example", environment="development")))
+    client = TestClient(create_app(
+        Settings(database_url="postgresql://example", environment="development"),
+        llm_connection_tester=lambda _provider, _request: {"status": "failed", "latency_ms": 0, "error_code": "tester_unavailable"},
+        llm_release_gate_checker=lambda _version, _run_id: {"status": "failed", "error_code": "release_gate_unavailable"},
+    ))
     response = client.get(
         "/v1/system-admin/message-traces?organization_id=org-db&store_id=store-db&external_message_id=msg-db",
         headers={"Cookie": "agent_system_admin_session=test-system-session"},

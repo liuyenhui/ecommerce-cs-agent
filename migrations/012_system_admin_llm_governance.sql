@@ -62,6 +62,39 @@ CREATE TABLE IF NOT EXISTS llm_config_version (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_config_version_id_organization
     ON llm_config_version (id, organization_id);
 
+CREATE TABLE IF NOT EXISTS llm_eval_run (
+    id varchar(128) PRIMARY KEY
+        CHECK (length(id) BETWEEN 1 AND 128 AND id ~ '^[A-Za-z0-9][A-Za-z0-9_:-]*$'),
+    organization_id uuid NOT NULL REFERENCES organization(id) ON DELETE RESTRICT,
+    config_version_id uuid NOT NULL,
+    status text NOT NULL DEFAULT 'running'
+        CHECK (status IN ('running', 'completed', 'failed', 'canceled')),
+    gate_status text NOT NULL DEFAULT 'pending'
+        CHECK (gate_status IN ('pending', 'passed', 'failed')),
+    red_line_failures integer NOT NULL DEFAULT 0 CHECK (red_line_failures >= 0),
+    report_ref text CHECK (
+        report_ref IS NULL OR (
+            length(report_ref) BETWEEN 1 AND 512
+            AND report_ref !~ '[[:cntrl:]]'
+        )
+    ),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz,
+    revision integer NOT NULL DEFAULT 1 CHECK (revision > 0),
+    UNIQUE (id, organization_id, config_version_id),
+    FOREIGN KEY (config_version_id, organization_id)
+        REFERENCES llm_config_version(id, organization_id) ON DELETE RESTRICT,
+    CHECK (
+        (status = 'running' AND gate_status = 'pending' AND completed_at IS NULL)
+        OR (status = 'completed' AND gate_status IN ('passed', 'failed') AND completed_at IS NOT NULL)
+        OR (status IN ('failed', 'canceled') AND gate_status = 'failed' AND completed_at IS NOT NULL)
+    ),
+    CHECK (gate_status <> 'passed' OR (status = 'completed' AND red_line_failures = 0))
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_eval_run_version_created
+    ON llm_eval_run (organization_id, config_version_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS llm_release_record (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id uuid NOT NULL REFERENCES organization(id) ON DELETE RESTRICT,
@@ -562,6 +595,41 @@ CREATE TRIGGER trg_validate_llm_config_version_transition
     BEFORE INSERT OR UPDATE OR DELETE ON llm_config_version
     FOR EACH ROW
     EXECUTE FUNCTION validate_llm_config_version_transition();
+
+CREATE OR REPLACE FUNCTION protect_llm_eval_run_history()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'evaluation run history is immutable' USING ERRCODE = '23514';
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.status <> 'running' OR NEW.gate_status <> 'pending'
+            OR NEW.completed_at IS NOT NULL OR NEW.revision <> 1
+        THEN
+            RAISE EXCEPTION 'evaluation run must start in running state' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF OLD.status <> 'running' OR NEW.status NOT IN ('completed', 'failed', 'canceled')
+        OR NEW.revision <> OLD.revision + 1
+        OR NEW.id IS DISTINCT FROM OLD.id
+        OR NEW.organization_id IS DISTINCT FROM OLD.organization_id
+        OR NEW.config_version_id IS DISTINCT FROM OLD.config_version_id
+        OR NEW.created_at IS DISTINCT FROM OLD.created_at
+        OR NEW.completed_at IS NULL
+    THEN
+        RAISE EXCEPTION 'invalid evaluation run lifecycle transition' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_protect_llm_eval_run_history ON llm_eval_run;
+CREATE TRIGGER trg_protect_llm_eval_run_history
+    BEFORE INSERT OR UPDATE OR DELETE ON llm_eval_run
+    FOR EACH ROW EXECUTE FUNCTION protect_llm_eval_run_history();
 
 CREATE OR REPLACE FUNCTION protect_llm_release_record_history()
 RETURNS trigger

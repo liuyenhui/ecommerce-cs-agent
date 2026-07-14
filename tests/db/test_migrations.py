@@ -249,6 +249,10 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
         "create table if not exists llm_scenario_route",
     )
     invocation_sql = section("create table if not exists llm_invocation_metric")
+    eval_sql = section(
+        "create table if not exists llm_eval_run",
+        "create table if not exists llm_release_record",
+    )
 
     required_by_section = [
         (provider_sql, [
@@ -305,6 +309,13 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
             "rollback_of_release_id is null and rollback_of_version_id is null",
             "rollback_of_release_id is not null and rollback_of_version_id is not null",
             "create unique index if not exists idx_llm_release_record_one_running",
+        ]),
+        (eval_sql, [
+            "id varchar(128) primary key",
+            "foreign key (config_version_id, organization_id)",
+            "red_line_failures integer not null default 0 check (red_line_failures >= 0)",
+            "gate_status <> 'passed' or (status = 'completed' and red_line_failures = 0)",
+            "report_ref text check",
         ]),
         (invocation_sql, [
             "scenario_route_id uuid not null references llm_scenario_route(id) on delete restrict",
@@ -380,6 +391,8 @@ def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
 
     assert invocation_sql.count("perform lock_llm_config_versions") >= 3
     assert "create or replace function protect_llm_release_record_history()" in compact_sql
+    assert "create or replace function protect_llm_eval_run_history()" in compact_sql
+    assert "evaluation run history is immutable" in compact_sql
     assert "terminal release records are immutable" in compact_sql
     assert "source.config_version_id = new.rollback_of_version_id" in compact_sql
     assert "source.status in ('superseded', 'rolled_back')" in compact_sql

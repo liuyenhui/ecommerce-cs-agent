@@ -587,7 +587,7 @@ class OpenApiContractTest(unittest.TestCase):
             json={"enabled": False, "expected_revision": 2, "reason": "stale", "idempotency_key": "contract-stale"},
         )
         missing = client.patch(
-            "/v1/system-admin/llm/providers/missing-provider",
+            "/v1/system-admin/llm/providers/99999999-9999-9999-9999-999999999999",
             headers=headers,
             json={"enabled": False, "expected_revision": 1, "reason": "missing", "idempotency_key": "contract-missing"},
         )
@@ -658,6 +658,53 @@ class OpenApiContractTest(unittest.TestCase):
             },
         }
         assert_schema_valid(business_details, schema, self.document)
+
+    def test_actual_llm_success_payloads_validate_distinct_response_schemas(self):
+        client = TestClient(
+            create_app(
+                Settings(environment="test", database_url=None),
+                llm_connection_tester=lambda _provider, _request: {"status": "passed", "latency_ms": 5},
+            )
+        )
+        headers = {"Cookie": "agent_system_admin_session=test-system-session"}
+        provider_response = client.post(
+            "/v1/system-admin/llm/providers",
+            headers=headers,
+            json={
+                "name": "success-provider",
+                "provider_type": "openai_compatible",
+                "base_url": "https://provider.example/v1",
+                "secret_ref": {"namespace": "runtime", "name": "llm-provider", "key": "api-key"},
+                "reason": "schema",
+                "idempotency_key": "schema-provider",
+            },
+        )
+        provider = provider_response.json()
+        draft_response = client.post(
+            "/v1/system-admin/llm/config-versions/drafts",
+            headers=headers,
+            json={"organization_id": "11111111-1111-1111-1111-111111111111", "reason": "schema", "idempotency_key": "schema-draft"},
+        )
+        draft = draft_response.json()
+        connection_response = client.post(
+            f"/v1/system-admin/llm/providers/{provider['provider_id']}/connection-tests",
+            headers=headers,
+            json={"config_version_id": draft["version_id"], "reason": "schema", "idempotency_key": "schema-connection"},
+        )
+        actual = [
+            (provider_response, "LlmProvider"),
+            (client.get("/v1/system-admin/llm/providers", headers=headers), "LlmProviderListResponse"),
+            (draft_response, "LlmConfigVersion"),
+            (client.get("/v1/system-admin/llm/config-versions?organization_id=11111111-1111-1111-1111-111111111111", headers=headers), "LlmConfigVersionListResponse"),
+            (connection_response, "LlmConnectionTest"),
+            (client.get("/v1/system-admin/llm/usage/summary", headers=headers), "LlmUsageSummary"),
+            (client.get("/v1/system-admin/llm/usage/timeseries", headers=headers), "LlmUsageTimeseriesResponse"),
+            (client.get("/v1/system-admin/llm/usage/breakdown?group_by=model", headers=headers), "LlmUsageBreakdownResponse"),
+            (client.get("/v1/system-admin/llm/usage/invocations", headers=headers), "LlmInvocationListResponse"),
+        ]
+        for response, schema_name in actual:
+            self.assertLess(response.status_code, 300, schema_name)
+            assert_schema_valid(response.json(), self.document["components"]["schemas"][schema_name], self.document)
 
 
 if __name__ == "__main__":

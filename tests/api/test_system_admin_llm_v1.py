@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,6 +16,10 @@ from ecommerce_cs_agent.services.llm_governance import InMemoryLlmGovernanceRepo
 
 
 ORG_ID = "11111111-1111-1111-1111-111111111111"
+PROVIDER_A_ID = "22222222-2222-2222-2222-222222222222"
+PROVIDER_B_ID = "33333333-3333-3333-3333-333333333333"
+STORE_A_ID = "44444444-4444-4444-4444-444444444444"
+STORE_B_ID = "55555555-5555-5555-5555-555555555555"
 SYSTEM_HEADERS = {"Cookie": "agent_system_admin_session=test-system-session"}
 PROVIDER = {
     "name": "primary",
@@ -246,7 +251,7 @@ def test_draft_routes_validate_submit_publish_and_rollback_flow(monkeypatch: pyt
     assert submitted.json()["status"] == "pending_publish"
     assert published.json()["status"] == "running"
     assert fetched.status_code == 200
-    assert fetched.json()["release_record"]["release_record_id"].startswith("release-")
+    assert str(UUID(fetched.json()["release_record"]["release_record_id"])) == fetched.json()["release_record"]["release_record_id"]
     assert fetched.json()["evaluation"] == {"evaluation_run_id": "eval-2026-07-14"}
     assert versions.json()["items"][0]["version_id"] == draft.json()["version_id"]
     assert rolled_back.status_code == 200
@@ -336,16 +341,16 @@ def test_usage_endpoints_return_empty_and_mixed_currency_real_aggregates(monkeyp
     repository.invocation_metrics.extend(
         [
             {
-                "invocation_id": "call-usd", "occurred_at": "2026-07-14T08:00:00+00:00",
-                "provider_config_id": "provider-a", "provider_name": "primary", "model": "chat-pro",
-                "scenario": "reply_generation", "organization_id": ORG_ID, "store_id": "store-a",
+                "invocation_id": "66666666-6666-6666-6666-666666666666", "occurred_at": "2026-07-14T08:00:00+00:00",
+                "provider_config_id": PROVIDER_A_ID, "provider_name": "primary", "model": "chat-pro",
+                "scenario": "reply_generation", "organization_id": ORG_ID, "store_id": STORE_A_ID,
                 "route_role": "primary", "input_tokens": 100, "output_tokens": 20, "latency_ms": 100,
                 "status": "succeeded", "error_code": None, "estimated_cost_micros": 2500, "currency": "USD",
             },
             {
-                "invocation_id": "call-cny", "occurred_at": "2026-07-14T09:00:00+00:00",
-                "provider_config_id": "provider-b", "provider_name": "fallback", "model": "chat-lite",
-                "scenario": "reply_generation", "organization_id": ORG_ID, "store_id": "store-b",
+                "invocation_id": "77777777-7777-7777-7777-777777777777", "occurred_at": "2026-07-14T09:00:00+00:00",
+                "provider_config_id": PROVIDER_B_ID, "provider_name": "fallback", "model": "chat-lite",
+                "scenario": "reply_generation", "organization_id": ORG_ID, "store_id": STORE_B_ID,
                 "route_role": "fallback", "input_tokens": 40, "output_tokens": 10, "latency_ms": 300,
                 "status": "failed", "error_code": "timeout", "estimated_cost_micros": 900, "currency": "CNY",
             },
@@ -356,7 +361,7 @@ def test_usage_endpoints_return_empty_and_mixed_currency_real_aggregates(monkeyp
     timeseries = client.get(f"/v1/system-admin/llm/usage/timeseries?{query}&currency=USD", headers=SYSTEM_HEADERS)
     breakdown = client.get(f"/v1/system-admin/llm/usage/breakdown?{query}&group_by=provider", headers=SYSTEM_HEADERS)
     invocations = client.get(
-        f"/v1/system-admin/llm/usage/invocations?{query}&provider_config_id=provider-b&model=chat-lite&store_id=store-b&currency=CNY&limit=1",
+        f"/v1/system-admin/llm/usage/invocations?{query}&provider_config_id={PROVIDER_B_ID}&model=chat-lite&store_id={STORE_B_ID}&currency=CNY&limit=1",
         headers=SYSTEM_HEADERS,
     )
 
@@ -370,8 +375,80 @@ def test_usage_endpoints_return_empty_and_mixed_currency_real_aggregates(monkeyp
     assert summary.json()["cost_by_currency"] == {"CNY": 900, "USD": 2500}
     assert timeseries.json()["items"][0]["currency"] == "USD"
     assert {item["key"] for item in breakdown.json()["items"]} == {"primary", "fallback"}
-    assert invocations.json()["items"][0]["invocation_id"] == "call-cny"
+    assert invocations.json()["items"][0]["invocation_id"] == "77777777-7777-7777-7777-777777777777"
+    assert invocations.json()["page_info"] == {"limit": 1, "has_more": False, "next_cursor": None}
     assert "prompt" not in invocations.text.lower()
+
+
+def test_config_version_and_invocation_cursor_pages_are_stable(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, repository = _client(monkeypatch)
+    for index in range(3):
+        response = client.post(
+            "/v1/system-admin/llm/config-versions/drafts",
+            headers=SYSTEM_HEADERS,
+            json={"organization_id": ORG_ID, "reason": "page", "idempotency_key": f"page-{index}"},
+        )
+        assert response.status_code == 201
+
+    first = client.get(f"/v1/system-admin/llm/config-versions?organization_id={ORG_ID}&limit=2", headers=SYSTEM_HEADERS)
+    second = client.get(
+        f"/v1/system-admin/llm/config-versions?organization_id={ORG_ID}&limit=2&cursor={first.json()['page_info']['next_cursor']}",
+        headers=SYSTEM_HEADERS,
+    )
+    version_ids = [item["version_id"] for page in (first, second) for item in page.json()["items"]]
+    assert len(version_ids) == len(set(version_ids)) == 3
+    assert first.json()["page_info"]["has_more"] is True
+    assert second.json()["page_info"]["has_more"] is False
+    invalid_version_cursor = client.get(
+        f"/v1/system-admin/llm/config-versions?organization_id={ORG_ID}&cursor=invalid",
+        headers=SYSTEM_HEADERS,
+    )
+    assert invalid_version_cursor.status_code == 422
+
+    for index in range(3):
+        repository.invocation_metrics.append(
+            {
+                "invocation_id": str(UUID(int=100 + index)),
+                "occurred_at": "2026-07-14T09:00:00+00:00",
+                "provider_config_id": PROVIDER_A_ID,
+                "provider_name": "primary",
+                "model": "chat-pro",
+                "scenario": "reply_generation",
+                "organization_id": ORG_ID,
+                "store_id": STORE_A_ID,
+                "route_role": "primary",
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "latency_ms": 1,
+                "status": "succeeded",
+                "error_code": None,
+                "estimated_cost_micros": 1,
+                "currency": "USD",
+            }
+        )
+    inv_first = client.get(f"/v1/system-admin/llm/usage/invocations?organization_id={ORG_ID}&limit=2", headers=SYSTEM_HEADERS)
+    inv_second = client.get(
+        f"/v1/system-admin/llm/usage/invocations?organization_id={ORG_ID}&limit=2&cursor={inv_first.json()['page_info']['next_cursor']}",
+        headers=SYSTEM_HEADERS,
+    )
+    invocation_ids = [item["invocation_id"] for page in (inv_first, inv_second) for item in page.json()["items"]]
+    assert len(invocation_ids) == len(set(invocation_ids)) == 3
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "start_at=1784016000",
+        "start_at=2026-07-14T00:00:00",
+        "start_at=2026-07-14%2000:00:00Z",
+        "provider_config_id=provider-not-a-uuid",
+        "cursor=not-a-cursor",
+    ],
+)
+def test_usage_query_rejects_noncanonical_values(monkeypatch: pytest.MonkeyPatch, query: str) -> None:
+    client, _repository = _client(monkeypatch)
+    response = client.get(f"/v1/system-admin/llm/usage/invocations?{query}", headers=SYSTEM_HEADERS)
+    assert response.status_code == 422
 
 
 @pytest.mark.parametrize(
@@ -500,10 +577,22 @@ def test_non_test_app_selects_postgres_llm_repository(monkeypatch: pytest.Monkey
         return sentinel
 
     monkeypatch.setattr(app_module, "PostgresLlmGovernanceRepository", fake_postgres)
+    monkeypatch.setattr(
+        app_module.KubernetesSecretProviderConnectionTester,
+        "from_environment",
+        lambda: (lambda _provider, _request: {"status": "passed", "latency_ms": 1}),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "PostgresEvaluationReleaseGateChecker",
+        lambda _database_url: (lambda _version, _run_id: {"status": "passed"}),
+    )
 
     create_app(Settings(environment="development", database_url="postgresql://db.example.test/app"))
 
     assert captured["database_url"] == "postgresql://db.example.test/app"
+    assert callable(captured["kwargs"]["connection_tester"])
+    assert callable(captured["kwargs"]["release_gate_checker"])
 
 
 def test_non_test_app_rejects_injected_in_memory_llm_repository() -> None:
@@ -512,3 +601,11 @@ def test_non_test_app_rejects_injected_in_memory_llm_repository() -> None:
             Settings(environment="development", database_url="postgresql://db.example.test/app"),
             llm_governance_repository=InMemoryLlmGovernanceRepository(),
         )
+
+
+def test_non_test_app_fails_fast_without_kubernetes_secret_prerequisites(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+    monkeypatch.delenv("KUBERNETES_SERVICE_PORT", raising=False)
+    monkeypatch.delenv("KUBERNETES_SERVICE_PORT_HTTPS", raising=False)
+    with pytest.raises(RuntimeError, match="Kubernetes in-cluster"):
+        create_app(Settings(environment="development", database_url="postgresql://db.example.test/app"))

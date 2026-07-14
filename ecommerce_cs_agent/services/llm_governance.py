@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import base64
+import binascii
 import hashlib
 import json
 import math
@@ -49,6 +51,7 @@ class LlmGovernanceRepository(Protocol):
     def update_provider(self, session: SystemAdminSession, provider_id: str, payload: dict[str, Any], *, expected_revision: int) -> dict[str, Any]: ...
     def test_connection(self, session: SystemAdminSession, provider_id: str, payload: dict[str, Any]) -> dict[str, Any]: ...
     def list_versions(self, session: SystemAdminSession, organization_id: str) -> list[dict[str, Any]]: ...
+    def list_versions_page(self, session: SystemAdminSession, organization_id: str, *, limit: int = 50, cursor: str | None = None) -> dict[str, Any]: ...
     def get_version(self, session: SystemAdminSession, version_id: str) -> dict[str, Any]: ...
     def create_draft(self, session: SystemAdminSession, payload: dict[str, Any]) -> dict[str, Any]: ...
     def replace_routes(self, session: SystemAdminSession, version_id: str, routes: list[dict[str, Any]], *, expected_revision: int, payload: dict[str, Any]) -> dict[str, Any]: ...
@@ -60,6 +63,7 @@ class LlmGovernanceRepository(Protocol):
     def usage_timeseries(self, session: SystemAdminSession, filters: dict[str, Any]) -> list[dict[str, Any]]: ...
     def usage_breakdown(self, session: SystemAdminSession, filters: dict[str, Any], group_by: str) -> list[dict[str, Any]]: ...
     def list_invocations(self, session: SystemAdminSession, filters: dict[str, Any]) -> list[dict[str, Any]]: ...
+    def list_invocations_page(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]: ...
 
 
 def _now_dt() -> datetime:
@@ -72,6 +76,30 @@ def _iso(value: datetime | str | None = None) -> str | None:
     if isinstance(value, str):
         return value
     return value.astimezone(timezone.utc).isoformat()
+
+
+def _encode_cursor(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _decode_cursor(value: str | None, *, kind: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        data = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+        if not isinstance(data, dict) or data.get("kind") != kind:
+            raise ValueError
+        if kind == "config_versions":
+            if not isinstance(data.get("version_number"), int) or data["version_number"] <= 0:
+                raise ValueError
+        elif kind == "invocations":
+            datetime.fromisoformat(str(data.get("occurred_at", "")).replace("Z", "+00:00"))
+            uuid.UUID(str(data.get("id")))
+        return data
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError, binascii.Error):
+        raise api_error(422, "invalid_cursor", "cursor is invalid") from None
 
 
 def _require_live_session(session: SystemAdminSession) -> None:
@@ -297,7 +325,7 @@ class InMemoryLlmGovernanceRepository:
         if any(item["name"] == data["name"] for item in self.providers.values()):
             raise api_error(409, "provider_name_conflict", "provider name already exists")
         now = _iso(_now_dt())
-        provider_id = f"provider-{uuid.uuid4().hex}"
+        provider_id = str(uuid.uuid4())
         provider = {"provider_id": provider_id, **data, "enabled": data.get("enabled", True), "status": "active" if data.get("enabled", True) else "disabled", "last_connection_test_status": None, "last_connection_test_latency_ms": None, "last_connection_test_error_code": None, "last_connection_tested_at": None, "created_at": now, "updated_at": now, "revision": 1}
         self.providers[provider_id] = provider
         return self._finish_write(session, "llm.provider.create", "llm_provider_config", provider_id, reason, key, data, _public_provider(provider))
@@ -355,7 +383,7 @@ class InMemoryLlmGovernanceRepository:
         checked_at = _iso(_now_dt())
         error_code = _sanitize_error_code(raw.get("error_code")) if status == "failed" else None
         provider["revision"] += 1
-        record = {"connection_test_id": f"connection-test-{uuid.uuid4().hex}", "provider_config_id": provider_id, "config_version_id": config_version_id, "provider_revision": provider["revision"], "status": status, "latency_ms": max(0, int(raw.get("latency_ms") or 0)), "checked_at": checked_at, "error_code": error_code, "redacted_error_message": _redacted_error_message(error_code)}
+        record = {"connection_test_id": str(uuid.uuid4()), "provider_config_id": provider_id, "config_version_id": config_version_id, "provider_revision": provider["revision"], "status": status, "latency_ms": max(0, int(raw.get("latency_ms") or 0)), "checked_at": checked_at, "error_code": error_code, "redacted_error_message": _redacted_error_message(error_code)}
         self.connection_tests.append(copy.deepcopy(record))
         provider.update({"last_connection_test_status": status, "last_connection_test_latency_ms": record["latency_ms"], "last_connection_test_error_code": error_code, "last_connection_tested_at": checked_at, "updated_at": checked_at})
         if provider["enabled"]:
@@ -372,14 +400,29 @@ class InMemoryLlmGovernanceRepository:
         if replay is not None:
             return replay
         number = max((int(v["version_number"]) for v in self.versions.values() if v["organization_id"] == organization_id), default=0) + 1
-        version_id = f"version-{uuid.uuid4().hex}"
+        version_id = str(uuid.uuid4())
         version = {"version_id": version_id, "organization_id": organization_id, "version_number": number, "status": "draft", "revision": 1, "description": request_data["description"], "configuration_hash": _configuration_hash([]), "created_by_system_admin_user_id": session.user_id, "created_at": _iso(_now_dt()), "published_by_system_admin_user_id": None, "published_at": None, "rollback_of_version_id": None, "release_record_id": None, "release_status": None, "evaluation_run_id": None, "routes": []}
         self.versions[version_id] = version
         return self._finish_write(session, "llm.config.create_draft", "llm_config_version", version_id, reason, key, request_data, copy.deepcopy(version))
 
     def list_versions(self, session: SystemAdminSession, organization_id: str) -> list[dict[str, Any]]:
+        return self.list_versions_page(session, organization_id, limit=100)["items"]
+
+    def list_versions_page(self, session: SystemAdminSession, organization_id: str, *, limit: int = 50, cursor: str | None = None) -> dict[str, Any]:
         _require_role(session, _READ_ROLES)
-        return [copy.deepcopy(item) for item in sorted(self.versions.values(), key=lambda value: int(value["version_number"]), reverse=True) if item["organization_id"] == organization_id]
+        limit = min(max(int(limit), 1), 100)
+        decoded = _decode_cursor(cursor, kind="config_versions")
+        before = int(decoded["version_number"]) if decoded else None
+        candidates = [
+            item for item in sorted(self.versions.values(), key=lambda value: int(value["version_number"]), reverse=True)
+            if item["organization_id"] == organization_id
+            and (before is None or int(item["version_number"]) < before)
+        ]
+        selected = candidates[: limit + 1]
+        has_more = len(selected) > limit
+        items = selected[:limit]
+        next_cursor = _encode_cursor({"kind": "config_versions", "version_number": items[-1]["version_number"]}) if has_more else None
+        return {"items": [copy.deepcopy(item) for item in items], "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
 
     def get_version(self, session: SystemAdminSession, version_id: str) -> dict[str, Any]:
         _require_role(session, _READ_ROLES)
@@ -409,7 +452,7 @@ class InMemoryLlmGovernanceRepository:
                 provider_id = route.get(provider_field)
                 if provider_id and provider_id not in self.providers:
                     raise api_error(422, "provider_not_found", "route references an unknown provider")
-        version["routes"] = copy.deepcopy(clean_routes)
+        version["routes"] = [{"route_id": str(uuid.uuid4()), **copy.deepcopy(route)} for route in clean_routes]
         version["configuration_hash"] = _configuration_hash(clean_routes)
         version["revision"] += 1
         return self._finish_write(session, "llm.config.replace_routes", "llm_config_version", version_id, reason, key, request_data, copy.deepcopy(version))
@@ -472,7 +515,7 @@ class InMemoryLlmGovernanceRepository:
         version["status"] = "pending_publish"
         version["revision"] += 1
         version["evaluation_run_id"] = evaluation_run_id
-        release_id = f"release-{uuid.uuid4().hex}"
+        release_id = str(uuid.uuid4())
         self.release_records[version_id] = {"release_record_id": release_id, "organization_id": version["organization_id"], "config_version_id": version_id, "evaluation_run_id": evaluation_run_id, "status": "pending", "revision": 1, "submitted_by_system_admin_user_id": session.user_id, "submitted_at": _iso(_now_dt()), "published_by_system_admin_user_id": None, "published_at": None, "rollback_of_release_id": None, "rollback_of_version_id": None}
         version["release_record_id"] = release_id
         version["release_status"] = "pending"
@@ -533,11 +576,11 @@ class InMemoryLlmGovernanceRepository:
                         current_release["revision"] += 1
                         current["release_status"] = current_release["status"]
             number = max(int(v["version_number"]) for v in self.versions.values() if v["organization_id"] == source["organization_id"]) + 1
-            new_id = f"version-{uuid.uuid4().hex}"
+            new_id = str(uuid.uuid4())
             rolled_back = {"version_id": new_id, "organization_id": source["organization_id"], "version_number": number, "status": "running", "revision": 4, "description": f"Rollback of version {source['version_number']}", "configuration_hash": source["configuration_hash"], "created_by_system_admin_user_id": session.user_id, "created_at": _iso(_now_dt()), "published_by_system_admin_user_id": session.user_id, "published_at": _iso(_now_dt()), "rollback_of_version_id": version_id, "evaluation_run_id": source.get("evaluation_run_id"), "release_status": "running", "routes": copy.deepcopy(source["routes"])}
             self.versions[new_id] = rolled_back
             source_release = self.release_records.get(version_id)
-            release_id = f"release-{uuid.uuid4().hex}"
+            release_id = str(uuid.uuid4())
             self.release_records[new_id] = {"release_record_id": release_id, "organization_id": source["organization_id"], "config_version_id": new_id, "evaluation_run_id": source.get("evaluation_run_id"), "status": "running", "revision": 2, "submitted_by_system_admin_user_id": session.user_id, "submitted_at": rolled_back["created_at"], "published_by_system_admin_user_id": session.user_id, "published_at": rolled_back["published_at"], "rollback_of_release_id": source_release.get("release_record_id") if source_release else None, "rollback_of_version_id": version_id}
             rolled_back["release_record_id"] = release_id
             return self._finish_write(session, "llm.config.rollback", "llm_config_version", new_id, reason, key, request_data, copy.deepcopy(rolled_back))
@@ -598,9 +641,27 @@ class InMemoryLlmGovernanceRepository:
         return [{"key": key.rsplit("|", 1)[0], "currency": key.rsplit("|", 1)[1], "calls": len(items), "total_tokens": sum(int(x.get("input_tokens", 0)) + int(x.get("output_tokens", 0)) for x in items), "estimated_cost_micros": sum(int(x.get("estimated_cost_micros", 0)) for x in items)} for key, items in sorted(groups.items())]
 
     def list_invocations(self, session: SystemAdminSession, filters: dict[str, Any]) -> list[dict[str, Any]]:
+        return self.list_invocations_page(session, filters)["items"]
+
+    def list_invocations_page(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         limit = min(max(int(filters.get("limit", 100)), 1), 500)
-        items = sorted(self._filtered_metrics(session, filters), key=lambda item: item.get("occurred_at"), reverse=True)
-        return [_public_invocation(item) for item in items[:limit]]
+        decoded = _decode_cursor(filters.get("cursor"), kind="invocations")
+        items = sorted(
+            self._filtered_metrics(session, filters),
+            key=lambda item: (str(_iso(item.get("occurred_at"))), str(item.get("invocation_id"))),
+            reverse=True,
+        )
+        if decoded:
+            boundary = (str(decoded["occurred_at"]), str(decoded["id"]))
+            items = [item for item in items if (str(_iso(item.get("occurred_at"))), str(item.get("invocation_id"))) < boundary]
+        selected = items[: limit + 1]
+        has_more = len(selected) > limit
+        page_items = selected[:limit]
+        next_cursor = None
+        if has_more:
+            last = page_items[-1]
+            next_cursor = _encode_cursor({"kind": "invocations", "occurred_at": _iso(last.get("occurred_at")), "id": last.get("invocation_id")})
+        return {"items": [_public_invocation(item) for item in page_items], "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
 
 
 class PostgresLlmGovernanceRepository:
@@ -849,10 +910,25 @@ class PostgresLlmGovernanceRepository:
         return self._transaction(op)
 
     def list_versions(self, session: SystemAdminSession, organization_id: str) -> list[dict[str, Any]]:
+        return self.list_versions_page(session, organization_id, limit=100)["items"]
+
+    def list_versions_page(self, session: SystemAdminSession, organization_id: str, *, limit: int = 50, cursor: str | None = None) -> dict[str, Any]:
         _require_role(session, _READ_ROLES)
-        def op(cur: Any) -> list[dict[str, Any]]:
-            cur.execute("SELECT id::text FROM llm_config_version WHERE organization_id=%s ORDER BY version_number DESC", (organization_id,))
-            return [self._fetch_version(cur, str(row[0])) for row in cur.fetchall()]
+        limit = min(max(int(limit), 1), 100)
+        decoded = _decode_cursor(cursor, kind="config_versions")
+        before = int(decoded["version_number"]) if decoded else None
+        def op(cur: Any) -> dict[str, Any]:
+            cur.execute(
+                "SELECT id::text, version_number FROM llm_config_version WHERE organization_id=%s "
+                "AND (%s::bigint IS NULL OR version_number < %s::bigint) ORDER BY version_number DESC LIMIT %s",
+                (organization_id, before, before, limit + 1),
+            )
+            rows = cur.fetchall()
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            items = [self._fetch_version(cur, str(row[0])) for row in rows]
+            next_cursor = _encode_cursor({"kind": "config_versions", "version_number": int(rows[-1][1])}) if has_more else None
+            return {"items": items, "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
         return self._read(op)
 
     def get_version(self, session: SystemAdminSession, version_id: str) -> dict[str, Any]:
@@ -1093,17 +1169,31 @@ class PostgresLlmGovernanceRepository:
         return self._read(op)
 
     def list_invocations(self, session: SystemAdminSession, filters: dict[str, Any]) -> list[dict[str, Any]]:
+        return self.list_invocations_page(session, filters)["items"]
+
+    def list_invocations_page(self, session: SystemAdminSession, filters: dict[str, Any]) -> dict[str, Any]:
         _require_role(session, _READ_ROLES)
         where, params = self._usage_where(filters)
         limit = min(max(int(filters.get("limit", 100)), 1), 500)
-        def op(cur: Any) -> list[dict[str, Any]]:
-            cur.execute("SELECT metric.id::text, metric.occurred_at, provider.id::text, provider.name, CASE WHEN metric.route_role='fallback' THEN route.fallback_model ELSE route.primary_model END, route.scenario, metric.organization_id::text, metric.store_id::text, metric.route_role, metric.input_tokens, metric.output_tokens, metric.latency_ms, metric.status, metric.error_code, metric.estimated_cost_micros, metric.currency" + self._usage_from() + where + " ORDER BY metric.occurred_at DESC LIMIT %s", tuple(params + [limit]))
+        decoded = _decode_cursor(filters.get("cursor"), kind="invocations")
+        if decoded:
+            cursor_clause = "(metric.occurred_at, metric.id) < (%s::timestamptz, %s::uuid)"
+            where += (" AND " if where else " WHERE ") + cursor_clause
+            params.extend([decoded.get("occurred_at"), decoded.get("id")])
+        def op(cur: Any) -> dict[str, Any]:
+            cur.execute("SELECT metric.id::text, metric.occurred_at, provider.id::text, provider.name, CASE WHEN metric.route_role='fallback' THEN route.fallback_model ELSE route.primary_model END, route.scenario, metric.organization_id::text, metric.store_id::text, metric.route_role, metric.input_tokens, metric.output_tokens, metric.latency_ms, metric.status, metric.error_code, metric.estimated_cost_micros, metric.currency" + self._usage_from() + where + " ORDER BY metric.occurred_at DESC, metric.id DESC LIMIT %s", tuple(params + [limit + 1]))
             rows = []
             for row in cur.fetchall():
                 data = dict(zip(_PUBLIC_INVOCATION_FIELDS, row))
                 data["occurred_at"] = _iso(data["occurred_at"])
                 rows.append(data)
-            return rows
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            next_cursor = None
+            if has_more:
+                last = rows[-1]
+                next_cursor = _encode_cursor({"kind": "invocations", "occurred_at": last["occurred_at"], "id": last["invocation_id"]})
+            return {"items": rows, "page_info": {"limit": limit, "has_more": has_more, "next_cursor": next_cursor}}
         return self._read(op)
 
 

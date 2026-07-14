@@ -9,6 +9,7 @@ import pytest
 from psycopg import sql
 
 from ecommerce_cs_agent.db.migrations import load_migrations
+from ecommerce_cs_agent.services.llm_governance_adapters import PostgresEvaluationReleaseGateChecker
 
 
 DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
@@ -140,6 +141,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                   AND relation.relname IN (
                       'llm_provider_config',
                       'llm_config_version',
+                      'llm_eval_run',
                       'llm_release_record',
                       'llm_scenario_route',
                       'llm_connection_test',
@@ -149,7 +151,7 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 """,
                 (schema_name,),
             )
-            assert cursor.fetchone() == (6,)
+            assert cursor.fetchone() == (7,)
             cursor.execute(
                 """
                 SELECT is_nullable
@@ -253,6 +255,19 @@ def test_migrations_execute_in_isolated_schema_and_enforce_llm_governance_constr
                 (organization_id, system_admin_user_id),
             )
             config_version_id = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO llm_eval_run (id, organization_id, config_version_id) VALUES ('eval-migration', %s, %s)",
+                (organization_id, config_version_id),
+            )
+            assert_integrity_error(
+                cursor,
+                "UPDATE llm_eval_run SET gate_status='passed', revision=revision+1 WHERE id='eval-migration'",
+                (),
+            )
+            cursor.execute(
+                "UPDATE llm_eval_run SET status='completed', gate_status='passed', completed_at=now(), revision=revision+1 WHERE id='eval-migration'"
+            )
+            assert_integrity_error(cursor, "DELETE FROM llm_eval_run WHERE id='eval-migration'", ())
             cursor.execute(
                 """
                 UPDATE llm_config_version
@@ -1214,6 +1229,42 @@ def test_llm_release_consistency_rollback_links_and_connection_history_are_enfor
             cleanup_connection.commit()
         finally:
             cleanup_connection.close()
+
+
+def test_postgres_evaluation_release_gate_checker_reads_migrated_table() -> None:
+    schema_name = f"eval_gate_{uuid.uuid4().hex}"
+    connection = psycopg.connect(DATABASE_URL)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema_name)))
+            set_test_search_path(cursor, schema_name)
+            for migration in load_migrations(Path("migrations")):
+                cursor.execute(migration.sql)
+            cursor.execute("INSERT INTO system_admin_user (email, password_hash, display_name, role) VALUES ('eval@example.invalid','hash','Eval','super_admin') RETURNING id")
+            admin_id = cursor.fetchone()[0]
+            cursor.execute("INSERT INTO organization (name) VALUES ('Eval Gate') RETURNING id")
+            organization_id = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO llm_config_version (organization_id, version_number, configuration_hash, created_by_system_admin_user_id) VALUES (%s,1,'hash',%s) RETURNING id",
+                (organization_id, admin_id),
+            )
+            version_id = cursor.fetchone()[0]
+            cursor.execute("INSERT INTO llm_eval_run (id, organization_id, config_version_id) VALUES ('eval-real',%s,%s)", (organization_id, version_id))
+            cursor.execute("UPDATE llm_eval_run SET status='completed', gate_status='passed', completed_at=now(), revision=2 WHERE id='eval-real'")
+        connection.commit()
+
+        checker = PostgresEvaluationReleaseGateChecker(
+            DATABASE_URL,
+            connect=lambda url: psycopg.connect(url, options=f"-csearch_path={schema_name},public"),
+        )
+        assert checker({"organization_id": str(organization_id), "version_id": str(version_id)}, "eval-real")["status"] == "passed"
+        assert checker({"organization_id": str(organization_id), "version_id": str(version_id)}, "missing")["status"] == "failed"
+    finally:
+        connection.rollback()
+        connection.close()
+        with psycopg.connect(DATABASE_URL) as cleanup:
+            with cleanup.cursor() as cursor:
+                cursor.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema_name)))
 
 
 def test_llm_version_lock_serializes_route_metric_and_release_writes() -> None:

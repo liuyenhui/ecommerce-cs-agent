@@ -2160,7 +2160,7 @@ paths:
         - name: provider_id
           in: path
           required: true
-          schema: {type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
+          schema: {type: string, format: uuid}
       requestBody:
         required: true
         content:
@@ -2205,7 +2205,7 @@ paths:
         - name: provider_id
           in: path
           required: true
-          schema: {type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$"}
+          schema: {type: string, format: uuid}
       requestBody:
         required: true
         content:
@@ -2252,6 +2252,12 @@ paths:
           in: query
           required: true
           schema: {type: string, format: uuid, minLength: 36, maxLength: 36}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+        - name: cursor
+          in: query
+          schema: {type: string, minLength: 1, maxLength: 1024}
       responses:
         "200":
           description: 版本列表。
@@ -2617,13 +2623,13 @@ paths:
       parameters:
         - {name: start_at, in: query, schema: {type: string, format: date-time}}
         - {name: end_at, in: query, schema: {type: string, format: date-time}}
-        - {name: provider_config_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: provider_config_id, in: query, schema: {type: string, format: uuid}}
         - {name: model, in: query, schema: {type: string, maxLength: 128}}
         - {name: scenario, in: query, schema: {type: string, maxLength: 64}}
-        - {name: organization_id, in: query, schema: {type: string, maxLength: 128}}
-        - {name: store_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: organization_id, in: query, schema: {type: string, format: uuid}}
+        - {name: store_id, in: query, schema: {type: string, format: uuid}}
         - {name: currency, in: query, schema: {type: string, enum: [CNY, USD]}}
-        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timeout]}}
+        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timed_out, rejected]}}
         - {name: route_role, in: query, schema: {type: string, enum: [primary, fallback]}}
       responses:
         "200":
@@ -2653,13 +2659,13 @@ paths:
       parameters:
         - {name: start_at, in: query, schema: {type: string, format: date-time}}
         - {name: end_at, in: query, schema: {type: string, format: date-time}}
-        - {name: provider_config_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: provider_config_id, in: query, schema: {type: string, format: uuid}}
         - {name: model, in: query, schema: {type: string, maxLength: 128}}
         - {name: scenario, in: query, schema: {type: string, maxLength: 64}}
-        - {name: organization_id, in: query, schema: {type: string, maxLength: 128}}
-        - {name: store_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: organization_id, in: query, schema: {type: string, format: uuid}}
+        - {name: store_id, in: query, schema: {type: string, format: uuid}}
         - {name: currency, in: query, schema: {type: string, enum: [CNY, USD]}}
-        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timeout]}}
+        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timed_out, rejected]}}
         - {name: route_role, in: query, schema: {type: string, enum: [primary, fallback]}}
       responses:
         "200":
@@ -2689,13 +2695,13 @@ paths:
       parameters:
         - {name: start_at, in: query, schema: {type: string, format: date-time}}
         - {name: end_at, in: query, schema: {type: string, format: date-time}}
-        - {name: provider_config_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: provider_config_id, in: query, schema: {type: string, format: uuid}}
         - {name: model, in: query, schema: {type: string, maxLength: 128}}
         - {name: scenario, in: query, schema: {type: string, maxLength: 64}}
-        - {name: organization_id, in: query, schema: {type: string, maxLength: 128}}
-        - {name: store_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: organization_id, in: query, schema: {type: string, format: uuid}}
+        - {name: store_id, in: query, schema: {type: string, format: uuid}}
         - {name: currency, in: query, schema: {type: string, enum: [CNY, USD]}}
-        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timeout]}}
+        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timed_out, rejected]}}
         - {name: route_role, in: query, schema: {type: string, enum: [primary, fallback]}}
         - name: group_by
           in: query
@@ -2729,17 +2735,20 @@ paths:
       parameters:
         - {name: start_at, in: query, schema: {type: string, format: date-time}}
         - {name: end_at, in: query, schema: {type: string, format: date-time}}
-        - {name: provider_config_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: provider_config_id, in: query, schema: {type: string, format: uuid}}
         - {name: model, in: query, schema: {type: string, maxLength: 128}}
         - {name: scenario, in: query, schema: {type: string, maxLength: 64}}
-        - {name: organization_id, in: query, schema: {type: string, maxLength: 128}}
-        - {name: store_id, in: query, schema: {type: string, maxLength: 128}}
+        - {name: organization_id, in: query, schema: {type: string, format: uuid}}
+        - {name: store_id, in: query, schema: {type: string, format: uuid}}
         - {name: currency, in: query, schema: {type: string, enum: [CNY, USD]}}
-        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timeout]}}
+        - {name: status, in: query, schema: {type: string, enum: [succeeded, failed, timed_out, rejected]}}
         - {name: route_role, in: query, schema: {type: string, enum: [primary, fallback]}}
         - name: limit
           in: query
           schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+        - name: cursor
+          in: query
+          schema: {type: string, minLength: 1, maxLength: 1024}
       responses:
         "200":
           description: 脱敏调用明细。
@@ -2865,9 +2874,7 @@ components:
       required: true
       schema:
         type: string
-        minLength: 1
-        maxLength: 128
-        pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        format: uuid
       description: LLM 配置版本 ID。
     Page:
       name: page
@@ -3006,7 +3013,7 @@ components:
       additionalProperties: false
       required: [provider_id, name, provider_type, base_url, secret_ref, enabled, status, revision, created_at, updated_at]
       properties:
-        provider_id: {type: string}
+        provider_id: {type: string, format: uuid}
         name: {type: string}
         provider_type: {type: string, enum: [openai, openai_compatible, anthropic, azure_openai]}
         base_url: {type: string, format: uri}
@@ -3035,7 +3042,7 @@ components:
       additionalProperties: false
       required: [config_version_id, reason, idempotency_key]
       properties:
-        config_version_id: {type: string, minLength: 1, maxLength: 128}
+        config_version_id: {type: string, format: uuid}
         timeout_seconds: {type: integer, minimum: 1, maximum: 20, default: 20}
         max_tokens: {type: integer, minimum: 1, maximum: 256, default: 256}
         reason: {type: string, minLength: 1, maxLength: 512}
@@ -3046,9 +3053,9 @@ components:
       additionalProperties: false
       required: [connection_test_id, provider_config_id, config_version_id, provider_revision, status, latency_ms, checked_at]
       properties:
-        connection_test_id: {type: string}
-        provider_config_id: {type: string}
-        config_version_id: {type: string}
+        connection_test_id: {type: string, format: uuid}
+        provider_config_id: {type: string, format: uuid}
+        config_version_id: {type: string, format: uuid}
         provider_revision: {type: integer, minimum: 1}
         status: {type: string, enum: [passed, failed]}
         latency_ms: {type: integer, minimum: 0}
@@ -3061,7 +3068,7 @@ components:
       additionalProperties: false
       required: [organization_id, reason, idempotency_key]
       properties:
-        organization_id: {type: string, minLength: 1, maxLength: 128}
+        organization_id: {type: string, format: uuid}
         description: {type: [string, "null"], maxLength: 512}
         reason: {type: string, minLength: 1, maxLength: 512}
         idempotency_key: {type: string, minLength: 1, maxLength: 128}
@@ -3072,9 +3079,10 @@ components:
       required: [scenario, primary_provider_config_id, primary_model, enabled, temperature, max_output_tokens, timeout_seconds, max_retries, circuit_breaker_threshold, recovery_probe_seconds]
       properties:
         scenario: {type: string, minLength: 1, maxLength: 64}
-        primary_provider_config_id: {type: string, minLength: 1, maxLength: 128}
+        primary_provider_config_id: {type: string, format: uuid}
         primary_model: {type: string, minLength: 1, maxLength: 128}
-        fallback_provider_config_id: {type: [string, "null"], minLength: 1, maxLength: 128}
+        fallback_provider_config_id:
+          oneOf: [{type: string, format: uuid}, {type: "null"}]
         fallback_model: {type: [string, "null"], minLength: 1, maxLength: 128}
         enabled: {type: boolean}
         temperature: {type: number, minimum: 0, maximum: 2}
@@ -3089,11 +3097,12 @@ components:
       additionalProperties: false
       required: [scenario, primary_provider_config_id, primary_model, enabled, temperature, max_output_tokens, timeout_seconds, max_retries, circuit_breaker_threshold, recovery_probe_seconds]
       properties:
-        route_id: {type: string}
+        route_id: {type: string, format: uuid}
         scenario: {type: string}
-        primary_provider_config_id: {type: string}
+        primary_provider_config_id: {type: string, format: uuid}
         primary_model: {type: string}
-        fallback_provider_config_id: {type: [string, "null"]}
+        fallback_provider_config_id:
+          oneOf: [{type: string, format: uuid}, {type: "null"}]
         fallback_model: {type: [string, "null"]}
         enabled: {type: boolean}
         temperature: {type: number, minimum: 0, maximum: 2}
@@ -3150,9 +3159,10 @@ components:
       additionalProperties: false
       required: [release_record_id]
       properties:
-        release_record_id: {type: string}
+        release_record_id: {type: string, format: uuid}
         status: {type: [string, "null"], enum: [pending, running, superseded, rolled_back, null]}
-        rollback_of_version_id: {type: [string, "null"]}
+        rollback_of_version_id:
+          oneOf: [{type: string, format: uuid}, {type: "null"}]
 
     LlmEvaluationSummary:
       type: object
@@ -3166,8 +3176,8 @@ components:
       additionalProperties: false
       required: [version_id, organization_id, version_number, status, revision, configuration_hash, created_by_system_admin_user_id, created_at, routes, release_record, evaluation]
       properties:
-        version_id: {type: string}
-        organization_id: {type: string}
+        version_id: {type: string, format: uuid}
+        organization_id: {type: string, format: uuid}
         version_number: {type: integer, minimum: 1}
         status: {type: string, enum: [draft, validated, pending_publish, running, superseded, rolled_back]}
         revision: {type: integer, minimum: 1}
@@ -3177,8 +3187,10 @@ components:
         created_at: {type: string, format: date-time}
         published_by_system_admin_user_id: {type: [string, "null"]}
         published_at: {type: [string, "null"], format: date-time}
-        rollback_of_version_id: {type: [string, "null"]}
-        release_record_id: {type: [string, "null"]}
+        rollback_of_version_id:
+          oneOf: [{type: string, format: uuid}, {type: "null"}]
+        release_record_id:
+          oneOf: [{type: string, format: uuid}, {type: "null"}]
         release_status: {type: [string, "null"]}
         evaluation_run_id: {type: [string, "null"]}
         routes:
@@ -3196,11 +3208,21 @@ components:
     LlmConfigVersionListResponse:
       type: object
       additionalProperties: false
-      required: [items]
+      required: [items, page_info]
       properties:
         items:
           type: array
           items: {$ref: "#/components/schemas/LlmConfigVersion"}
+        page_info: {$ref: "#/components/schemas/LlmPageInfo"}
+
+    LlmPageInfo:
+      type: object
+      additionalProperties: false
+      required: [limit, has_more, next_cursor]
+      properties:
+        limit: {type: integer, minimum: 1, maximum: 500}
+        has_more: {type: boolean}
+        next_cursor: {type: [string, "null"], maxLength: 1024}
 
     LlmUsageSummary:
       type: object
@@ -3267,19 +3289,20 @@ components:
       additionalProperties: false
       required: [invocation_id, occurred_at, provider_config_id, provider_name, model, scenario, organization_id, store_id, route_role, input_tokens, output_tokens, latency_ms, status, estimated_cost_micros, currency]
       properties:
-        invocation_id: {type: string}
+        invocation_id: {type: string, format: uuid}
         occurred_at: {type: string, format: date-time}
-        provider_config_id: {type: string}
+        provider_config_id: {type: string, format: uuid}
         provider_name: {type: string}
         model: {type: string}
         scenario: {type: string}
-        organization_id: {type: string}
-        store_id: {type: [string, "null"]}
+        organization_id: {type: string, format: uuid}
+        store_id:
+          oneOf: [{type: string, format: uuid}, {type: "null"}]
         route_role: {type: string, enum: [primary, fallback]}
         input_tokens: {type: integer, minimum: 0}
         output_tokens: {type: integer, minimum: 0}
         latency_ms: {type: integer, minimum: 0}
-        status: {type: string, enum: [succeeded, failed, timeout]}
+        status: {type: string, enum: [succeeded, failed, timed_out, rejected]}
         error_code: {type: [string, "null"]}
         estimated_cost_micros: {type: integer, minimum: 0}
         currency: {type: string, enum: [CNY, USD]}
@@ -3287,12 +3310,12 @@ components:
     LlmInvocationListResponse:
       type: object
       additionalProperties: false
-      required: [items, limit]
+      required: [items, page_info]
       properties:
         items:
           type: array
           items: {$ref: "#/components/schemas/LlmInvocation"}
-        limit: {type: integer, minimum: 1, maximum: 500}
+        page_info: {$ref: "#/components/schemas/LlmPageInfo"}
 
     OpenErpProvisionRequest:
       type: object

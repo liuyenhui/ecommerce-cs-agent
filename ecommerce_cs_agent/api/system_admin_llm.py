@@ -1,18 +1,41 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Annotated, Any, Callable, Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Path, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationError, model_validator
 
 from ecommerce_cs_agent.api.errors import api_error
 from ecommerce_cs_agent.services.llm_governance import LlmGovernanceRepository
 
 
-ResourceId = Annotated[str, Path(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")]
+def _canonical_uuid(value: Any) -> UUID:
+    if not isinstance(value, str):
+        raise ValueError("must be a canonical UUID")
+    try:
+        parsed = UUID(value)
+    except ValueError:
+        raise ValueError("must be a canonical UUID") from None
+    if str(parsed) != value:
+        raise ValueError("must be a canonical UUID")
+    return parsed
+
+
+def _rfc3339_datetime(value: Any) -> Any:
+    if not isinstance(value, str) or not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", value
+    ):
+        raise ValueError("must be an RFC3339 timestamp with timezone")
+    return value
+
+
+CanonicalUUID = Annotated[UUID, BeforeValidator(_canonical_uuid)]
+ResourceId = Annotated[UUID, BeforeValidator(_canonical_uuid), Path()]
+Rfc3339DateTime = Annotated[datetime, BeforeValidator(_rfc3339_datetime)]
 
 
 class StrictRequest(BaseModel):
@@ -51,21 +74,21 @@ class ProviderUpdateRequest(AuditWrite):
 
 
 class ConnectionTestRequest(AuditWrite):
-    config_version_id: str = Field(min_length=1, max_length=128)
+    config_version_id: CanonicalUUID
     timeout_seconds: int = Field(default=20, ge=1, le=20)
     max_tokens: int = Field(default=256, ge=1, le=256)
 
 
 class DraftCreateRequest(AuditWrite):
-    organization_id: str = Field(min_length=1, max_length=128)
+    organization_id: CanonicalUUID
     description: str | None = Field(default=None, max_length=512)
 
 
 class ScenarioRoute(StrictRequest):
     scenario: str = Field(min_length=1, max_length=64)
-    primary_provider_config_id: str = Field(min_length=1, max_length=128)
+    primary_provider_config_id: CanonicalUUID
     primary_model: str = Field(min_length=1, max_length=128)
-    fallback_provider_config_id: str | None = Field(default=None, min_length=1, max_length=128)
+    fallback_provider_config_id: CanonicalUUID | None = None
     fallback_model: str | None = Field(default=None, min_length=1, max_length=128)
     enabled: bool
     temperature: float = Field(ge=0, le=2)
@@ -101,15 +124,15 @@ class RollbackRequest(AuditWrite):
 
 class UsageFilters(StrictRequest):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, strict=False)
-    start_at: datetime | None = None
-    end_at: datetime | None = None
-    provider_config_id: str | None = Field(default=None, min_length=1, max_length=128)
+    start_at: Rfc3339DateTime | None = None
+    end_at: Rfc3339DateTime | None = None
+    provider_config_id: CanonicalUUID | None = None
     model: str | None = Field(default=None, min_length=1, max_length=128)
     scenario: str | None = Field(default=None, min_length=1, max_length=64)
-    organization_id: str | None = Field(default=None, min_length=1, max_length=128)
-    store_id: str | None = Field(default=None, min_length=1, max_length=128)
+    organization_id: CanonicalUUID | None = None
+    store_id: CanonicalUUID | None = None
     currency: Literal["CNY", "USD"] | None = None
-    status: Literal["succeeded", "failed", "timeout"] | None = None
+    status: Literal["succeeded", "failed", "timed_out", "rejected"] | None = None
     route_role: Literal["primary", "fallback"] | None = None
 
     @model_validator(mode="after")
@@ -127,6 +150,9 @@ class UsageFilters(StrictRequest):
         for field in ("start_at", "end_at"):
             if field in values:
                 values[field] = values[field].astimezone(timezone.utc).isoformat()
+        for field in ("provider_config_id", "organization_id", "store_id"):
+            if field in values:
+                values[field] = str(values[field])
         return values
 
 
@@ -136,24 +162,14 @@ class UsageBreakdownFilters(UsageFilters):
 
 class InvocationFilters(UsageFilters):
     limit: int = Field(default=100, ge=1, le=500)
+    cursor: str | None = Field(default=None, min_length=1, max_length=1024)
 
 
 class ConfigVersionsQuery(StrictRequest):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=False, strict=False)
-    organization_id: UUID
-
-    @model_validator(mode="before")
-    @classmethod
-    def require_canonical_uuid(cls, value: Any) -> Any:
-        raw = value.get("organization_id") if isinstance(value, dict) else None
-        try:
-            canonical = str(UUID(str(raw)))
-        except (TypeError, ValueError, AttributeError):
-            raise ValueError("organization_id must be a canonical UUID") from None
-        if raw != canonical:
-            raise ValueError("organization_id must be a canonical UUID")
-        return value
-
+    organization_id: CanonicalUUID
+    limit: int = Field(default=50, ge=1, le=100)
+    cursor: str | None = Field(default=None, min_length=1, max_length=1024)
 
 def _query_model(request: Request, model: type[StrictRequest]) -> StrictRequest:
     try:
@@ -194,18 +210,18 @@ def register_system_admin_llm_routes(
 
     @app.post("/v1/system-admin/llm/providers")
     def create_llm_provider(payload: ProviderCreateRequest, session: Any = Depends(system_session)) -> JSONResponse:
-        result = repository.create_provider(session, payload.model_dump())
+        result = repository.create_provider(session, payload.model_dump(mode="json"))
         return JSONResponse(status_code=201, content=result)
 
     @app.patch("/v1/system-admin/llm/providers/{provider_id}")
     def update_llm_provider(provider_id: ResourceId, payload: ProviderUpdateRequest, session: Any = Depends(system_session)) -> dict[str, Any]:
-        body = payload.model_dump(exclude_none=True)
+        body = payload.model_dump(mode="json", exclude_none=True)
         expected_revision = body.pop("expected_revision")
-        return repository.update_provider(session, provider_id, body, expected_revision=expected_revision)
+        return repository.update_provider(session, str(provider_id), body, expected_revision=expected_revision)
 
     @app.post("/v1/system-admin/llm/providers/{provider_id}/connection-tests")
     def test_llm_provider_connection(provider_id: ResourceId, payload: ConnectionTestRequest, session: Any = Depends(system_session)) -> JSONResponse:
-        result = repository.test_connection(session, provider_id, payload.model_dump())
+        result = repository.test_connection(session, str(provider_id), payload.model_dump(mode="json"))
         return JSONResponse(status_code=202, content=result)
 
     @app.get("/v1/system-admin/llm/config-versions")
@@ -213,40 +229,41 @@ def register_system_admin_llm_routes(
         query = _query_model(request, ConfigVersionsQuery)
         assert isinstance(query, ConfigVersionsQuery)
         organization_id = str(query.organization_id)
-        return {"items": [_version_response(item) for item in repository.list_versions(session, organization_id)]}
+        page = repository.list_versions_page(session, organization_id, limit=query.limit, cursor=query.cursor)
+        return {"items": [_version_response(item) for item in page["items"]], "page_info": page["page_info"]}
 
     @app.get("/v1/system-admin/llm/config-versions/{version_id}")
     def get_llm_config_version(version_id: ResourceId, session: Any = Depends(system_session)) -> dict[str, Any]:
-        return _version_response(repository.get_version(session, version_id))
+        return _version_response(repository.get_version(session, str(version_id)))
 
     @app.post("/v1/system-admin/llm/config-versions/drafts")
     def create_llm_config_draft(payload: DraftCreateRequest, session: Any = Depends(system_session)) -> JSONResponse:
-        result = _version_response(repository.create_draft(session, payload.model_dump(exclude_none=True)))
+        result = _version_response(repository.create_draft(session, payload.model_dump(mode="json", exclude_none=True)))
         return JSONResponse(status_code=201, content=result)
 
     @app.put("/v1/system-admin/llm/config-versions/{version_id}/routes")
     @app.patch("/v1/system-admin/llm/config-versions/{version_id}/routes")
     def replace_llm_config_routes(version_id: ResourceId, payload: RouteReplaceRequest, session: Any = Depends(system_session)) -> dict[str, Any]:
-        body = payload.model_dump()
+        body = payload.model_dump(mode="json")
         expected_revision = body.pop("expected_revision")
         routes = body.pop("routes")
-        return _version_response(repository.replace_routes(session, version_id, routes, expected_revision=expected_revision, payload=body))
+        return _version_response(repository.replace_routes(session, str(version_id), routes, expected_revision=expected_revision, payload=body))
 
     @app.post("/v1/system-admin/llm/config-versions/{version_id}/validate")
     def validate_llm_config(version_id: ResourceId, payload: RevisionWriteRequest, session: Any = Depends(system_session)) -> dict[str, Any]:
-        return _version_response(repository.validate_draft(session, version_id, payload.model_dump()))
+        return _version_response(repository.validate_draft(session, str(version_id), payload.model_dump(mode="json")))
 
     @app.post("/v1/system-admin/llm/config-versions/{version_id}/submit-publish")
     def submit_llm_config_publish(version_id: ResourceId, payload: SubmitPublishRequest, session: Any = Depends(system_session)) -> dict[str, Any]:
-        return _version_response(repository.submit_publish(session, version_id, payload.model_dump()))
+        return _version_response(repository.submit_publish(session, str(version_id), payload.model_dump(mode="json")))
 
     @app.post("/v1/system-admin/llm/config-versions/{version_id}/publish")
     def publish_llm_config(version_id: ResourceId, payload: RevisionWriteRequest, session: Any = Depends(system_session)) -> dict[str, Any]:
-        return _version_response(repository.publish(session, version_id, payload.model_dump()))
+        return _version_response(repository.publish(session, str(version_id), payload.model_dump(mode="json")))
 
     @app.post("/v1/system-admin/llm/config-versions/{version_id}/rollback")
     def rollback_llm_config(version_id: ResourceId, payload: RollbackRequest, session: Any = Depends(system_session)) -> dict[str, Any]:
-        return _version_response(repository.rollback(session, version_id, payload.model_dump()))
+        return _version_response(repository.rollback(session, str(version_id), payload.model_dump(mode="json")))
 
     @app.get("/v1/system-admin/llm/usage/summary")
     def get_llm_usage_summary(request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
@@ -273,4 +290,4 @@ def register_system_admin_llm_routes(
         filters = _query_model(request, InvocationFilters)
         assert isinstance(filters, InvocationFilters)
         values = filters.service_filters()
-        return {"items": repository.list_invocations(session, values), "limit": values.get("limit", 100)}
+        return repository.list_invocations_page(session, values)

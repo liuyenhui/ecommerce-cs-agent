@@ -39,6 +39,10 @@ from ecommerce_cs_agent.services.llm_governance import (
     LlmGovernanceRepository,
     PostgresLlmGovernanceRepository,
 )
+from ecommerce_cs_agent.services.llm_governance_adapters import (
+    KubernetesSecretProviderConnectionTester,
+    PostgresEvaluationReleaseGateChecker,
+)
 
 
 def create_app(
@@ -74,10 +78,14 @@ def create_app(
     else:
         if not settings.database_url:
             raise RuntimeError("DATABASE_URL is required for System Admin LLM governance outside test")
+        connection_tester = llm_connection_tester or KubernetesSecretProviderConnectionTester.from_environment()
+        release_gate_checker = llm_release_gate_checker or PostgresEvaluationReleaseGateChecker(
+            settings.database_url
+        )
         llm_governance = PostgresLlmGovernanceRepository(
             settings.database_url,
-            connection_tester=llm_connection_tester,
-            release_gate_checker=llm_release_gate_checker,
+            connection_tester=connection_tester,
+            release_gate_checker=release_gate_checker,
         )
     open_erp = OpenErpIntegrationService(settings)
 
