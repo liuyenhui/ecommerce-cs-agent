@@ -90,7 +90,7 @@ jobs:
         run: python -m evals.cli --help
 
       - name: Pytest
-        run: APP_ENV=test DATABASE_URL="$PG_DSN" python -m pytest tests -q
+        run: APP_ENV=test DATABASE_URL="$PG_DSN" TEST_DATABASE_URL="$PG_DSN" python -m pytest tests -q
 
       - name: Set up Helm
         uses: azure/setup-helm@v5

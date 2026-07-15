@@ -4,6 +4,29 @@
 
 ## 最近文档更新
 
+### 2026-07-15
+
+- Kubernetes API 与模型 Provider 的自定义 TLS socket 均在系统默认安全上下文上显式固定最低 `TLSv1.2`，保留证书校验、SNI、固定 IP 和绝对 Deadline 约束；回归测试同时覆盖集群 CA 与公共 CA 两条 context 构造路径，以满足 CodeQL 协议下限门禁。
+- `dev:acs:env` 从 runtime Secret 与独立 `ecommerce-cs-agent-llm-cursor/signing-key` 合并生成本机 `0600` 环境文件，标准 `dev:api:acs-local` 无需手工注入 cursor key。`ACS_DEBUG_MODE=local-acs` 继续使用真实开发 PostgreSQL 与对象存储，但不要求本机具备 Kubernetes Pod 的 ServiceAccount token/CA；LLM Provider 连接测试明确返回 `tester_unavailable`。生产、staging、普通 development 及非精确调试开关仍必须通过集群内 Secret allowlist 适配器，不能绕过。
+- LLM Secret OpenAPI pattern 不再使用可在末尾换行前匹配的 `$`，改用 ECMA 兼容的严格输入末尾断言，并由真实 `Draft202012Validator` 覆盖最小/最大合法边界及首尾空白、换行拒绝。Runbook 区分 POST 的 `validation_error`、不可变 PATCH 字段的 `extra_forbidden` 和直接 service 的 `invalid_secret_ref`；测试文档不再硬编码个人 `.venv` 绝对路径。
+- System Admin 文档与契约按真实实现再次收口：Secret namespace/name/key 在 API/Pydantic、直接 service 写入和 runtime adapter 统一校验；完成度只返回商品、价格、知识、API 接入四项；“评测与发布”只表示 LLM 配置版本、绑定评测快照和 `/v1/system-admin/llm/releases`；健康响应只声明 API、PostgreSQL/pgcrypto、pgvector、queue 四类依赖。
+- LLM Secret 部署边界统一收紧：cursor、runtime 与所有 Provider Secret 名称都使用完整 DNS-1123 subdomain 校验，Secret key 使用 Kubernetes key 规则；`allowedSecretRefs` 禁止重复 `(name,key)`，runtime tuple 必须唯一匹配且不得声明 `allowedOrigins`，其 origin 只从 `LLM_BASE_URL` 自动绑定。Helm values schema、模板和 Python runtime adapter 使用同一规则，并由矩阵测试防止直接环境变量绕过。System Admin 的原始凭据门禁以真实 Provider DOM 精确 allowlist 为主、TypeScript AST 扫描为辅；InMemory Admin 测试数据必须显式注入，生产构造默认空且无数据库时 fail fast。
+- System Admin LLM cursor 统一改为 `payload.signature` HMAC-SHA256 不透明令牌，配置版本、调用明细和发布记录分别绑定资源类型与规范化 scope；任何无签名、篡改、跨资源或跨 scope 复用均返回 422。签名密钥由独立 Kubernetes Secret `ecommerce-cs-agent-llm-cursor` 的 `signing-key` 注入 `LLM_CURSOR_SIGNING_KEY`，不得写入 values、日志或数据库。发布/提交/回滚使用同步 intent 锁与组织 ownership，迟到响应不得污染新组织；空草稿 UI 可补齐 `reply_generation`、`knowledge_extraction`、`blind_test_question_generation` 三个必需场景并完整编辑 Provider/model 对，dirty 按值推导，只读角色字段锁定。
+- System Admin LLM 治理分页与状态进一步收紧：版本、调用与发布记录的 cursor 加载使用各自 AbortController、generation/scope ownership 和同步 in-flight 锁，切换组织、筛选、页签或卸载时不得追加迟到响应；失败原因分别查询 `failed`、`timed_out`、`rejected` 后按错误码和币种合并。用量 loading/error/empty/success 严格互斥。发布、提交或回滚成功但列表刷新失败时必须明确提示操作已成功且数据已 stale，不得声称已刷新；跨页发布记录通过真实单版本 GET 加载对应版本后再开放回滚。每次成功读取 `/v1/system-admin/llm/releases` 都写入不含原始 cursor、Prompt、消息或 Secret 的 `llm.release.list` 审计。
+- System Admin LLM 治理返修补齐真实数据契约：审计查询新增服务端 `action_prefix=llm.` 过滤并在计数、分页前生效；新增 `/v1/system-admin/llm/releases` 真实发布记录游标接口。前端从当前 System Admin session 读取角色，只有 `super_admin` / `release_admin` 可写，`technical_support` 仅额外允许连接测试；用量区分加载、失败、空与成功状态并展示混合币种、完整调用维度和仅失败调用的错误分布，版本、调用、发布记录均按服务端游标继续加载，发布与回滚后重新获取真实版本和发布记录。
+- System Admin 质量门禁补齐真实服务端分页与请求所有权：组织、店铺、完成度、任务、审计、决策均按独立 `page/page_size/total` 翻页，筛选重置第一页；完成度的 `ready/warning/blocked` 状态必须先作用于完整结果集，再计算全局 `total` 和分页。前端后发请求中止先发请求并在退出时失效旧 `/auth/me`。移动导航在窄屏作为焦点受控模态抽屉，桌面保持非模态。任务重试输入收紧为去空白后的 1–128 字符幂等键与 1–512 字符原因，入队即不可再次重试且不覆盖任务原业务幂等键；Dashboard 最近发布查询失败时显式标记局部不可用，不伪装为空数据，OpenAPI 示例必须通过含格式校验的响应 schema 验证。客户管理员邀请、重发邀请和禁用/恢复账号不属于当前 System Admin API 或 UI 能力，文档统一标为后续候选；当前只展示、核验经批准部署流程配置的初始账号准备状态。
+- System Admin 组织边界统一使用 `/v1/system-admin/organizations`、`organization_id` 和 `organization` 响应字段，OpenAPI 不再保留未实现的 `/tenants` 或 SystemTenant 模型；任务重试幂等键按 System Admin + 任务校验，锁等待后的同键并发安全重放首次结果，跨操作者、跨任务或不同键竞争返回 409。
+- System Admin 运营契约收口：总览聚合接口返回真实最近发布；任务列表持久化并显式返回 `retryable`，重试端点只接受服务端标记的失败任务；审计查询支持 actor、组织、店铺、action、敏感访问与 `[time_from, time_to)` 半开时间范围并统一校验。前端总览、任务重试、审计筛选和折叠导航只消费这些真实服务端契约。
+- LLM 连接测试安全边界收紧：每个允许的 `(Secret name, key)` 绑定精确 Provider HTTPS origins，runtime tuple 自动绑定 `LLM_BASE_URL`；拒绝内部/Kubernetes/混合 DNS、重定向和 DNS rebinding，Provider 使用验证后固定 IP + 原始 SNI/Host。DNS 改为进程级固定 daemon worker 与有界 outstanding 队列；Kubernetes Service host 必须是 IP literal，TCP 固定该 IP、TLS 使用 `kubernetes.default.svc` 与集群 CA；HTTP CONNECT 代理同样在绝对 Deadline 内解析并固定 IP。DNS、Secret、TCP/CONNECT、TLS、HTTP 与分块响应体共享同一 20 秒绝对 Deadline，socket guard 到期即中止，TLS 初始化失败也清理 raw socket。用量分页 cursor 同时绑定版本、资源类型、组织与规范化筛选；OpenAPI 明确同 scope 复用、排他边界、无下一页为 null 及 scope 变化返回 422，四个用量接口复用同一组查询参数组件。
+- LLM Provider 凭据从运行时 Secret 中分离：连接测试仅可读取 `api.secretAccess.allowedSecretRefs` 指定的专用 Secret 与 key；API Deployment 的 `LLM_API_KEY` 通过同一专用 `(name,key)` 的 `api.runtimeLlmSecretRef` / `secretKeyRef` 注入。禁止复用 `ecommerce-cs-agent-runtime`，API ServiceAccount 继续使用 namespaced `secrets/get/resourceNames` 最小权限。
+
+### 2026-07-14
+
+- 确认系统后台采用任务导向完整重构：9 个可达页面、可收缩 Lucide 图标导航、移动抽屉、统一状态组件和真实数据空态；development/production 禁止回退 In-memory demo 仓库，系统指标必须来自服务端总量/聚合 API。
+- LLM 治理纳入第一版完整范围：Provider 与 Kubernetes Secret 引用、场景主/降级模型、运行参数、连接测试、草稿、发布/回滚、用量成本、版本和审计；不展示完整 Prompt、客户消息、模型回复或密钥。
+- 新增 [系统后台重设计与 LLM 治理规格](superpowers/specs/2026-07-14-system-admin-redesign-and-llm-governance-design.md)，作为本轮实现与验收入口；详细长期约束继续归入 [System Admin Design](system-admin-design.md)。
+- 新增 [系统后台重设计与 LLM 治理实施计划](superpowers/plans/2026-07-14-system-admin-redesign-and-llm-governance.md)，按真实数据边界、聚合 API、LLM 数据库与服务、API/OpenAPI、九页前端、边界回归、文档和端到端发布验证顺序实施。
+
 ### 2026-07-10
 
 - 商品级知识自动回复必须绑定请求的稳定 `external_product_id`，PostgreSQL 召回与 evidence 门禁双重拒绝跨商品知识；请求缺少商品绑定时只允许显式 `scope=store/tenant` 且不关联商品的通用知识自动回复。

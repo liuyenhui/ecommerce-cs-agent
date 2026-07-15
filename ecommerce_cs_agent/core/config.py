@@ -29,6 +29,7 @@ class Settings:
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    llm_cursor_signing_key: str | None = None
     admin_oidc_enabled: bool = False
     admin_oidc_issuer: str | None = None
     admin_oidc_client_id: str | None = None
@@ -52,6 +53,7 @@ def load_settings() -> Settings:
         ("DATABASE_URL",),
         ("OPEN_ERP_INTEGRATION_TOKEN",),
         ("OPEN_ERP_BILLING_LEASE_SECRET",),
+        ("LLM_CURSOR_SIGNING_KEY",),
     ]
     if production:
         missing = _missing_required_groups(required_groups)
@@ -90,6 +92,7 @@ def load_settings() -> Settings:
         llm_api_key=os.environ.get("LLM_API_KEY"),
         llm_base_url=os.environ.get("LLM_BASE_URL"),
         llm_model=os.environ.get("LLM_MODEL"),
+        llm_cursor_signing_key=os.environ.get("LLM_CURSOR_SIGNING_KEY"),
         admin_oidc_enabled=_env_bool("ADMIN_OIDC_ENABLED", "OIDC_ENABLED"),
         admin_oidc_issuer=_env_first_optional("ADMIN_OIDC_ISSUER", "OIDC_ISSUER"),
         admin_oidc_client_id=_env_first_optional("ADMIN_OIDC_CLIENT_ID", "OIDC_CLIENT_ID"),

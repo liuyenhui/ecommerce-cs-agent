@@ -7,6 +7,8 @@ import path from "node:path";
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const namespace = process.env.ACS_DEV_NAMESPACE || "ecommerce-cs-agent-dev";
 const secretName = process.env.ACS_DEV_SECRET || "ecommerce-cs-agent-runtime";
+const cursorSecretName = process.env.ACS_DEV_LLM_CURSOR_SECRET || "ecommerce-cs-agent-llm-cursor";
+const cursorSecretKey = process.env.ACS_DEV_LLM_CURSOR_SECRET_KEY || "signing-key";
 const kubeconfig = expandHome(process.env.ACS_DEV_KUBECONFIG || "~/.kube/bpg-debian12-master-public.yaml");
 const outputFile = path.resolve(root, process.env.ACS_LOCAL_ENV_FILE || ".local/acs-runtime.env");
 const postgresHost = process.env.ACS_LOCAL_POSTGRES_HOST || "127.0.0.1";
@@ -32,23 +34,34 @@ function rewriteDatabaseUrl(value) {
   return url.toString();
 }
 
-const rawSecret = execFileSync(
-  "kubectl",
-  ["--kubeconfig", kubeconfig, "-n", namespace, "get", "secret", secretName, "-o", "json"],
-  { encoding: "utf8" }
-);
-const secret = JSON.parse(rawSecret);
+function readSecret(name) {
+  return JSON.parse(
+    execFileSync(
+      "kubectl",
+      ["--kubeconfig", kubeconfig, "-n", namespace, "get", "secret", name, "-o", "json"],
+      { encoding: "utf8" }
+    )
+  );
+}
+
+const secret = readSecret(secretName);
 const values = Object.fromEntries(
   Object.entries(secret.data || {}).map(([key, encoded]) => [key, Buffer.from(String(encoded), "base64").toString("utf8")])
 );
 const skippedKeys = Object.keys(values).filter((key) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key));
+const cursorSecret = readSecret(cursorSecretName);
+const cursorSigningKey = Buffer.from(String(cursorSecret.data?.[cursorSecretKey] || ""), "base64").toString("utf8");
 
 if (!values.DATABASE_URL) {
   throw new Error(`${secretName} is missing DATABASE_URL`);
 }
+if (Buffer.byteLength(cursorSigningKey, "utf8") < 32) {
+  throw new Error(`${cursorSecretName}/${cursorSecretKey} must contain at least 32 bytes`);
+}
 
 values.DATABASE_URL = rewriteDatabaseUrl(values.DATABASE_URL);
 values.OBJECT_STORAGE_ENDPOINT = objectStorageEndpoint;
+values.LLM_CURSOR_SIGNING_KEY = cursorSigningKey;
 
 fs.mkdirSync(path.dirname(outputFile), { recursive: true, mode: 0o700 });
 const envText = Object.keys(values)
@@ -60,7 +73,7 @@ fs.writeFileSync(outputFile, `${envText}\n`, { mode: 0o600 });
 fs.chmodSync(outputFile, 0o600);
 
 console.log(`Wrote local ACS env file: ${outputFile}`);
-console.log(`Loaded ${Object.keys(values).length} keys from the configured Kubernetes Secret`);
+console.log(`Loaded ${Object.keys(values).length} local runtime settings from the configured Kubernetes Secrets`);
 if (skippedKeys.length > 0) {
   console.log(`Skipped ${skippedKeys.length} non-shell-compatible secret keys`);
 }

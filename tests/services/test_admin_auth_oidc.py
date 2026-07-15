@@ -8,10 +8,11 @@ from fastapi import HTTPException
 
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.admin_auth import AdminSession, InMemoryAdminAuthService, PostgresAdminAuthService
+from tests.admin_fixtures import customer_admin_auth_fixture
 
 
 def test_in_memory_admin_oidc_bound_sub_logs_in_without_creating_permissions() -> None:
-    service = InMemoryAdminAuthService(Settings())
+    service = customer_admin_auth_fixture(Settings())
     service.users["admin-001"]["fcihome_account_sub"] = "acct-admin-001"
 
     response, token = service.login_oidc(
@@ -30,7 +31,7 @@ def test_in_memory_admin_oidc_bound_sub_logs_in_without_creating_permissions() -
 
 
 def test_in_memory_admin_oidc_autolinks_unique_active_email_and_writes_redacted_audit() -> None:
-    service = InMemoryAdminAuthService(Settings())
+    service = customer_admin_auth_fixture(Settings())
 
     response, token = service.login_oidc(
         {
@@ -57,7 +58,7 @@ def test_in_memory_admin_oidc_autolinks_unique_active_email_and_writes_redacted_
 
 
 def test_in_memory_admin_oidc_rejects_unknown_or_ambiguous_email_without_permissions() -> None:
-    service = InMemoryAdminAuthService(Settings())
+    service = customer_admin_auth_fixture(Settings())
 
     with pytest.raises(HTTPException) as unknown:
         service.login_oidc({"sub": "acct-new-001", "email": "unknown@example.test", "email_verified": True})

@@ -4,23 +4,44 @@
 
 ## 1. 当前可运行测试
 
-当前仓库已有最小 live eval CLI 和对应 unittest。可直接运行：
+当前仓库已把 Python、Admin Web、OpenAPI、Helm 和部署边界测试纳入项目依赖。仓库根目录优先使用 `$PROJECT_ROOT/.venv/bin/python`；隔离 worktree 没有 `.venv` 时，应激活已安装本项目 dev 依赖的 Python 环境并使用 `python -m pytest`，工作目录仍保持在当前 worktree。不得在项目文档中硬编码个人用户目录下的虚拟环境路径。
+
+本地全量 Python 测试：
 
 ```bash
-python -m unittest tests.evals.test_live_cli -v
-python -m evals.cli --help
+.venv/bin/python -m pytest tests -q
 ```
 
-第一条命令会启动本地临时 HTTP server，验证 quick live suite 能调用 `/health` 和 `POST /v1/reply-decisions`，并确认 `AGENT_API_TOKEN` 会作为 Bearer token 发送但不会出现在 stdout、stderr 或 Authorization 明文输出中。预期结果是 3 个 unittest 全部 `ok`，最后输出 `OK`。
-
-第二条命令用于确认 `evals.cli` 命令行入口可用。预期结果是输出 `python -m evals.cli` 的 usage，并能看到 `run-suite` 子命令。
-
-当前不要默认假设 `pytest` 已安装。如果本地或 CI 尚未引入 `pyproject.toml` / `requirements*.txt` 中的 pytest 依赖，先使用上面的 `unittest` 和 `python -m evals.cli --help`。等测试依赖被正式纳入项目后，再把 PR 和本地快测迁移到：
+文档与 OpenAPI 契约快测：
 
 ```bash
-pytest tests/unit tests/contract tests/policy
-pytest tests/unit tests/contract tests/integration --maxfail=1
+.venv/bin/pytest tests/contract/test_markdown_links.py tests/contract/test_openapi_contract.py -q
 ```
+
+Admin Web 测试与客户/系统双构建：
+
+```bash
+npm --prefix admin-web test
+npm --prefix admin-web run build:customer
+npm --prefix admin-web run build:system
+```
+
+Helm 与部署边界：
+
+```bash
+helm lint deploy/helm/ecommerce-cs-agent -f deploy/helm/ecommerce-cs-agent/values-dev.yaml
+helm template ecommerce-cs-agent deploy/helm/ecommerce-cs-agent -n ecommerce-cs-agent-dev -f deploy/helm/ecommerce-cs-agent/values-dev.yaml >/tmp/ecommerce-cs-agent-rendered.yaml
+.venv/bin/pytest tests/deploy/test_deploy_artifacts.py tests/api/test_admin_boundaries.py tests/api/test_system_admin_v1.py tests/api/test_system_admin_llm_v1.py tests/services/test_llm_governance.py tests/services/test_llm_governance_adapters.py tests/db/test_migrations.py -q
+rm -f /tmp/ecommerce-cs-agent-rendered.yaml
+```
+
+真实 PostgreSQL 集成是可选本地检查，必须指向隔离测试库，并通过环境变量注入；命令与日志不得打印 DSN 或 Secret：
+
+```bash
+APP_ENV=test TEST_DATABASE_URL=<from-secret> .venv/bin/pytest tests/db/test_migrations_postgres.py tests/services/test_llm_governance.py -q
+```
+
+未设置 `TEST_DATABASE_URL` 时对应 PostgreSQL 用例按测试标记跳过，不得为了消除 skip 使用生产数据库。最小 eval CLI 仍可运行 `python -m unittest tests.evals.test_live_cli -v` 和 `python -m evals.cli --help`。
 
 ## 2. 测试分层
 
@@ -94,10 +115,20 @@ OpenAPI 契约测试应以 `docs/openapi.yaml` 为源文件，不依赖服务启
 | `/v1/admin/audit-logs` | 客户 Admin 审计查询。 |
 | `/v1/product-content/products`、`/v1/product-content/assets`、`/v1/product-content/price-snapshots` | 商品资料、资产和价格快照。 |
 | `/v1/system-admin/auth/login`、`/v1/system-admin/auth/logout`、`/v1/system-admin/auth/me` | 系统 Admin 登录态。 |
-| `/v1/system-admin/message-traces`、`/v1/system-admin/audit-logs`、`/v1/system-admin/health` | 系统排障、审计和健康检查。 |
+| `/v1/system-admin/dashboard-summary`、`/v1/system-admin/organizations`、`/v1/system-admin/stores`、`/v1/system-admin/readiness/stores`、`/v1/system-admin/message-traces`、`/v1/system-admin/tasks`、`/v1/system-admin/audit-logs`、`/v1/system-admin/health` | 系统运营、分页、排障、任务、审计和健康检查。 |
+| `/v1/system-admin/llm/providers*`、`/v1/system-admin/llm/config-versions*`、`/v1/system-admin/llm/releases` | Provider、Secret 引用、配置版本、评测绑定、真实发布记录和回滚。 |
+| `/v1/system-admin/llm/usage/summary`、`/v1/system-admin/llm/usage/timeseries`、`/v1/system-admin/llm/usage/breakdown`、`/v1/system-admin/llm/usage/invocations` | 真实用量、混合币种和脱敏调用明细。 |
 | Customer / System Admin Web split | `admin.ecommerce-cs-agent-dev.fcihome.com` 不展示系统后台入口；`system-admin.ecommerce-cs-agent-dev.fcihome.com` 使用系统后台专用登录页、Cookie 和路由守卫。 |
 
 后续新增、重命名或删除 OpenAPI path 时，必须同步更新 contract test 的必需路径清单。
+
+System Admin / LLM 治理边界回归还必须覆盖：
+
+- `tests/api/test_admin_boundaries.py`：用 Python AST 检查 InMemory Admin 构造器默认空、`create_app` 不注入业务 seed，development/production 缺数据库或必需 Secret fail fast，Customer/System session 互不接受。
+- `admin-web/scripts/admin-boundary.test.mjs`：检查九页前端不含 demo fallback，Provider 编辑器只接受真实 DOM 中的 `namespace/name/key` 引用字段，并通过 TypeScript AST 拒绝 raw credential 字段；认证登录密码是唯一受控例外。
+- `tests/services/test_llm_governance.py`、`tests/api/test_system_admin_llm_v1.py` 和 `tests/contract/test_openapi_contract.py`：检查版本、发布记录、invocation cursor 的 HMAC 签名、版本号、排他边界、资源类型和规范化 scope；无签名、篡改、跨组织/跨筛选/跨资源 cursor 返回 422。
+- `tests/api/test_system_admin_llm_v1.py`、`tests/services/test_llm_governance.py`、`tests/deploy/test_deploy_artifacts.py` 与 `tests/services/test_llm_governance_adapters.py`：检查 API/Pydantic、直接 service create/update、Helm 与 runtime adapter 一致拒绝非法 Secret 引用；namespace 使用最长 63 字符且无点的 DNS-1123 label，name 使用最长 253 字符且每段最长 63 字符的 DNS-1123 subdomain，key 使用最长 253 字符的 Kubernetes data key；并覆盖 Secret 分离、tuple 去重、origin allowlist、固定 IP/DNS rebinding/redirect/统一 deadline 门禁。
+- `tests/api/test_system_admin_v1.py` 与 `admin-web/system-admin/src/system-admin.test.tsx`：检查真实分页 total、`action_prefix`、任务 `retryable`、九项菜单、64px 折叠、移动抽屉、真实空态/partial/error、组织和筛选切换时中止旧 cursor 请求。
 
 ## 5. Mock 与 Live Eval
 
@@ -143,19 +174,20 @@ python -m unittest tests.evals.test_live_cli -v
 python -m evals.cli --help
 ```
 
-Admin Web 引入前端测试后，必须补充：
+Admin Web 当前必须运行：
 
 ```bash
 npm --prefix admin-web test
-npm --prefix admin-web run build
+npm --prefix admin-web run build:customer
+npm --prefix admin-web run build:system
 ```
 
 其中 route guard / E2E 用例至少覆盖：客户后台不出现系统后台入口；客户 Admin session 访问系统后台返回未登录或无权限；系统 Admin session 不能伪装客户用户调用客户 Admin API。
 
-引入 pytest 后：
+Python 当前必须运行：
 
 ```bash
-pytest tests/unit tests/contract tests/integration tests/policy --maxfail=1
+.venv/bin/python -m pytest tests -q
 ```
 
 PR 不跑大规模 LLM 盲测。若需要在 PR 上抽检 eval，只能使用小规模、固定 seed、可复现的 mock eval。
@@ -242,10 +274,10 @@ AGENT_API_TOKEN=<from-secret> python -m evals.cli run-suite --suite quick --targ
 - 输出 `quick suite PASS target=live`。
 - stdout、stderr 不包含 `AGENT_API_TOKEN` 明文、不包含完整 Authorization header。
 
-引入 pytest 和 OpenAPI contract test 后，预期命令为：
+OpenAPI contract test 当前命令为：
 
 ```bash
-pytest tests/contract --maxfail=1
+.venv/bin/pytest tests/contract/test_markdown_links.py tests/contract/test_openapi_contract.py -q
 ```
 
 预期：

@@ -40,42 +40,10 @@ class SystemAdminSession:
 class InMemoryAdminAuthService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.organizations: dict[str, dict[str, Any]] = {
-            "org-001": {"id": "org-001", "name": "Demo Organization", "status": "active", "metadata": {}}
-        }
-        self.stores: dict[str, dict[str, Any]] = {
-            "store-001": {
-                "id": "store-001",
-                "organization_id": "org-001",
-                "name": "Demo PDD Store",
-                "platform": "pdd",
-                "status": "active",
-                "metadata": {},
-                "settings": {},
-            }
-        }
-        self.users: dict[str, dict[str, Any]] = {
-            "admin-001": {
-                "user_id": "admin-001",
-                "email": settings.admin_initial_email,
-                "display_name": "Customer Admin",
-                "fcihome_account_sub": None,
-                "roles": ["owner"],
-                "organization_ids": ["org-001"],
-                "store_ids": ["store-001"],
-                "status": "active",
-                "last_login_at": None,
-            }
-        }
-        self.sessions: dict[str, AdminSession] = {
-            settings.admin_session: AdminSession(
-                token=settings.admin_session,
-                user_id="admin-001",
-                active_organization_id="org-001",
-                active_store_id="store-001",
-                expires_at=_now_dt() + timedelta(days=1),
-            )
-        }
+        self.organizations = {}
+        self.stores = {}
+        self.users = {}
+        self.sessions = {}
         self.audit_logs: list[dict[str, Any]] = []
         self.invitations: dict[str, dict[str, Any]] = {}
 
@@ -84,19 +52,28 @@ class InMemoryAdminAuthService:
         password = payload.get("password")
         if not _password_matches(email, password, self.settings.admin_initial_email, self.settings.admin_initial_password_hash):
             raise api_error(401, "unauthorized", "invalid admin credentials")
-        organization_id = "org-001"
-        if organization_id not in self.organizations:
+        matching_users = [
+            (user_id, user)
+            for user_id, user in self.users.items()
+            if user.get("status") == "active" and str(user.get("email", "")).lower() == str(email or "").lower()
+        ]
+        if len(matching_users) != 1:
+            raise api_error(403, "forbidden", "admin account is not provisioned")
+        user_id, user = matching_users[0]
+        organization_id = str((user.get("organization_ids") or [""])[0])
+        store_id = str((user.get("store_ids") or [""])[0])
+        if organization_id not in self.organizations or store_id not in self.stores:
             raise api_error(403, "forbidden", "admin user cannot access organization")
         token = secrets.token_urlsafe(32)
         self.sessions[token] = AdminSession(
             token=token,
-            user_id="admin-001",
+            user_id=user_id,
             active_organization_id=organization_id,
-            active_store_id="store-001",
+            active_store_id=store_id,
             expires_at=_now_dt() + timedelta(hours=8),
         )
-        self.users["admin-001"]["last_login_at"] = _now()
-        self._audit("admin-001", organization_id, None, "auth.login", "admin_session", "current", {"reason": "login"})
+        user["last_login_at"] = _now()
+        self._audit(user_id, organization_id, None, "auth.login", "admin_session", "current", {"reason": "login"})
         return self.me(self.sessions[token]), token
 
     def login_oidc(self, profile: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -1117,25 +1094,8 @@ class PostgresAdminAuthService:
 class InMemorySystemAdminAuthService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.users: dict[str, dict[str, Any]] = {
-            "sysadmin-001": {
-                "id": "sysadmin-001",
-                "email": settings.system_admin_initial_email,
-                "name": "System Admin",
-                "role": "super_admin",
-                "status": "active",
-            }
-        }
-        self.sessions: dict[str, SystemAdminSession] = {
-            settings.system_admin_session: SystemAdminSession(
-                token=settings.system_admin_session,
-                user_id="sysadmin-001",
-                email=settings.system_admin_initial_email,
-                display_name="System Admin",
-                role="super_admin",
-                expires_at=_now_dt() + timedelta(days=1),
-            )
-        }
+        self.users = {}
+        self.sessions = {}
 
     def login(self, payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
         if not _password_matches(
@@ -1145,13 +1105,22 @@ class InMemorySystemAdminAuthService:
             self.settings.system_admin_initial_password_hash,
         ):
             raise api_error(401, "unauthorized", "invalid system admin credentials")
+        matching_users = [
+            (user_id, user)
+            for user_id, user in self.users.items()
+            if user.get("status") == "active"
+            and str(user.get("email", "")).lower() == str(payload.get("email") or "").lower()
+        ]
+        if len(matching_users) != 1:
+            raise api_error(403, "forbidden", "system admin account is not provisioned")
+        user_id, user = matching_users[0]
         token = secrets.token_urlsafe(32)
         self.sessions[token] = SystemAdminSession(
             token=token,
-            user_id="sysadmin-001",
-            email=self.settings.system_admin_initial_email,
-            display_name="System Admin",
-            role="super_admin",
+            user_id=user_id,
+            email=str(user["email"]),
+            display_name=str(user.get("name") or user.get("display_name") or user_id),
+            role=str(user.get("role") or "super_admin"),
             expires_at=_now_dt() + timedelta(hours=8),
         )
         return self.me(self.sessions[token]), token
@@ -1313,15 +1282,19 @@ class PostgresSystemAdminAuthService:
 
 
 def admin_auth_service_for(settings: Settings) -> InMemoryAdminAuthService | PostgresAdminAuthService:
-    if settings.database_url and settings.environment.lower() not in {"test"}:
-        return PostgresAdminAuthService(settings)
-    return InMemoryAdminAuthService(settings)
+    if settings.environment.lower() == "test":
+        return InMemoryAdminAuthService(settings)
+    if not settings.database_url:
+        raise RuntimeError("DATABASE_URL is required for Customer Admin outside test")
+    return PostgresAdminAuthService(settings)
 
 
 def system_admin_auth_service_for(settings: Settings) -> InMemorySystemAdminAuthService | PostgresSystemAdminAuthService:
-    if settings.database_url and settings.environment.lower() not in {"test"}:
-        return PostgresSystemAdminAuthService(settings)
-    return InMemorySystemAdminAuthService(settings)
+    if settings.environment.lower() == "test":
+        return InMemorySystemAdminAuthService(settings)
+    if not settings.database_url:
+        raise RuntimeError("DATABASE_URL is required for System Admin outside test")
+    return PostgresSystemAdminAuthService(settings)
 
 
 def _system_admin_me_payload(session: SystemAdminSession) -> dict[str, Any]:

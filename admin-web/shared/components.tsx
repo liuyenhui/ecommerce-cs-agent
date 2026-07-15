@@ -5,10 +5,12 @@ import {
   ListFilter,
   Loader2,
   LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
   ShieldCheck
 } from "lucide-react";
 import { buildSystemUserSummary, fieldLabel, renderCell, tableEmptyState } from "./data";
-import type { EmptyStateProps, JsonRecord, NavItem, ToastState } from "./types";
+import type { EmptyStateProps, JsonRecord, NavItem, RequestState, ToastState } from "./types";
 
 export function useCloseOnEscape(open: boolean, close: () => void) {
   React.useEffect(() => {
@@ -30,7 +32,9 @@ export function AdminFrame({
   children,
   toast,
   onCloseNav,
-  onCloseToast
+  onCloseToast,
+  railCollapsed = false,
+  onToggleRail
 }: {
   isAuthenticated: boolean;
   mobileNavOpen: boolean;
@@ -41,21 +45,76 @@ export function AdminFrame({
   toast: ToastState;
   onCloseNav: () => void;
   onCloseToast: () => void;
+  railCollapsed?: boolean;
+  onToggleRail?: () => void;
 }) {
+  const railRef = React.useRef<HTMLElement>(null);
+  const mainPaneRef = React.useRef<HTMLElement>(null);
+  const restoreFocusRef = React.useRef<HTMLElement | null>(null);
+  const [mobileModal, setMobileModal] = React.useState(false);
+
+  React.useEffect(() => {
+    if (typeof window.matchMedia !== "function") { setMobileModal(false); return undefined; }
+    const query = window.matchMedia("(max-width: 900px)");
+    const update = () => setMobileModal(mobileNavOpen && query.matches);
+    update();
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, [mobileNavOpen]);
+
+  React.useEffect(() => {
+    const mainPane = mainPaneRef.current;
+    const rail = railRef.current;
+    if (!mobileModal || !mobileNavOpen || !mainPane || !rail) {
+      mainPane?.removeAttribute("inert");
+      mainPane?.removeAttribute("aria-hidden");
+      if (!mobileNavOpen && restoreFocusRef.current) {
+        restoreFocusRef.current.focus();
+        restoreFocusRef.current = null;
+      }
+      return undefined;
+    }
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    mainPane.setAttribute("inert", "");
+    mainPane.setAttribute("aria-hidden", "true");
+    const focusable = () => Array.from(rail.querySelectorAll<HTMLElement>('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'));
+    focusable()[0]?.focus();
+    const trap = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); onCloseNav(); return; }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", trap);
+    return () => {
+      document.removeEventListener("keydown", trap);
+      mainPane.removeAttribute("inert");
+      mainPane.removeAttribute("aria-hidden");
+    };
+  }, [mobileModal, mobileNavOpen, onCloseNav]);
+
   return (
-    <main className={`appShell ${isAuthenticated ? "isAuthed" : "isGuest"} ${mobileNavOpen ? "navOpen" : ""}`}>
+    <main className={`appShell ${isAuthenticated ? "isAuthed" : "isGuest"} ${mobileNavOpen ? "navOpen" : ""} ${railCollapsed ? "railCollapsed" : ""}`}>
       {isAuthenticated ? (
-        <aside className="rail">
+        <aside className="rail" ref={railRef} role={mobileModal ? "dialog" : undefined} aria-modal={mobileModal ? "true" : undefined} aria-label={mobileModal ? "后台导航" : undefined}>
           <div className="brandMark">
             <ShieldCheck size={22} />
             <span>{brand}</span>
           </div>
           {navigation}
+          {onToggleRail ? <button className="railCollapseButton" type="button" onClick={onToggleRail} aria-label={railCollapsed ? "展开桌面导航" : "收起桌面导航"} aria-expanded={!railCollapsed} title={railCollapsed ? "展开导航" : "收起导航"}>
+            {railCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            <span>{railCollapsed ? "展开" : "收起"}</span>
+          </button> : null}
         </aside>
       ) : null}
       {isAuthenticated ? <button className="navBackdrop" aria-label="关闭导航" onClick={onCloseNav} /> : null}
 
-      <section className="mainPane">
+      <section ref={mainPaneRef} className="mainPane">
         {topBar}
         {children}
       </section>
@@ -71,7 +130,8 @@ export function Navigation<T extends string>({
   onChange,
   ariaLabel,
   defaultGroup,
-  onNavigate
+  onNavigate,
+  showTooltips = false
 }: {
   items: Array<NavItem<T>>;
   activeTab: T;
@@ -79,6 +139,7 @@ export function Navigation<T extends string>({
   ariaLabel: string;
   defaultGroup?: string;
   onNavigate?: () => void;
+  showTooltips?: boolean;
 }) {
   const groups = Array.from(new Set(items.map((item) => item.group || defaultGroup || "")));
   return (
@@ -87,7 +148,7 @@ export function Navigation<T extends string>({
         <React.Fragment key={group || "default"}>
           {group ? <span className="navGroup">{group}</span> : null}
           {items.filter((item) => (item.group || defaultGroup || "") === group).map((item) => (
-            <button key={item.key} className={activeTab === item.key ? "active" : ""} onClick={() => {
+            <button key={item.key} className={activeTab === item.key ? "active" : ""} title={showTooltips ? item.label : undefined} onClick={() => {
               onChange(item.key);
               onNavigate?.();
             }}>
@@ -398,4 +459,21 @@ export function EmptyState({ title, description, action }: EmptyStateProps) {
       {action ? <div className="emptyAction">{action}</div> : null}
     </div>
   );
+}
+
+export function RequestStateView<T>({ state, children }: { state: RequestState<T>; children: (data: T) => React.ReactNode }) {
+  if (state.kind === "idle" || state.kind === "loading") {
+    return <div className="requestState" role="status"><Loader2 size={18} className="spin" /><strong>正在加载真实系统数据</strong></div>;
+  }
+  if (state.kind === "empty") return <EmptyState title={state.title} description={state.description} />;
+  if (state.kind === "forbidden") {
+    return <div className="requestState forbidden" role="alert"><ShieldCheck size={18} /><strong>权限不足</strong><p>{state.message}</p></div>;
+  }
+  if (state.kind === "error") {
+    return <div className="requestState error" role="alert"><AlertTriangle size={18} /><strong>加载失败</strong><p>{state.message}</p></div>;
+  }
+  if (state.kind === "partial") {
+    return <><div className="requestState partial" role="status"><AlertTriangle size={18} /><strong>部分数据加载失败</strong><p>{state.failures.join("；")}</p></div>{children(state.data)}</>;
+  }
+  return <>{children(state.data)}</>;
 }

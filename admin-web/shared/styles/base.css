@@ -387,6 +387,10 @@ pre {
   grid-template-columns: 1fr;
 }
 
+.appShell.railCollapsed {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+
 .rail {
   position: sticky;
   top: 0;
@@ -399,6 +403,33 @@ pre {
 }
 
 .navBackdrop {
+  display: none;
+}
+
+.railCollapseButton {
+  width: 100%;
+  margin-top: 18px;
+  justify-content: flex-start;
+  border-color: #334155;
+  background: #182235;
+  color: #dbe4ee;
+}
+
+.railCollapsed .rail {
+  padding-inline: 8px;
+  overflow-x: hidden;
+}
+
+.railCollapsed .brandMark,
+.railCollapsed .navList button,
+.railCollapsed .railCollapseButton {
+  justify-content: center;
+}
+
+.railCollapsed .brandMark span,
+.railCollapsed .navList button span,
+.railCollapsed .navGroup,
+.railCollapsed .railCollapseButton span {
   display: none;
 }
 
@@ -688,6 +719,34 @@ pre {
   color: #667489;
   font-size: 13px;
   font-weight: 680;
+}
+
+.requestState {
+  min-height: 132px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  border: 1px solid #d9e0e8;
+  border-left: 4px solid #4589ff;
+  background: #ffffff;
+  padding: 24px;
+  text-align: center;
+}
+
+.requestState p {
+  max-width: 680px;
+  color: #526071;
+  line-height: 1.5;
+}
+
+.requestState.forbidden,
+.requestState.partial {
+  border-left-color: #f1c21b;
+}
+
+.requestState.error {
+  border-left-color: #da1e28;
 }
 
 .sectionHeader {
@@ -1306,6 +1365,10 @@ tbody tr:hover {
     grid-template-columns: 1fr;
   }
 
+  .appShell.railCollapsed {
+    grid-template-columns: 1fr;
+  }
+
   .rail {
     position: fixed;
     inset: 0 auto 0 0;
@@ -1315,6 +1378,26 @@ tbody tr:hover {
     transform: translateX(-100%);
     transition: transform 0.18s ease;
     box-shadow: 8px 0 24px rgba(15, 23, 42, 0.28);
+  }
+
+  .appShell.railCollapsed .rail {
+    width: min(312px, calc(100vw - 48px));
+    padding: 16px 12px;
+  }
+
+  .railCollapsed .brandMark,
+  .railCollapsed .navList button {
+    justify-content: flex-start;
+  }
+
+  .railCollapsed .brandMark span,
+  .railCollapsed .navList button span,
+  .railCollapsed .navGroup {
+    display: initial;
+  }
+
+  .railCollapseButton {
+    display: none;
   }
 
   .appShell.navOpen .rail {

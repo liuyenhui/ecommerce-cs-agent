@@ -1298,9 +1298,11 @@ class PostgresAdminRepository:
 def admin_repository_for(settings: Settings) -> AdminRepository:
     object_storage = _object_storage_for(settings)
     embedding_provider = DeterministicEmbeddingProvider()
-    if settings.database_url and settings.environment.lower() not in {"test"}:
-        return PostgresAdminRepository(settings.database_url, object_storage=object_storage, embedding_provider=embedding_provider)
-    return InMemoryAdminRepository(object_storage=object_storage, embedding_provider=embedding_provider)
+    if settings.environment.lower() == "test":
+        return InMemoryAdminRepository(object_storage=object_storage, embedding_provider=embedding_provider)
+    if not settings.database_url:
+        raise RuntimeError("DATABASE_URL is required for Customer Admin data outside test")
+    return PostgresAdminRepository(settings.database_url, object_storage=object_storage, embedding_provider=embedding_provider)
 
 
 def _object_storage_for(settings: Settings) -> ObjectStorage:

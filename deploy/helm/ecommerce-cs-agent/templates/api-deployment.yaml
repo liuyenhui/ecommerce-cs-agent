@@ -19,6 +19,8 @@ spec:
         app.kubernetes.io/managed-by: flux
         app.kubernetes.io/part-of: ecommerce-cs-agent
     spec:
+      serviceAccountName: {{ include "ecommerce-cs-agent.apiServiceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.api.serviceAccount.automount }}
       securityContext:
         {{- toYaml .Values.api.podSecurityContext | nindent 8 }}
       imagePullSecrets:
@@ -35,15 +37,33 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Values.api.envFromSecret }}
-          {{- if .Values.proxy.enabled }}
           env:
+            - name: LLM_GOVERNANCE_SECRET_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: LLM_GOVERNANCE_ALLOWED_SECRET_REFS
+              value: {{ toJson .Values.api.secretAccess.allowedSecretRefs | quote }}
+            - name: LLM_GOVERNANCE_RUNTIME_LLM_SECRET_REF
+              value: {{ toJson .Values.api.runtimeLlmSecretRef | quote }}
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.runtimeLlmSecretRef.name }}
+                  key: {{ .Values.api.runtimeLlmSecretRef.key }}
+            - name: LLM_CURSOR_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.cursorSigningSecretRef.name }}
+                  key: {{ .Values.api.cursorSigningSecretRef.key }}
+            {{- if .Values.proxy.enabled }}
             - name: HTTP_PROXY
               value: {{ .Values.proxy.httpProxy | quote }}
             - name: HTTPS_PROXY
               value: {{ .Values.proxy.httpsProxy | quote }}
             - name: NO_PROXY
               value: {{ .Values.proxy.noProxy | quote }}
-          {{- end }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /health
