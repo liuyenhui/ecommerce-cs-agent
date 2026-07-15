@@ -127,9 +127,14 @@ KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent
 
 常见原因：
 
-- `LLM_BASE_URL`、`LLM_MODEL` 或 `LLM_API_KEY` 未注入。
+- runtime 中的 `LLM_BASE_URL`、`LLM_MODEL` 未注入，或专用 `ecommerce-cs-agent-llm-provider` Secret 的 `api-key` 未通过 `secretKeyRef` 注入为 `LLM_API_KEY`。
+- Helm `api.runtimeLlmSecretRef` 与 `api.secretAccess.allowedSecretRefs` 的 `(name, key)` 不一致，或错误复用了 `api.envFromSecret`。
+- 额外 Secret tuple 未配置精确的公网 HTTPS `allowedOrigins`，或请求 origin 与该 tuple 的绑定不一致；runtime tuple 会自动绑定当前 `LLM_BASE_URL`。
+- API ServiceAccount 的 namespaced Role 未对专用模型 Secret 授予精确的 `secrets/get/resourceNames` 权限。
 - API Pod 代理配置错误。
 - `NO_PROXY` 未包含 `.svc`、`.cluster.local`、PostgreSQL 或 MinIO 内网域名。
+- Provider DNS 包含私网、回环、链路本地或 Kubernetes 地址，或同一主机名混合返回公网与非公网地址。
+- Provider 返回重定向，或代理不是受支持的无认证 HTTP CONNECT 代理。
 - LLM provider 超时或返回非 2xx。
 
 检查：
@@ -139,7 +144,20 @@ KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent
 KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent-dev logs deploy/ecommerce-cs-agent-api --tail=100
 ```
 
+检查 Deployment 的 `LLM_API_KEY.valueFrom.secretKeyRef` 是否指向专用 Secret，并检查 Role 的 `resourceNames` 是否包含相同 Secret 名。不要要求或恢复 `ecommerce-cs-agent-runtime` 中的 `LLM_API_KEY`，也不要输出 Secret 数据、环境变量值或解码结果。
+
+检查 `allowedOrigins` 时只核对 origin 和 Secret/key 名称，不要读取凭据值。Provider 连接测试要求所有 DNS 结果均为公网地址，并在一次请求内固定已验证 IP；内部 Provider、重定向和 DNS 混合解析属于预期拒绝。DNS 使用进程级固定 daemon worker 与有界 outstanding 队列，容量耗尽会快速返回超时，不会为每个请求创建线程。Kubernetes Secret 读取要求 `KUBERNETES_SERVICE_HOST` 是 IP literal，TCP 固定连接该 IP，TLS 使用受信 `kubernetes.default.svc` 名称和集群 CA，且不使用业务 Pod 的 Provider 代理。HTTP CONNECT 代理也先通过同一有界解析器解析并固定 IP，不把代理主机名交给 `create_connection`。DNS、Secret 读取和 Provider 请求共享 20 秒绝对截止时间；TCP、CONNECT、TLS、请求头和分块响应体每阶段都只使用剩余时间，socket 到期 guard 会关闭仍在慢速读写的连接，任一阶段耗尽后不会继续下一阶段。
+
+通过 `POST /v1/system-admin/llm/providers` 创建 Provider 时，非法 `secret_ref` 返回 422 `validation_error`，详情定位到 `secret_ref.namespace`、`secret_ref.name` 或 `secret_ref.key`。`PATCH /v1/system-admin/llm/providers/{provider_id}` 不接受 `secret_ref`：Provider 端点与 Secret 引用不可原地替换，提交该字段返回 422 `validation_error` / `extra_forbidden`，需要更换引用时应按现有安全流程创建新 Provider。只有绕过 Pydantic API 模型、直接调用 LLM governance service create/update 时，非法引用才使用 422 `invalid_secret_ref`。三条路径都要求 namespace 是最长 63 字符且不含点的 DNS-1123 label，Secret name 是最长 253 字符且每段最长 63 字符的 DNS-1123 subdomain，key 是最长 253 字符的 Kubernetes data key；首尾空白或换行都必须拒绝，且不得写入持久化状态。
+
 日志中如包含 provider 请求头、key、prompt 原文或客户 payload，先脱敏再分享。
+
+若配置版本、调用明细或发布记录翻页返回 422 `invalid_cursor`：
+
+1. 确认调用方没有把 cursor 用于不同资源、组织或筛选；cursor 只对原规范化 scope 有效。
+2. 确认 `LLM_CURSOR_SIGNING_KEY` 来自独立 `api.cursorSigningSecretRef`，与 runtime/Provider Secret 不同，且所有 API replica 指向同一 Secret name/key。
+3. 若刚完成签名 key 轮换，旧 cursor 按设计失效；不要恢复旧 key 或输出 cursor payload，直接从第一页重新查询。
+4. 轮换后观察所有 API Pod rollout 完成，再做跨 replica 连续翻页 smoke；发布记录只写 Secret 引用和验证结果，不写 key 值或原始 cursor。
 
 ## 7. K8s rollout 失败
 

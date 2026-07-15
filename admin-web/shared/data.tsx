@@ -47,6 +47,11 @@ const fieldLabels: Record<string, string> = {
   task_type: "任务类型",
   retryable: "可重试",
   audit_log_id: "审计 ID",
+  release_id: "发布 ID",
+  version_number: "版本号",
+  published_at: "发布时间",
+  actor_system_user_id: "操作者 ID",
+  sensitive_access: "敏感访问",
   action: "动作",
   object_type: "对象类型",
   message: "消息"
@@ -66,7 +71,7 @@ export function renderCell(value: unknown) {
 }
 
 export function fieldLabel(field: string) {
-  return fieldLabels[field] || field;
+  return fieldLabels[field] || field.split("_").filter(Boolean).map((part) => `${part[0]?.toUpperCase() || ""}${part.slice(1)}`).join(" ");
 }
 
 export function tableEmptyState(title: string): EmptyStateProps {

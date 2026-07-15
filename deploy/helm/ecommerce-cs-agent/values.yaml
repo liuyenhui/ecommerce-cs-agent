@@ -9,6 +9,23 @@ proxy:
 api:
   replicas: 1
   envFromSecret: ecommerce-cs-agent-runtime
+  runtimeLlmSecretRef:
+    name: ecommerce-cs-agent-llm-provider
+    key: api-key
+  cursorSigningSecretRef:
+    name: ecommerce-cs-agent-llm-cursor
+    key: signing-key
+  serviceAccount:
+    create: true
+    name: ""
+    automount: true
+  secretAccess:
+    enabled: true
+    allowedSecretRefs:
+      - name: ecommerce-cs-agent-llm-provider
+        keys:
+          - key: api-key
+            allowedOrigins: []
   image:
     repository: ghcr.io/liuyenhui/ecommerce-cs-agent-api
     tag: dev

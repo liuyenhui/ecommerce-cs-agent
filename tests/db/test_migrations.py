@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -217,6 +218,274 @@ def test_decision_idempotency_scope_migration_replaces_organization_only_uniquen
     assert "drop index if exists idx_decision_record_organization_request_id" in sql
     assert "create unique index if not exists idx_decision_record_organization_store_request_id" in sql
     assert "on decision_record (organization_id, store_id, request_id)" in sql
+
+
+def test_llm_governance_migration_contains_versioned_secure_tables() -> None:
+    sql = Path("migrations/012_system_admin_llm_governance.sql").read_text(encoding="utf-8").lower()
+    compact_sql = " ".join(sql.split())
+
+    def section(start: str, end: str | None = None) -> str:
+        scoped_sql = compact_sql.split(start, maxsplit=1)[1]
+        return scoped_sql if end is None else scoped_sql.split(end, maxsplit=1)[0]
+
+    provider_sql = section(
+        "create table if not exists llm_provider_config",
+        "create table if not exists llm_config_version",
+    )
+    version_sql = section(
+        "create table if not exists llm_config_version",
+        "create table if not exists llm_scenario_route",
+    )
+    route_sql = section(
+        "create table if not exists llm_scenario_route",
+        "create table if not exists llm_connection_test",
+    )
+    connection_test_sql = section(
+        "create table if not exists llm_connection_test",
+        "create table if not exists llm_invocation_metric",
+    )
+    release_sql = section(
+        "create table if not exists llm_release_record",
+        "create table if not exists llm_scenario_route",
+    )
+    invocation_sql = section("create table if not exists llm_invocation_metric")
+    eval_sql = section(
+        "create table if not exists llm_eval_run",
+        "create table if not exists llm_release_record",
+    )
+
+    required_by_section = [
+        (provider_sql, [
+            "secret_namespace text not null",
+            "secret_name text not null",
+            "secret_key text not null",
+            "check ((enabled and status <> 'disabled') or (not enabled and status = 'disabled'))",
+        ]),
+        (version_sql, [
+            "organization_id uuid not null references organization(id) on delete restrict",
+            "unique (organization_id, version_number)",
+            "check (status in ('draft', 'validated', 'pending_publish', 'running', 'superseded', 'rolled_back'))",
+            "revision integer not null default 1 check (revision > 0)",
+            "configuration_hash char(64) not null",
+            "configuration_hash ~ '^[0-9a-f]{64}$'",
+            "created_by_system_admin_user_id uuid not null references system_admin_user(id) on delete restrict",
+            "created_at timestamptz not null default now()",
+            "published_by_system_admin_user_id uuid references system_admin_user(id) on delete restrict",
+            "published_at timestamptz",
+            "rollback_of_version_id uuid references llm_config_version(id) on delete restrict",
+            "status in ('draft', 'validated', 'pending_publish') and published_at is null and published_by_system_admin_user_id is null",
+            "status in ('running', 'superseded', 'rolled_back') and published_at is not null and published_by_system_admin_user_id is not null",
+            "rollback_of_version_id is null or rollback_of_version_id <> id",
+            "create unique index if not exists idx_llm_config_version_one_running on llm_config_version (organization_id) where status = 'running'",
+        ]),
+        (route_sql, [
+            "unique (config_version_id, scenario)",
+            "check (temperature >= 0 and temperature <= 2)",
+            "max_output_tokens integer not null default 1024 check (max_output_tokens > 0)",
+            "timeout_seconds integer not null default 30 check (timeout_seconds > 0)",
+            "max_retries integer not null default 1 check (max_retries >= 0)",
+            "circuit_breaker_threshold integer not null default 5 check (circuit_breaker_threshold > 0)",
+            "recovery_probe_seconds integer not null default 60 check (recovery_probe_seconds > 0)",
+            "create index if not exists idx_llm_scenario_route_primary_provider_model on llm_scenario_route (primary_provider_config_id, primary_model)",
+            "create index if not exists idx_llm_scenario_route_scenario on llm_scenario_route (scenario, config_version_id)",
+        ]),
+        (connection_test_sql, [
+            "provider_config_id uuid not null references llm_provider_config(id) on delete restrict",
+            "config_version_id uuid references llm_config_version(id) on delete restrict",
+            "provider_revision integer not null",
+            "checked_by_system_admin_user_id uuid not null references system_admin_user(id) on delete restrict",
+            "status text not null check (status in ('passed', 'failed'))",
+            "latency_ms integer check (latency_ms is null or latency_ms >= 0)",
+            "checked_at timestamptz not null default now()",
+            "error_code text",
+            "redacted_error_message text",
+            "create index if not exists idx_llm_connection_test_version_checked on llm_connection_test (config_version_id, checked_at desc)",
+        ]),
+        (release_sql, [
+            "evaluation_run_id varchar(128) not null",
+            "evaluation_config_version_id uuid not null",
+            "length(evaluation_run_id) <= 128",
+            "evaluation_run_id ~ '[^[:space:]]'",
+            "unique (config_version_id)",
+            "foreign key (config_version_id, organization_id)",
+            "foreign key (evaluation_run_id, organization_id, evaluation_config_version_id)",
+            "check (status in ('pending', 'running', 'superseded', 'rolled_back'))",
+            "rollback_of_release_id is null and rollback_of_version_id is null",
+            "rollback_of_release_id is not null and rollback_of_version_id is not null",
+            "create unique index if not exists idx_llm_release_record_one_running",
+            "create index if not exists idx_llm_release_record_evaluation_reference on llm_release_record (evaluation_run_id, organization_id, evaluation_config_version_id)",
+        ]),
+        (eval_sql, [
+            "id varchar(128) primary key",
+            "config_revision integer not null check (config_revision > 0)",
+            "configuration_hash char(64) not null",
+            "configuration_hash ~ '^[0-9a-f]{64}$'",
+            "foreign key (config_version_id, organization_id)",
+            "red_line_failures integer not null default 0 check (red_line_failures >= 0)",
+            "gate_status <> 'passed' or (status = 'completed' and red_line_failures = 0)",
+            "report_ref text check",
+            "completed_at is null or completed_at >= created_at",
+        ]),
+        (invocation_sql, [
+            "scenario_route_id uuid not null references llm_scenario_route(id) on delete restrict",
+            "route_role text not null check (route_role in ('primary', 'fallback'))",
+            "organization_id uuid not null references organization(id) on delete restrict",
+            "input_tokens integer not null default 0 check (input_tokens >= 0)",
+            "output_tokens integer not null default 0 check (output_tokens >= 0)",
+            "latency_ms integer not null check (latency_ms >= 0)",
+            "status text not null check (status in ('succeeded', 'failed', 'timed_out', 'rejected'))",
+            "error_code text",
+            "estimated_cost_micros bigint not null default 0 check (estimated_cost_micros >= 0)",
+            "currency char(3) not null default 'usd' check (currency in ('cny', 'usd'))",
+            "create index if not exists idx_llm_invocation_metric_route_occurred on llm_invocation_metric (scenario_route_id, occurred_at desc)",
+            "create index if not exists idx_llm_invocation_metric_organization_store_occurred on llm_invocation_metric (organization_id, store_id, occurred_at desc)",
+            "create index if not exists idx_llm_invocation_metric_store_occurred on llm_invocation_metric (store_id, occurred_at desc)",
+            "create index if not exists idx_llm_invocation_metric_occurred on llm_invocation_metric (occurred_at desc)",
+            "conrelid = 'llm_invocation_metric'::regclass",
+            "create or replace function validate_llm_invocation_metric_route_role()",
+            "new.route_role = 'fallback'",
+            "join llm_config_version as route_version",
+            "route_version.status = 'running'",
+            "route_version.organization_id = new.organization_id",
+            "route.fallback_provider_config_id is not null",
+            "route.fallback_model is not null",
+            "create trigger trg_validate_llm_invocation_metric_route_role",
+            "before insert on llm_invocation_metric",
+            "create or replace function protect_llm_invocation_metric_history()",
+            "invocation metrics are append-only",
+            "create trigger trg_protect_llm_invocation_metric_history",
+            "before update or delete on llm_invocation_metric",
+            "create or replace function protect_llm_scenario_route_history()",
+            "metric.scenario_route_id = old.id",
+            "route_version.status = 'draft'",
+            "route_version.status <> 'draft'",
+            "create trigger trg_protect_llm_scenario_route_history",
+            "before insert or update or delete on llm_scenario_route",
+            "create or replace function validate_llm_config_version_transition()",
+            "create or replace function lock_llm_config_versions",
+            "version rows in uuid order, then version advisory locks",
+            "order by route_version.id::text for key share",
+            "perform lock_llm_config_versions",
+            "new.id is distinct from old.id",
+            "rollback_target.organization_id = new.organization_id",
+            "rollback_target.status in ('superseded', 'rolled_back')",
+            "for key share",
+            "old.status = 'draft' and new.status = 'validated'",
+            "old.status = 'validated' and new.status = 'pending_publish'",
+            "old.status = 'pending_publish' and new.status = 'running'",
+            "old.status = 'running' and new.status in ('superseded', 'rolled_back')",
+            "new.status = old.status and old.status in ('draft', 'validated', 'pending_publish')",
+            "new.revision <> old.revision + 1",
+            "new.status <> 'draft' or new.revision <> 1",
+            "if tg_op = 'delete'",
+            "old.status <> 'draft'",
+            "old.status = 'draft' and new.status = 'draft'",
+            "new.configuration_hash is distinct from old.configuration_hash",
+            "new.description is distinct from old.description",
+            "new.created_by_system_admin_user_id is distinct from old.created_by_system_admin_user_id",
+            "new.created_at is distinct from old.created_at",
+            "config version creation metadata is immutable",
+            "new.rollback_of_version_id is distinct from old.rollback_of_version_id",
+            "old.status = 'pending_publish' and new.status = 'running'",
+            "new.published_by_system_admin_user_id is null or new.published_at is null",
+            "new.published_by_system_admin_user_id is distinct from old.published_by_system_admin_user_id",
+            "new.published_at is distinct from old.published_at",
+            "create trigger trg_validate_llm_config_version_transition",
+            "before insert or update or delete on llm_config_version",
+        ]),
+    ]
+    for scoped_sql, required_snippets in required_by_section:
+        for snippet in required_snippets:
+            assert snippet in scoped_sql
+
+    assert invocation_sql.count("perform lock_llm_config_versions") >= 3
+    assert "create or replace function protect_llm_release_record_history()" in compact_sql
+    assert "create or replace function protect_llm_eval_run_history()" in compact_sql
+    assert "evaluation run history is immutable" in compact_sql
+    assert "evaluation runs require a validated config version snapshot" in compact_sql
+    assert "new.config_revision <> version_revision" in compact_sql
+    assert "new.configuration_hash is distinct from version_configuration_hash" in compact_sql
+    assert "new.config_revision is distinct from old.config_revision" in compact_sql
+    assert "new.configuration_hash is distinct from old.configuration_hash" in compact_sql
+    assert "new.evaluation_config_version_id is distinct from old.evaluation_config_version_id" in compact_sql
+    assert "new.evaluation_config_version_id <> new.config_version_id" in compact_sql
+    assert "new.evaluation_config_version_id <> new.rollback_of_version_id" in compact_sql
+    assert "release records require a completed passing evaluation snapshot" in compact_sql
+    assert "terminal release records are immutable" in compact_sql
+    assert "source.config_version_id = new.rollback_of_version_id" in compact_sql
+    assert "source.status in ('superseded', 'rolled_back')" in compact_sql
+    assert "for key share of source, source_version" not in compact_sql
+    assert "target_version.rollback_of_version_id is not distinct from new.rollback_of_version_id" in compact_sql
+    assert "perform lock_llm_config_versions(new.config_version_id)" in compact_sql
+    assert "perform lock_llm_config_versions(old.config_version_id)" in compact_sql
+    assert "create or replace function validate_llm_release_version_consistency()" in compact_sql
+    assert "draft and validated config versions must not have release records" in compact_sql
+    assert "pending_publish config versions require exactly one pending release record" in compact_sql
+    assert "terminal config version and release record statuses must match" in compact_sql
+    assert "create constraint trigger trg_llm_release_version_consistency" in compact_sql
+    assert "deferrable initially deferred" in compact_sql
+    assert compact_sql.count("create constraint trigger trg_llm_release_version_consistency") == 2
+    assert "create or replace function protect_llm_connection_test_history()" in compact_sql
+    assert "new.provider_revision <> provider_revision_snapshot" in compact_sql
+    assert "connection test history is immutable" in compact_sql
+    assert "create trigger trg_protect_llm_connection_test_history" in compact_sql
+    assert "before insert or update or delete on llm_connection_test" in compact_sql
+    assert "create or replace function protect_llm_provider_endpoint()" in compact_sql
+    assert "provider endpoint and secret reference are immutable" in compact_sql
+    provider_history_sql = compact_sql.split(
+        "create or replace function protect_llm_provider_endpoint()",
+        maxsplit=1,
+    )[1]
+    assert "new.id is distinct from old.id" in provider_history_sql
+    assert "new.created_at is distinct from old.created_at" in provider_history_sql
+    assert "provider identity and creation metadata are immutable" in provider_history_sql
+
+    postgres_test_source = Path("tests/db/test_migrations_postgres.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'os.environ.get("TEST_DATABASE_URL")' in postgres_test_source
+    assert 'os.environ.get("DATABASE_URL")' not in postgres_test_source
+    assert "set TEST_DATABASE_URL to run PostgreSQL migration integration tests" in postgres_test_source
+
+    for redundant_attribution_column in [
+        "provider_config_id uuid",
+        "config_version_id uuid",
+        "model text",
+        "scenario text",
+        "estimated_cost_minor",
+    ]:
+        assert redundant_attribution_column not in invocation_sql
+
+    column_names = {
+        match.group(1)
+        for line in sql.splitlines()
+        if (match := re.match(
+            r"\s*([a-z_][a-z0-9_]*)\s+(?:uuid|text|varchar|jsonb|bytea|boolean|integer|bigint|numeric|timestamptz|char)\b",
+            line,
+        ))
+    }
+    forbidden_column_patterns = [
+        r"(^|_)secret_value($|_)",
+        r"(^|_)prompt($|_)",
+        r"(^|_)customer_message($|_)",
+        r"(^|_)model_(?:response|output)($|_)",
+        r"^(?:request|response)$",
+        r"(^|_)(?:request|response)_(?:body|payload|content|text|data|raw)($|_)",
+        r"(^|_)raw_payload($|_)",
+        r"^(?:content|body)$",
+    ]
+    for column_name in column_names:
+        assert not any(re.search(pattern, column_name) for pattern in forbidden_column_patterns), column_name
+
+
+def test_llm_governance_postgres_concurrency_tests_observe_real_lock_waits() -> None:
+    postgres_test_sql = Path("tests/db/test_migrations_postgres.py").read_text(encoding="utf-8").lower()
+
+    assert "application_name" in postgres_test_sql
+    assert "def wait_for_backend_lock" in postgres_test_sql
+    assert "from pg_stat_activity" in postgres_test_sql
+    assert "wait_event_type = 'lock'" in postgres_test_sql
+    assert postgres_test_sql.count("wait_for_backend_lock(") >= 3
 
 
 def test_legacy_runtime_defaults_migration_contains_not_null_defaults() -> None:

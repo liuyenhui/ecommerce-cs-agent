@@ -578,6 +578,23 @@ GET /v1/admin/audit-logs
 
 Admin API 必须校验 Agent 自有用户身份、租户、店铺和角色权限。外部系统接入 token 和系统 Admin session 不能直接访问 `/v1/admin/*`。open_erp_agent 微信桥接只通过服务间 launch ticket 进入 Customer Admin：不得共享 Cookie、不得读取微信/PDD session、不得让 Customer Admin 读取 open_erp_agent SQLite，兑换成功后只设置 `agent_admin_session`，不得设置或读取 `agent_system_admin_session`。Customer Admin OIDC API 只确认 Fcihome Account 身份：已绑定 `admin_user.fcihome_account_sub` 的 active 用户可登录；未绑定时，仅当 OIDC email 精确匹配唯一 active `admin_user` 才允许绑定并写审计；不得自动创建租户、店铺或角色权限。`POST /v1/admin/auth/oidc/link` 必须由后端校验 OIDC code / state / PKCE 并换取 userinfo 后再绑定，不能信任前端直接提交的 subject 或 email。所有商品资料、知识审核、规则配置、动作能力配置、店铺设置、launch 兑换和 OIDC 绑定写操作都应记录操作者、租户、店铺、对象、动作和时间；审计不得记录 token、code、Cookie、client_secret、密码或完整 OIDC 响应。未登录访问客户后台 `/admin` 必须回到客户后台 `/login`，登录成功后如果用户有多个租户或店铺，应先选择上下文再进入后台首页。系统后台如需代客户操作，必须走 `/v1/system-admin/*` 专用接口并写系统审计，不得伪装客户用户调用 `/v1/admin/*`。
 
+### System Admin 运营与 LLM 治理
+
+当前 System Admin 前端固定为九个一级任务页面：系统总览、租户与店铺、配置完成度、LLM 治理、评测与发布、决策追踪、任务中心、安全审计、系统健康。桌面导航可折叠为 64px 图标栏，移动端使用受焦点管理的模态抽屉。页面只消费真实 API；无数据时显示空态，支持 loading、partial、permission/error 等互斥状态，不注入 demo 租户、统计或曲线。Customer/System route guard 分别只调用 `/v1/admin/auth/me` 与 `/v1/system-admin/auth/me`，并使用隔离的 `agent_admin_session` 与 `agent_system_admin_session`。
+
+已实现运营接口是 `/v1/system-admin/organizations`、`/stores`、`/readiness/stores`、`/dashboard-summary`、`/message-traces`、`/tasks`、`/audit-logs`（含 `action_prefix`）和 `/health`；页式列表使用 `page/page_size/total`。当前没有 `/v1/system-admin/tenants`、组织/店铺 PATCH、客户管理员邀请/禁用恢复、独立 eval list/create、通用 release 或 API-key 轮换接口。
+
+LLM 治理接口如下，字段和角色最终以 [OpenAPI Contract](openapi.yaml) 为准：
+
+- Provider：`GET/POST /v1/system-admin/llm/providers`、`PATCH /v1/system-admin/llm/providers/{provider_id}`、`POST .../{provider_id}/connection-tests`。Provider 响应返回 Kubernetes `secret_ref{namespace,name,key}`，永不返回 Secret 值。读角色为 `super_admin/release_admin/technical_support/security_auditor`；写角色为 `super_admin/release_admin`；`technical_support` 额外可执行连接测试。
+- 配置版本：`GET /v1/system-admin/llm/config-versions?organization_id=<uuid>`、`GET .../{version_id}`、`POST .../drafts`、`PUT|PATCH .../{version_id}/routes`、`POST .../{version_id}/validate|submit-publish|publish|rollback`。版本/发布列表的 `organization_id` 是必填 canonical UUID，使用 `limit/cursor`，不是 `page`。
+- 发布记录：`GET /v1/system-admin/llm/releases?organization_id=<uuid>` 返回真实持久化记录。发布提交必须携带 `evaluation_run_id`，服务端验证评测 snapshot 与相同组织、配置版本、revision/hash 绑定且门禁通过；当前没有独立评测 list/create workflow。
+- 用量：`GET /v1/system-admin/llm/usage/summary|timeseries|breakdown|invocations`。共享时间、Provider、模型、场景、组织、店铺、币种、状态和主/降级筛选；`breakdown` 另要求 `group_by`，invocations 使用 `limit/cursor`。状态包含 `succeeded`、`failed`、`timed_out`、`rejected`。
+
+所有 LLM 写请求包含 `reason`、`idempotency_key`；更新型请求还包含 `expected_revision`，旧 revision 返回 409 `stale_revision`。状态流为 `draft -> validated -> pending_publish -> running`，历史可进入 `superseded` / `rolled_back`；回滚创建新的 running 版本和发布记录，不重写历史。同动作、同幂等键和同请求安全重放，不同请求复用返回 409。
+
+版本、调用明细和真实发布记录的 cursor 是 `payload.signature` HMAC-SHA256 不透明令牌，绑定资源类型与规范化查询 scope；无签名、篡改、跨资源或跨筛选复用返回 422。`LLM_CURSOR_SIGNING_KEY` 从独立 Secret 注入，至少 32 字节且多 replica 一致；轮换后旧 cursor 失效，客户端从第一页重查。用量无记录时 calls/Token 为 0、比率/P95 为 null、列表为空；混合币种时总 `estimated_cost_micros` 为 null，按 `cost_by_currency` 表达。调用明细只返回模型与成本元数据，不返回 Prompt、客户消息、模型回复或 Secret。
+
 ### 商品资料维护
 
 商品资料维护属于第一版 Admin/API 能力，不扩大同步决策接口。接口方向如下：

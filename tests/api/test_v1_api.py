@@ -9,11 +9,11 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from ecommerce_cs_agent.api.app import create_app
+from tests.admin_fixtures import create_test_app
 
 
 def client() -> TestClient:
-    app = create_app()
+    app = create_test_app()
     return TestClient(app)
 
 

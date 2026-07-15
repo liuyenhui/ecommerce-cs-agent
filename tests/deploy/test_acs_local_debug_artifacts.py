@@ -1,5 +1,9 @@
+import base64
 import json
+import os
 from pathlib import Path
+import stat
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,6 +30,9 @@ def test_local_acs_env_script_uses_k3s_secret_without_printing_values():
     assert "ACS_DEV_NAMESPACE" in script
     assert "ecommerce-cs-agent-dev" in script
     assert "ecommerce-cs-agent-runtime" in script
+    assert "ecommerce-cs-agent-llm-cursor" in script
+    assert "signing-key" in script
+    assert "LLM_CURSOR_SIGNING_KEY" in script
     assert "DATABASE_URL" in script
     assert "OBJECT_STORAGE_ENDPOINT" in script
     assert "127.0.0.1" in script
@@ -38,6 +45,51 @@ def test_local_acs_env_script_uses_k3s_secret_without_printing_values():
 
     gitignore = (ROOT / ".gitignore").read_text()
     assert ".local/" in gitignore
+
+
+def test_local_acs_env_script_merges_cursor_secret_without_printing_values(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_kubectl = fake_bin / "kubectl"
+    runtime_data = {
+        "DATABASE_URL": base64.b64encode(
+            b"postgresql://cs_agent:fake-password@postgres:5432/cs_agent"
+        ).decode(),
+    }
+    cursor_value = "fake-local-cursor-signing-key-1234567890"
+    cursor_data = {"signing-key": base64.b64encode(cursor_value.encode()).decode()}
+    fake_kubectl.write_text(
+        "#!/bin/sh\n"
+        "case \"$*\" in\n"
+        f"  *ecommerce-cs-agent-runtime*) printf '%s' '{json.dumps({'data': runtime_data})}' ;;\n"
+        f"  *ecommerce-cs-agent-llm-cursor*) printf '%s' '{json.dumps({'data': cursor_data})}' ;;\n"
+        "  *) exit 2 ;;\n"
+        "esac\n"
+    )
+    fake_kubectl.chmod(fake_kubectl.stat().st_mode | stat.S_IXUSR)
+    output_file = tmp_path / "acs-runtime.env"
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+        "ACS_LOCAL_ENV_FILE": str(output_file),
+        "ACS_DEV_KUBECONFIG": str(tmp_path / "kubeconfig"),
+    }
+
+    completed = subprocess.run(
+        ["node", str(ROOT / "scripts" / "acs_local_env.mjs")],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    env_text = output_file.read_text()
+    assert "export LLM_CURSOR_SIGNING_KEY='fake-local-cursor-signing-key-1234567890'" in env_text
+    assert cursor_value not in completed.stdout
+    assert cursor_value not in completed.stderr
+    assert stat.S_IMODE(output_file.stat().st_mode) == 0o600
 
 
 def test_local_acs_port_forward_script_targets_dev_services():

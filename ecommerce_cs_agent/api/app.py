@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone
+import os
 from typing import Any, Callable
 import uuid
 
@@ -23,6 +24,7 @@ from ecommerce_cs_agent.api.error_codes import (
     ECS_OE_003,
 )
 from ecommerce_cs_agent.api.errors import api_error
+from ecommerce_cs_agent.api.system_admin_llm import register_system_admin_llm_routes
 from ecommerce_cs_agent.core.config import Settings, load_settings
 from ecommerce_cs_agent.core.passwords import password_matches
 from ecommerce_cs_agent.services import oidc as oidc_service
@@ -32,23 +34,97 @@ from ecommerce_cs_agent.services.decision import DecisionService
 from ecommerce_cs_agent.services.object_storage import ObjectStorageUnavailable, ObjectStorageValidationError
 from ecommerce_cs_agent.services.open_erp_integration import BillingLeaseError, OpenErpIntegrationService
 from ecommerce_cs_agent.services.product_analysis import product_document_analyzer_for
-from ecommerce_cs_agent.services.system_admin import system_admin_repository_for
+from ecommerce_cs_agent.services.system_admin import normalize_task_retry_payload, system_admin_repository_for
+from ecommerce_cs_agent.services.llm_governance import (
+    InMemoryLlmGovernanceRepository,
+    LlmGovernanceRepository,
+    PostgresLlmGovernanceRepository,
+)
+from ecommerce_cs_agent.services.llm_governance_adapters import (
+    KubernetesSecretProviderConnectionTester,
+    PostgresEvaluationReleaseGateChecker,
+)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    admin_auth_service_override: Any | None = None,
+    system_admin_auth_service_override: Any | None = None,
+    system_admin_repository_override: Any | None = None,
+    llm_governance_repository: LlmGovernanceRepository | None = None,
+    llm_connection_tester: Callable[[dict[str, Any], dict[str, int]], dict[str, Any]] | None = None,
+    llm_release_gate_checker: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
+) -> FastAPI:
     settings = settings or load_settings()
     app = FastAPI(title="ecommerce-cs-agent", version="0.1.0")
     decisions = DecisionService(settings)
     admin_data = admin_repository_for(settings)
     product_analyzer = product_document_analyzer_for(settings)
-    admin_auth = admin_auth_service_for(settings)
-    system_admin_auth = system_admin_auth_service_for(settings)
-    system_admin_data = system_admin_repository_for(settings)
+    if settings.environment.lower() != "test" and any(
+        item is not None
+        for item in (
+            admin_auth_service_override,
+            system_admin_auth_service_override,
+            system_admin_repository_override,
+        )
+    ):
+        raise RuntimeError("Admin service injection is test-only")
+    admin_auth = admin_auth_service_override or admin_auth_service_for(settings)
+    system_admin_auth = system_admin_auth_service_override or system_admin_auth_service_for(settings)
+    system_admin_data = system_admin_repository_override or system_admin_repository_for(settings)
+    if llm_governance_repository is not None and settings.environment.lower() != "test":
+        raise RuntimeError("LLM governance repository injection is test-only outside production wiring")
+    if llm_governance_repository is not None:
+        llm_governance = llm_governance_repository
+    elif settings.environment.lower() == "test":
+        llm_governance = InMemoryLlmGovernanceRepository(
+            cursor_signing_key=settings.llm_cursor_signing_key or "test-only-fixed-llm-cursor-signing-key",
+            connection_tester=llm_connection_tester or (
+                lambda _provider, _request: {
+                    "status": "failed", "latency_ms": 0, "error_code": "tester_unavailable"
+                }
+            ),
+            release_gate_checker=llm_release_gate_checker or (
+                lambda _version, _run_id: {"status": "failed", "error_code": "release_gate_unavailable"}
+            ),
+        )
+    else:
+        if not settings.database_url:
+            raise RuntimeError("DATABASE_URL is required for System Admin LLM governance outside test")
+        if not settings.llm_cursor_signing_key:
+            raise RuntimeError("LLM_CURSOR_SIGNING_KEY is required for System Admin LLM governance outside test")
+        local_acs_debug = (
+            settings.environment.lower() in {"development", "dev"}
+            and os.environ.get("ACS_DEBUG_MODE") == "local-acs"
+        )
+        connection_tester = llm_connection_tester
+        if connection_tester is None and local_acs_debug:
+            connection_tester = lambda _provider, _request: {
+                "status": "failed",
+                "latency_ms": 0,
+                "error_code": "tester_unavailable",
+            }
+        if connection_tester is None:
+            connection_tester = KubernetesSecretProviderConnectionTester.from_environment()
+        release_gate_checker = llm_release_gate_checker or PostgresEvaluationReleaseGateChecker(
+            settings.database_url
+        )
+        llm_governance = PostgresLlmGovernanceRepository(
+            settings.database_url,
+            cursor_signing_key=settings.llm_cursor_signing_key,
+            connection_tester=connection_tester,
+            release_gate_checker=release_gate_checker,
+        )
     open_erp = OpenErpIntegrationService(settings)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
-        return _error_response(422, "validation_error", "request validation failed", {"details": exc.errors()})
+        details = [
+            {"type": item.get("type"), "loc": list(item.get("loc", ())), "msg": item.get("msg")}
+            for item in exc.errors()
+        ]
+        return _error_response(422, "validation_error", "request validation failed", {"details": details})
 
     @app.exception_handler(HTTPException)
     async def http_error_handler(_request: Request, exc: HTTPException) -> JSONResponse:
@@ -594,6 +670,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def get_system_health(session: Any = Depends(system_session)) -> dict[str, Any]:
         return system_admin_data.system_health(session)
 
+    @app.get("/v1/system-admin/dashboard-summary")
+    def get_system_dashboard_summary(session: Any = Depends(system_session)) -> dict[str, Any]:
+        return system_admin_data.dashboard_summary(session)
+
     @app.get("/v1/system-admin/readiness/stores")
     def list_system_store_readiness(request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
         return system_admin_data.store_readiness(session, _query_filters(request))
@@ -647,11 +727,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def retry_system_task(task_id: str, _request: Request, session: Any = Depends(system_session)) -> JSONResponse:
         payload = await _request.json()
         _require_fields(payload, ["idempotency_key", "reason"])
+        payload = normalize_task_retry_payload(payload)
         return JSONResponse(status_code=202, content=system_admin_data.retry_task(session, task_id, payload))
 
     @app.get("/v1/system-admin/audit-logs")
     def list_system_audit_logs(request: Request, session: Any = Depends(system_session)) -> dict[str, Any]:
         return system_admin_data.list_audit_logs(session, _query_filters(request))
+
+    register_system_admin_llm_routes(app, llm_governance, system_session)
 
     for method, path in [
         ("POST", "/v1/events/messages"),
@@ -741,49 +824,6 @@ def _normalize_reply_decision_payload(payload: dict[str, Any]) -> dict[str, Any]
 
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _admin_user() -> dict[str, Any]:
-    return {
-        "id": "admin-001",
-        "email": "admin@example.test",
-        "name": "Customer Admin",
-        "role": "owner",
-        "status": "active",
-    }
-
-
-def _system_user() -> dict[str, Any]:
-    return {
-        "id": "sysadmin-001",
-        "email": "system-admin@example.test",
-        "name": "System Admin",
-        "role": "super_admin",
-        "status": "active",
-    }
-
-
-def _organization() -> dict[str, Any]:
-    return {"id": "org-001", "name": "Demo Organization", "status": "active", "metadata": {}}
-
-
-def _store() -> dict[str, Any]:
-    return {
-        "id": "store-001",
-        "organization_id": "org-001",
-        "name": "Demo PDD Store",
-        "platform": "pdd",
-        "status": "active",
-        "metadata": {},
-    }
-
-
-def _admin_auth_payload() -> dict[str, Any]:
-    return {"user": _admin_user(), "organizations": [_organization()], "stores": [_store()]}
-
-
-def _system_me_payload() -> dict[str, Any]:
-    return {"user": _system_user(), "permissions": ["system:read", "system:write"]}
 
 
 def _audit_log(log_type: str, actor_id: str) -> dict[str, Any]:

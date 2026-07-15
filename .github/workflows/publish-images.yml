@@ -119,7 +119,7 @@ jobs:
         run: DATABASE_URL="$PG_DSN" python -m ecommerce_cs_agent.db.cli migrate
 
       - name: Run tests
-        run: APP_ENV=test DATABASE_URL="$PG_DSN" pytest
+        run: APP_ENV=test DATABASE_URL="$PG_DSN" TEST_DATABASE_URL="$PG_DSN" pytest
 
       - name: Set up Helm
         uses: azure/setup-helm@v5

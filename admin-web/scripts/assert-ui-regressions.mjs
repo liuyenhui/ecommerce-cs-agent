@@ -8,6 +8,9 @@ const root = path.resolve(adminRoot, '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const customerApp = read('admin-web/customer-admin/src/App.tsx');
 const systemApp = read('admin-web/system-admin/src/App.tsx');
+const systemWorkspace = read('admin-web/system-admin/src/SystemWorkspace.tsx');
+const systemApi = read('admin-web/system-admin/src/system-api.ts');
+const systemTraces = read('admin-web/system-admin/src/pages/TracesPage.tsx');
 const sharedComponents = read('admin-web/shared/components.tsx');
 const sharedData = read('admin-web/shared/data.tsx');
 const sharedTraceReplay = read('admin-web/shared/trace-replay.tsx');
@@ -70,7 +73,7 @@ const checks = [
   ['Node detail keeps technical fields collapsed and never renders raw node errors', sharedTraceReplay.includes('<details className="traceNodeTechnicalDetails">') && sharedTraceReplay.includes('<summary>技术详情</summary>') && !sharedTraceReplay.includes('错误：{String(node.error)}')],
   ['Decision graph node subtitles use fixed business copy instead of raw refs', sharedTraceReplay.includes('businessNodeNote(node.id') && !sharedTraceReplay.includes('summarizeRefs(node.outputs_ref)') && !sharedTraceReplay.includes('summarizeRefs(node.inputs_ref)')],
   ['Customer styles do not duplicate shared drawer and graph rules', !read('admin-web/customer-admin/src/styles.css').includes('.messageTraceDrawer') && !read('admin-web/customer-admin/src/styles.css').includes('.decisionGraph')],
-  ['System Admin decision trace detail fetches per-decision replay and renders the shared graph', systemApp.includes('/v1/system-admin/message-traces/${decisionId}') && systemApp.includes('DecisionTraceReplay') && systemApp.includes('traceDetail')],
+  ['System Admin decision trace detail fetches per-decision replay and renders the shared graph', systemApi.includes('`${SYSTEM_ADMIN_URLS.traces}/${encodeURIComponent(decisionId)}`') && systemTraces.includes('DecisionTraceReplay') && systemWorkspace.includes('traceDetail')],
   ['Product content renders a product list and upload CTA', productContent.includes('上传商品') && productContent.includes('DataTable') && productContent.includes('商品列表')],
   ['Product content no longer exposes manual maintenance forms', !productContent.includes('保存商品') && !productContent.includes('登记资产') && !productContent.includes('转换并抽取') && !productContent.includes('保存价格快照')],
   ['DataTable cells expose mobile data labels', sharedComponents.includes('data-label={fieldLabel(field)}') && sharedComponents.includes('data-label="操作"')],

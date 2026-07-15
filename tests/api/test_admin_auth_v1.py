@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from ecommerce_cs_agent.api.app import create_app
+from tests.admin_fixtures import create_test_app
 
 
 def test_customer_admin_login_creates_server_session_and_me_matches_openapi_shape() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_test_app())
 
     login = client.post(
         "/v1/admin/auth/login",
@@ -32,7 +32,7 @@ def test_customer_admin_login_creates_server_session_and_me_matches_openapi_shap
 
 
 def test_customer_admin_logout_revokes_server_session() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_test_app())
     login = client.post(
         "/v1/admin/auth/login",
         json={"email": "admin@example.test", "password": "admin-password"},
@@ -47,7 +47,7 @@ def test_customer_admin_logout_revokes_server_session() -> None:
 
 
 def test_admin_context_lists_use_openapi_response_shapes() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_test_app())
     login = client.post(
         "/v1/admin/auth/login",
         json={"email": "admin@example.test", "password": "admin-password"},
@@ -67,7 +67,7 @@ def test_admin_context_lists_use_openapi_response_shapes() -> None:
 
 
 def test_admin_store_settings_invitation_roles_and_audit_are_not_static() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_test_app())
     login = client.post(
         "/v1/admin/auth/login",
         json={"email": "admin@example.test", "password": "admin-password"},
