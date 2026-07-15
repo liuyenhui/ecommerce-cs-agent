@@ -141,6 +141,56 @@ def test_provider_create_list_update_redacts_secret_and_uses_revision(monkeypatc
     assert "Authorization" not in flattened
 
 
+@pytest.mark.parametrize(
+    "secret_ref",
+    [
+        {"namespace": "Bad_Name", "name": "llm-provider", "key": "api-key"},
+        {"namespace": "runtime", "name": "a..b", "key": "api-key"},
+        {"namespace": "runtime", "name": "Upper", "key": "api-key"},
+        {"namespace": "a" * 64, "name": "llm-provider", "key": "api-key"},
+        {"namespace": "runtime", "name": "a" * 64, "key": "api-key"},
+        {"namespace": "runtime", "name": "llm-provider", "key": ""},
+    ],
+)
+def test_provider_create_rejects_invalid_kubernetes_secret_references_before_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+    secret_ref: dict[str, str],
+) -> None:
+    client, service = _client(monkeypatch)
+
+    response = client.post(
+        "/v1/system-admin/llm/providers",
+        headers=SYSTEM_HEADERS,
+        json={**PROVIDER, "secret_ref": secret_ref},
+    )
+
+    assert response.status_code == 422
+    assert service.providers == {}
+
+
+def test_provider_create_accepts_maximum_legal_kubernetes_secret_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, service = _client(monkeypatch)
+    secret_name = ".".join(["a" * 63, "b" * 63, "c" * 63, "d" * 61])
+
+    response = client.post(
+        "/v1/system-admin/llm/providers",
+        headers=SYSTEM_HEADERS,
+        json={
+            **PROVIDER,
+            "secret_ref": {
+                "namespace": "a" * 63,
+                "name": secret_name,
+                "key": "K" * 253,
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    assert len(service.providers) == 1
+
+
 @pytest.mark.parametrize("sensitive_field", ["secret_value", "authorization", "prompt"])
 def test_provider_request_rejects_sensitive_or_unknown_fields(monkeypatch: pytest.MonkeyPatch, sensitive_field: str) -> None:
     client, _service = _client(monkeypatch)

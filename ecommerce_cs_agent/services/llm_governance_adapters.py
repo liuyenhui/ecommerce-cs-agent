@@ -21,12 +21,16 @@ from urllib.request import Request
 
 import psycopg
 
+from ecommerce_cs_agent.services.kubernetes_secret_refs import (
+    is_dns1123_label,
+    is_dns1123_subdomain,
+    is_kubernetes_data_key,
+)
+
 
 KubernetesTransport = Callable[[Request, "_Deadline", str | None], tuple[int, bytes]]
 ProviderTransport = Callable[[Request, "_Deadline", str, str], tuple[int, bytes]]
 Resolver = Callable[[str, int, float], list[str]]
-_SECRET_REF = re.compile(r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$")
-_SECRET_KEY = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
 _MAX_RESPONSE_BYTES = 1024 * 1024
 _KUBERNETES_TLS_SERVER_NAME = "kubernetes.default.svc"
 
@@ -460,7 +464,7 @@ class KubernetesSecretProviderConnectionTester:
             raise RuntimeError("Kubernetes in-cluster host and port are required")
         if not Path(service_account_token_file).is_file() or not Path(kubernetes_ca_file).is_file():
             raise RuntimeError("Kubernetes in-cluster token and CA files are required")
-        if not self._valid_ref(allowed_namespace) or not allowed_secret_origins:
+        if not self._valid_namespace(allowed_namespace) or not allowed_secret_origins:
             raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
         canonical_bindings: dict[tuple[str, str], frozenset[str]] = {}
         try:
@@ -540,11 +544,15 @@ class KubernetesSecretProviderConnectionTester:
 
     @staticmethod
     def _valid_ref(value: Any) -> bool:
-        return isinstance(value, str) and len(value) <= 253 and bool(_SECRET_REF.fullmatch(value))
+        return is_dns1123_subdomain(value)
+
+    @staticmethod
+    def _valid_namespace(value: Any) -> bool:
+        return is_dns1123_label(value)
 
     @staticmethod
     def _valid_secret_key(value: Any) -> bool:
-        return isinstance(value, str) and bool(_SECRET_KEY.fullmatch(value))
+        return is_kubernetes_data_key(value)
 
     @classmethod
     def _parse_allowed_secret_refs(
@@ -605,7 +613,7 @@ class KubernetesSecretProviderConnectionTester:
     def _resolve_secret(self, reference: Mapping[str, Any], deadline: _Deadline) -> str:
         namespace, name, key = (reference.get(field) for field in ("namespace", "name", "key"))
         if (
-            not self._valid_ref(namespace)
+            not self._valid_namespace(namespace)
             or not self._valid_ref(name)
             or not self._valid_secret_key(key)
         ):

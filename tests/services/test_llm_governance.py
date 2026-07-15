@@ -241,6 +241,45 @@ def test_provider_url_rejects_credentials_query_fragment_and_non_https(base_url:
     assert invalid.value.detail["error"]["code"] == "invalid_provider_url"
 
 
+@pytest.mark.parametrize(
+    "secret_ref",
+    [
+        {"namespace": "Bad_Name", "name": "llm", "key": "api-key"},
+        {"namespace": "runtime", "name": "a..b", "key": "api-key"},
+        {"namespace": "runtime", "name": "Upper", "key": "api-key"},
+        {"namespace": "a" * 64, "name": "llm", "key": "api-key"},
+        {"namespace": "runtime", "name": "a" * 64, "key": "api-key"},
+        {"namespace": "runtime", "name": "llm", "key": ""},
+    ],
+)
+def test_direct_service_provider_writes_reject_invalid_secret_references(
+    secret_ref: dict[str, str],
+) -> None:
+    service = InMemoryLlmGovernanceRepository()
+    with pytest.raises(HTTPException) as invalid_create:
+        service.create_provider(
+            _session(),
+            {**PROVIDER_PAYLOAD, "secret_ref": secret_ref},
+        )
+    assert invalid_create.value.status_code == 422
+    assert service.providers == {}
+
+    provider = _create_provider(service, name="valid-provider", idem="valid-provider")
+    with pytest.raises(HTTPException) as invalid_update:
+        service.update_provider(
+            _session(),
+            provider["provider_id"],
+            {
+                "secret_ref": secret_ref,
+                "reason": "reject invalid secret reference",
+                "idempotency_key": f"invalid-secret-update-{len(str(secret_ref))}",
+            },
+            expected_revision=1,
+        )
+    assert invalid_update.value.status_code == 422
+    assert service.providers[provider["provider_id"]]["revision"] == 1
+
+
 def test_provider_endpoint_is_immutable_and_revision_change_requires_retest() -> None:
     service = InMemoryLlmGovernanceRepository()
     provider = _create_provider(service, name="immutable", idem="immutable-provider")

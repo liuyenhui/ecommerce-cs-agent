@@ -360,6 +360,29 @@ def test_kubernetes_secret_tester_rejects_non_dns_subdomain_secret_names(invalid
         )
 
 
+@pytest.mark.parametrize("invalid_namespace", ["runtime.dev", "Bad_Name", "a" * 64, "", "-runtime"])
+def test_kubernetes_secret_tester_rejects_non_dns_label_namespaces(
+    tmp_path: Path,
+    invalid_namespace: str,
+) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("service-account-token", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="namespace and Secret allowlist"):
+        KubernetesSecretProviderConnectionTester(
+            kubernetes_host="10.96.0.1",
+            kubernetes_port=443,
+            service_account_token_file=str(token_file),
+            kubernetes_ca_file=str(ca_file),
+            allowed_namespace=invalid_namespace,
+            allowed_secret_origins={
+                ("runtime.provider", "api-key"): {"https://models.example.test"}
+            },
+        )
+
+
 @pytest.mark.parametrize(
     "allowed_refs",
     [

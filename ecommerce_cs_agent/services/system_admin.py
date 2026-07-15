@@ -1623,8 +1623,6 @@ def _readiness_item(
             _check("product_content", has_product, "商品资料已配置", "缺少商品资料"),
             _check("price_snapshot", has_price, "价格快照已配置", "缺少价格快照"),
             _check("knowledge_review", has_knowledge, "已审核知识可召回", "缺少已审核知识"),
-            _check("rules", True, "v1 默认规则已启用", "缺少规则配置", missing_status="warning"),
-            _check("action_capabilities", True, "v1 动作边界已启用", "缺少动作能力配置", missing_status="warning"),
             _check("api_integration", has_api_integration, "API 接入已配置", "缺少 API 接入凭据", missing_status="warning"),
         ],
     }

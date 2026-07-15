@@ -17,6 +17,7 @@ from psycopg.types.json import Jsonb
 
 from ecommerce_cs_agent.api.errors import api_error
 from ecommerce_cs_agent.services.admin_auth import SystemAdminSession
+from ecommerce_cs_agent.services.kubernetes_secret_refs import validate_secret_reference
 
 
 _WRITE_ROLES = {"super_admin", "release_admin"}
@@ -241,12 +242,11 @@ def _validate_provider_input(payload: dict[str, Any], *, partial: bool = False) 
             allowed[field] = payload[field]
     if "secret_ref" in payload:
         ref = payload.get("secret_ref")
-        if not isinstance(ref, dict):
-            raise api_error(422, "invalid_secret_ref", "secret_ref must be an object")
-        values = {key: _bounded_text(ref.get(key), f"secret_{key}", 253) for key in ("namespace", "name", "key")}
-        if not all(values.values()):
-            raise api_error(422, "invalid_secret_ref", "secret_ref namespace, name, and key are required")
-        allowed.update({"secret_namespace": values["namespace"], "secret_name": values["name"], "secret_key": values["key"]})
+        try:
+            namespace, name, key = validate_secret_reference(ref)
+        except ValueError as exc:
+            raise api_error(422, "invalid_secret_ref", str(exc)) from None
+        allowed.update({"secret_namespace": namespace, "secret_name": name, "secret_key": key})
     required = ("name", "provider_type", "base_url", "secret_namespace", "secret_name", "secret_key")
     if not partial and any(not str(allowed.get(field) or "").strip() for field in required):
         raise api_error(422, "invalid_provider", "provider name, type, base URL, and Secret reference are required")

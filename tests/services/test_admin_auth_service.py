@@ -736,10 +736,9 @@ def test_postgres_system_admin_repository_readiness_reads_db_and_returns_all_che
         "product_content",
         "price_snapshot",
         "knowledge_review",
-        "rules",
-        "action_capabilities",
         "api_integration",
     }
+    assert len(item["checks"]) == 4
     assert "FROM store st" in executed_sql
     assert "platform_account" in executed_sql
     assert "external_api_token" in executed_sql

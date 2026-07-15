@@ -127,7 +127,7 @@ System Admin / LLM 治理边界回归还必须覆盖：
 - `tests/api/test_admin_boundaries.py`：用 Python AST 检查 InMemory Admin 构造器默认空、`create_app` 不注入业务 seed，development/production 缺数据库或必需 Secret fail fast，Customer/System session 互不接受。
 - `admin-web/scripts/admin-boundary.test.mjs`：检查九页前端不含 demo fallback，Provider 编辑器只接受真实 DOM 中的 `namespace/name/key` 引用字段，并通过 TypeScript AST 拒绝 raw credential 字段；认证登录密码是唯一受控例外。
 - `tests/services/test_llm_governance.py`、`tests/api/test_system_admin_llm_v1.py` 和 `tests/contract/test_openapi_contract.py`：检查版本、发布记录、invocation cursor 的 HMAC 签名、版本号、排他边界、资源类型和规范化 scope；无签名、篡改、跨组织/跨筛选/跨资源 cursor 返回 422。
-- `tests/deploy/test_deploy_artifacts.py` 与 `tests/services/test_llm_governance_adapters.py`：检查 cursor/runtime/Provider Secret 分离、DNS-1123 名称、Kubernetes key、tuple 去重、runtime origin 自动绑定、额外 origin allowlist、固定 IP/DNS rebinding/redirect/统一 deadline 门禁。
+- `tests/api/test_system_admin_llm_v1.py`、`tests/services/test_llm_governance.py`、`tests/deploy/test_deploy_artifacts.py` 与 `tests/services/test_llm_governance_adapters.py`：检查 API/Pydantic、直接 service create/update、Helm 与 runtime adapter 一致拒绝非法 Secret 引用；namespace 使用最长 63 字符且无点的 DNS-1123 label，name 使用最长 253 字符且每段最长 63 字符的 DNS-1123 subdomain，key 使用最长 253 字符的 Kubernetes data key；并覆盖 Secret 分离、tuple 去重、origin allowlist、固定 IP/DNS rebinding/redirect/统一 deadline 门禁。
 - `tests/api/test_system_admin_v1.py` 与 `admin-web/system-admin/src/system-admin.test.tsx`：检查真实分页 total、`action_prefix`、任务 `retryable`、九项菜单、64px 折叠、移动抽屉、真实空态/partial/error、组织和筛选切换时中止旧 cursor 请求。
 
 ## 5. Mock 与 Live Eval

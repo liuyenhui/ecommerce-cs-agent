@@ -314,14 +314,13 @@ def test_system_admin_core_health_and_readiness():
     assert "system:read" in me.json()["capabilities"]
     assert health.status_code == 200
     assert health.json()["status"] in {"healthy", "degraded"}
+    assert {dependency["name"] for dependency in health.json()["dependencies"]} == {"api"}
     assert readiness.status_code == 200
     assert readiness.json()["items"][0]["store_id"] == "store-001"
     assert {item["code"] for item in readiness.json()["items"][0]["checks"]} == {
         "product_content",
         "price_snapshot",
         "knowledge_review",
-        "rules",
-        "action_capabilities",
         "api_integration",
     }
 

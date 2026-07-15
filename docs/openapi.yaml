@@ -1873,7 +1873,7 @@ paths:
       tags: [System Admin]
       operationId: listSystemStoreReadiness
       summary: 查询店铺上线完成度
-      description: 跨组织查看资料、知识、规则、动作能力和 API 接入检查项；默认返回摘要，不返回客户业务敏感 payload。
+      description: 跨组织查看商品资料、价格快照、知识审核和 API 接入四个当前可计算检查项；不返回硬编码的规则或动作能力 ready 状态，也不返回客户业务敏感 payload。
       security:
         - SystemAdminSession: []
       parameters:
@@ -2151,7 +2151,7 @@ paths:
       tags: [System Admin]
       operationId: getSystemHealth
       summary: 查询系统健康
-      description: 汇总 API、Worker、PostgreSQL、Redis、对象存储、pgvector、队列、K8s deployment 和 ingress 健康。
+      description: 汇总当前 API、PostgreSQL 查询与 pgcrypto 扩展、pgvector 扩展和后台任务队列健康。
       security:
         - SystemAdminSession: []
       responses:
@@ -3145,8 +3145,8 @@ components:
       required: [namespace, name, key]
       description: Kubernetes Secret 定位引用；接口、数据库和审计均不得读取或返回对应值。
       properties:
-        namespace: {type: string, minLength: 1, maxLength: 253, pattern: "^[A-Za-z0-9._-]+$"}
-        name: {type: string, minLength: 1, maxLength: 253, pattern: "^[A-Za-z0-9._-]+$"}
+        namespace: {type: string, minLength: 1, maxLength: 63, pattern: "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$"}
+        name: {type: string, minLength: 1, maxLength: 253, pattern: "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$"}
         key: {type: string, minLength: 1, maxLength: 253, pattern: "^[A-Za-z0-9._-]+$"}
 
     LlmProviderCreateRequest:
@@ -6160,7 +6160,7 @@ components:
       properties:
         code:
           type: string
-          enum: [product_content, price_snapshot, knowledge_review, rules, action_capabilities, api_integration]
+          enum: [product_content, price_snapshot, knowledge_review, api_integration]
         status:
           type: string
           enum: [pass, warning, blocked]
@@ -6286,11 +6286,11 @@ components:
 
     HealthDependency:
       type: object
-      required: [name, status, checked_at]
+      required: [name, status, message, checked_at]
       properties:
         name:
           type: string
-          enum: [api, worker, postgresql, redis, object_storage, pgvector, queue, k8s_deployment, ingress]
+          enum: [api, postgresql, pgvector, queue]
         status:
           type: string
           enum: [healthy, degraded, unhealthy, not_configured]

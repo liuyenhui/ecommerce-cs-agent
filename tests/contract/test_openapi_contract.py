@@ -807,6 +807,27 @@ class OpenApiContractTest(unittest.TestCase):
         secret_ref = self.document["components"]["schemas"]["LlmSecretReference"]
         self.assertEqual(set(secret_ref["required"]), {"namespace", "name", "key"})
         self.assertEqual(set(secret_ref["properties"]), {"namespace", "name", "key"})
+        namespace = secret_ref["properties"]["namespace"]
+        name = secret_ref["properties"]["name"]
+        key = secret_ref["properties"]["key"]
+        dns_label = "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$"
+        dns_subdomain = "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$"
+        self.assertEqual((namespace["maxLength"], namespace["pattern"]), (63, dns_label))
+        self.assertEqual((name["maxLength"], name["pattern"]), (253, dns_subdomain))
+        self.assertEqual((key["maxLength"], key["pattern"]), (253, "^[A-Za-z0-9._-]+$"))
+
+        readiness_codes = self.document["components"]["schemas"]["ReadinessCheck"]["properties"]["code"]["enum"]
+        self.assertEqual(
+            readiness_codes,
+            ["product_content", "price_snapshot", "knowledge_review", "api_integration"],
+        )
+
+        health_dependencies = self.document["components"]["schemas"]["HealthDependency"]["properties"]["name"]["enum"]
+        self.assertEqual(health_dependencies, ["api", "postgresql", "pgvector", "queue"])
+        self.assertEqual(
+            set(self.document["components"]["schemas"]["HealthDependency"]["required"]),
+            {"name", "status", "message", "checked_at"},
+        )
 
     def test_llm_governance_contract_documents_roles_lifecycle_filters_and_mixed_currency(self):
         paths = self.document["paths"]

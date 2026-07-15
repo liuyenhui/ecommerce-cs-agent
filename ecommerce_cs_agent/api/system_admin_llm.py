@@ -10,6 +10,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationError, model_validator
 
 from ecommerce_cs_agent.api.errors import api_error
+from ecommerce_cs_agent.services.kubernetes_secret_refs import (
+    DNS1123_LABEL_PATTERN,
+    DNS1123_SUBDOMAIN_PATTERN,
+    KUBERNETES_DATA_KEY_PATTERN,
+)
 from ecommerce_cs_agent.services.llm_governance import LlmGovernanceRepository
 
 
@@ -48,9 +53,9 @@ class AuditWrite(StrictRequest):
 
 
 class SecretReference(StrictRequest):
-    namespace: str = Field(min_length=1, max_length=253, pattern=r"^[A-Za-z0-9._-]+$")
-    name: str = Field(min_length=1, max_length=253, pattern=r"^[A-Za-z0-9._-]+$")
-    key: str = Field(min_length=1, max_length=253, pattern=r"^[A-Za-z0-9._-]+$")
+    namespace: str = Field(min_length=1, max_length=63, pattern=DNS1123_LABEL_PATTERN)
+    name: str = Field(min_length=1, max_length=253, pattern=DNS1123_SUBDOMAIN_PATTERN)
+    key: str = Field(min_length=1, max_length=253, pattern=KUBERNETES_DATA_KEY_PATTERN)
 
 
 class ProviderCreateRequest(AuditWrite):

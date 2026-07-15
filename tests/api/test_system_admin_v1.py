@@ -111,6 +111,11 @@ def test_system_admin_readiness_api_filters_before_total_and_page(monkeypatch) -
     assert response.json()["page_info"] == {"page": 1, "page_size": 5, "total": 6}
     assert len(response.json()["items"]) == 5
     assert {item["status"] for item in response.json()["items"]} == {"blocked"}
+    assert all(
+        [check["code"] for check in item["checks"]]
+        == ["product_content", "price_snapshot", "knowledge_review", "api_integration"]
+        for item in response.json()["items"]
+    )
 
     unfiltered = client.get(
         "/v1/system-admin/readiness/stores?status=&page=1&page_size=5",
