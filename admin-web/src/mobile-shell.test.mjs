@@ -29,6 +29,11 @@ test("authenticated mobile navigation is a collapsible drawer with usable tap ta
   assert.match(cssSource, /@media \(max-width: 900px\)[\s\S]*button\s*\{[\s\S]*min-height:\s*44px;/);
 });
 
+test("trace node badges wrap on mobile without horizontal scrolling or full-width items", () => {
+  assert.match(cssSource, /@media \(max-width: 900px\)[\s\S]*\.traceNodeBadges\s*\{[\s\S]*display:\s*flex;[\s\S]*flex-wrap:\s*wrap;[\s\S]*width:\s*100%;[\s\S]*overflow-x:\s*hidden;/);
+  assert.doesNotMatch(cssSource, /@media \(max-width: 900px\)[\s\S]*\.traceNodeBadges li\s*\{[\s\S]*width:\s*100%;/);
+});
+
 test("desktop collapsed navigation stays accessible and exactly 64 pixels wide", () => {
   assert.match(cssSource, /\.appShell\.railCollapsed\s*\{[\s\S]*grid-template-columns:\s*64px minmax\(0, 1fr\);/);
   assert.match(sharedSource, /className="railCollapseButton"[\s\S]*aria-label=\{railCollapsed \? "展开桌面导航" : "收起桌面导航"\}/);

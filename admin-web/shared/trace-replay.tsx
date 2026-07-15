@@ -2,6 +2,7 @@ import React from "react";
 import { readRecord } from "./data";
 import { applySelectedNodeStyles } from "./trace-graph-selection";
 import { reduceGraphUiState } from "./trace-graph-state";
+import { presentTraceNode, summarizeTraceProgress } from "./trace-node-presentation";
 import { presentDecisionTrace } from "./trace-presentation";
 import type { JsonRecord } from "./types";
 
@@ -115,6 +116,7 @@ export function DecisionTraceReplay({ trace, action, status, risk, missingContex
     setSelectedNodeId(nodeId);
   }, []);
   const selectedNode = graphData.nodes.find((node) => node.id === selectedNodeId) || graphData.nodes.find((node) => node.id === currentNodeId) || graphData.nodes[0] || null;
+  const progress = summarizeTraceProgress(graphData.nodes);
 
   React.useEffect(() => {
     if (!graphData.nodes.some((node) => node.id === selectedNodeId)) {
@@ -147,7 +149,7 @@ export function DecisionTraceReplay({ trace, action, status, risk, missingContex
       </details>
       {graphUnavailable ? (
         <div className="traceGraphFallback" role="status">
-          <span>流程图暂时无法显示，请查看下方节点时间线。</span>
+          <span>流程图暂时无法显示，请查看下方节点导航。</span>
           <button type="button" onClick={retryGraph}>重试流程图</button>
         </div>
       ) : null}
@@ -164,14 +166,29 @@ export function DecisionTraceReplay({ trace, action, status, risk, missingContex
         retryKey={retryKey}
         hidden={graphUnavailable}
       />
-      <ol className="traceTimeline" aria-label="节点时间线">
+      <div className="traceNodeNavigationHeader">
+        <strong>处理步骤</strong>
+        <span>{progress.label}</span>
+      </div>
+      <ol className="traceNodeBadges" aria-label="处理步骤">
         {graphData.nodes.map((node) => {
-          const nodeBlocker = describeNodeBlocker(node, rawStatus);
+          const selected = node.id === selectedNode?.id;
+          const isCurrent = node.id === currentNodeId;
+          const nodePresentation = presentTraceNode(node.status, isCurrent);
           return (
-            <li key={node.id} className={node.id === selectedNode?.id ? "active" : ""}>
-              <button type="button" onClick={() => handleSelectNode(node.id)}>
+            <li key={node.id}>
+              <button
+                type="button"
+                className={`traceNodeBadge ${nodePresentation.tone}${isCurrent ? " is-current" : ""}`}
+                aria-pressed={selected}
+                title={`${node.id} · ${nodePresentation.raw}`}
+                onClick={() => handleSelectNode(node.id)}
+              >
                 <strong title={node.label || node.id}>{businessNodeLabel(node.id)}</strong>
-                <span title={String(node.status || "completed")}>{nodeBlocker || statusLabel[String(node.status || "completed")] || String(node.status || "completed")}</span>
+                <span className="traceNodeState">
+                  <span className="traceNodeStateDot" aria-hidden="true" />
+                  {nodePresentation.label}
+                </span>
               </button>
             </li>
           );

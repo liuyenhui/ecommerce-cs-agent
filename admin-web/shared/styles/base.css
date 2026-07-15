@@ -1089,33 +1089,113 @@ tbody tr:hover {
   opacity: 0.56;
 }
 
-.traceTimeline {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+.traceNodeNavigationHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #334155;
+}
+
+.traceNodeNavigationHeader span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.traceNodeBadges {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin: 0;
-  padding: 0;
+  padding: 3px;
   list-style: none;
 }
 
-.traceTimeline button {
-  width: 100%;
-  min-height: 58px;
-  justify-content: space-between;
+.traceNodeBadge {
+  min-height: 34px;
+  gap: 8px;
+  border-radius: 999px;
   border-color: #d8dee8;
   background: #ffffff;
   color: #334155;
   white-space: normal;
 }
 
-.traceTimeline li.active button {
+.traceNodeBadge[aria-pressed="true"] {
   border-color: #2563eb;
-  background: #dbeafe;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
 }
 
-.traceTimeline strong,
-.traceTimeline span {
-  overflow-wrap: anywhere;
+.traceNodeBadge:focus-visible {
+  outline: 3px solid #0f62fe;
+  outline-offset: 0;
+}
+
+.traceNodeBadge strong {
+  font-size: 12px;
+}
+
+.traceNodeState {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.traceNodeStateDot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.traceNodeBadge.done {
+  border-color: #86c99a;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.traceNodeBadge.current {
+  border-color: #60a5fa;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.traceNodeBadge.is-current {
+  box-shadow: inset 3px 0 #2563eb;
+}
+
+.traceNodeBadge.is-current[aria-pressed="true"] {
+  box-shadow: inset 3px 0 #2563eb, 0 0 0 2px rgba(37, 99, 235, 0.18);
+}
+
+.traceNodeBadge.pending {
+  border-color: #fbbf24;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.traceNodeBadge.skipped {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.traceNodeBadge.failed {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.traceNodeBadge.failed.is-current {
+  box-shadow: inset 3px 0 #2563eb;
+}
+
+.traceNodeBadge.failed.is-current[aria-pressed="true"] {
+  box-shadow: inset 3px 0 #2563eb, 0 0 0 2px rgba(37, 99, 235, 0.18);
 }
 
 .traceNodeDetail {
@@ -1466,8 +1546,11 @@ tbody tr:hover {
     display: none;
   }
 
-  .traceTimeline {
-    grid-template-columns: 1fr;
+  .traceNodeBadges {
+    display: flex;
+    flex-wrap: wrap;
+    width: 100%;
+    overflow-x: hidden;
   }
 
   .sectionHeader {

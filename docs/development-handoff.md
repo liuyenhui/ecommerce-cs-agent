@@ -26,6 +26,11 @@
 - LLM 治理纳入第一版完整范围：Provider 与 Kubernetes Secret 引用、场景主/降级模型、运行参数、连接测试、草稿、发布/回滚、用量成本、版本和审计；不展示完整 Prompt、客户消息、模型回复或密钥。
 - 新增 [系统后台重设计与 LLM 治理规格](superpowers/specs/2026-07-14-system-admin-redesign-and-llm-governance-design.md)，作为本轮实现与验收入口；详细长期约束继续归入 [System Admin Design](system-admin-design.md)。
 - 新增 [系统后台重设计与 LLM 治理实施计划](superpowers/plans/2026-07-14-system-admin-redesign-and-llm-governance.md)，按真实数据边界、聚合 API、LLM 数据库与服务、API/OpenAPI、九页前端、边界回归、文档和端到端发布验证顺序实施。
+- Customer Admin 的 `auto_reply` 动作 Badge 明确为“允许自动回复”：该状态仅授权外部客服系统发送，不代表 Agent 已经完成发送。
+
+### 2026-07-11
+
+- Customer Admin 模拟咨询的动作、风险与处理状态改为中文业务 Badge；共享决策回放底部节点导航改为紧凑、可换行且保留节点详情联动的阶段 Badge，原始后端枚举仅通过 `title` 保留，详见 [决策状态 Badge 与节点导航优化设计](superpowers/specs/2026-07-11-decision-status-badges-design.md)。
 
 ### 2026-07-10
 
