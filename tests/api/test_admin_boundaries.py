@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import ast
+import inspect
 import pytest
 from fastapi.testclient import TestClient
 
 from ecommerce_cs_agent.api.app import create_app
+from ecommerce_cs_agent.api import app as app_module
 from ecommerce_cs_agent.core.config import Settings, load_settings
 from ecommerce_cs_agent.services.admin_auth import (
     InMemoryAdminAuthService,
@@ -18,6 +21,66 @@ from tests.admin_fixtures import (
     system_admin_auth_fixture,
     system_admin_repository_fixture,
 )
+
+
+def _attribute_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self":
+        return node.attr
+    return None
+
+
+def _assert_business_collections_start_empty(source: str, expected_by_class: dict[str, set[str]]) -> None:
+    tree = ast.parse(source)
+    classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+    for class_name, expected_fields in expected_by_class.items():
+        assert class_name in classes, f"missing {class_name}"
+        constructor = next((node for node in classes[class_name].body if isinstance(node, ast.FunctionDef) and node.name == "__init__"), None)
+        assert constructor is not None, f"missing {class_name}.__init__"
+        seen: set[str] = set()
+        for node in ast.walk(constructor):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                value = node.value
+                for target in targets:
+                    field = _attribute_name(target)
+                    if field in expected_fields:
+                        seen.add(field)
+                        assert isinstance(value, ast.Dict) and not value.keys, f"{class_name}.{field} must start empty"
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                owner = _attribute_name(node.func.value)
+                if owner in expected_fields and node.func.attr in {"update", "setdefault"}:
+                    raise AssertionError(f"{class_name}.{owner} must not be seeded")
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if isinstance(target, ast.Subscript) and _attribute_name(target.value) in expected_fields:
+                        raise AssertionError(f"{class_name}.{_attribute_name(target.value)} must not be seeded")
+        assert seen == expected_fields, f"{class_name} missing explicit empty collections: {sorted(expected_fields - seen)}"
+
+
+def _assert_create_app_has_no_admin_seed_wiring(source: str) -> None:
+    tree = ast.parse(source)
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "create_app")
+    forbidden_helpers = {"_admin_user", "_system_user", "_organization", "_store", "_admin_auth_payload", "_system_me_payload"}
+    for node in ast.walk(function):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node is not function:
+            assert node.name not in forbidden_helpers, f"create_app must not define seed helper {node.name}"
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            assert node.func.id not in forbidden_helpers, f"create_app must not call seed helper {node.func.id}"
+    for statement in function.body:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(statement):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                value = node.value
+                for target in targets:
+                    name = target.id if isinstance(target, ast.Name) else ""
+                    if any(marker in name.lower() for marker in ("organization", "store", "user", "session", "payload")):
+                        if isinstance(value, ast.Dict):
+                            assert not value.keys, f"create_app must not seed {name}"
+                        if isinstance(value, (ast.List, ast.Set, ast.Tuple)):
+                            assert not value.elts, f"create_app must not seed {name}"
 
 
 def _test_app():
@@ -66,6 +129,47 @@ def test_in_memory_admin_services_and_repository_default_empty() -> None:
     assert repository.users == {}
     assert repository.organizations == {}
     assert repository.stores == {}
+
+
+def test_structural_seed_guard_rejects_neutral_automatic_business_data() -> None:
+    mutant = '''
+class InMemoryAdminAuthService:
+    def __init__(self):
+        self.organizations = {"org-local": {"name": "Default Organization"}}
+        self.stores = {"store-local": {"name": "Local Store"}}
+        self.users = {}
+        self.sessions = {}
+'''
+
+    with pytest.raises(AssertionError, match="organizations"):
+        _assert_business_collections_start_empty(mutant, {"InMemoryAdminAuthService": {"organizations", "stores", "users", "sessions"}})
+
+    create_app_mutant = '''
+def create_app():
+    def _organization():
+        return {"name": "Default Organization"}
+    def route():
+        return _organization()
+    return route
+'''
+    with pytest.raises(AssertionError, match="seed helper"):
+        _assert_create_app_has_no_admin_seed_wiring(create_app_mutant)
+
+
+def test_structural_seed_guard_covers_real_in_memory_constructors_and_create_app_wiring() -> None:
+    _assert_business_collections_start_empty(
+        inspect.getsource(InMemoryAdminAuthService),
+        {"InMemoryAdminAuthService": {"organizations", "stores", "users", "sessions"}},
+    )
+    _assert_business_collections_start_empty(
+        inspect.getsource(InMemorySystemAdminAuthService),
+        {"InMemorySystemAdminAuthService": {"users", "sessions"}},
+    )
+    _assert_business_collections_start_empty(
+        inspect.getsource(InMemorySystemAdminRepository),
+        {"InMemorySystemAdminRepository": {"users", "organizations", "stores"}},
+    )
+    _assert_create_app_has_no_admin_seed_wiring(inspect.getsource(app_module.create_app))
 
 
 def test_external_api_token_cannot_call_customer_admin():

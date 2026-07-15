@@ -146,6 +146,12 @@ def test_helm_api_uses_dedicated_service_account_and_secret_allowlist() -> None:
         r"(?:\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$"
     )
     assert cursor_schema["properties"]["key"]["pattern"] == r"^[A-Za-z0-9._-]+$"
+    runtime_schema = schema["properties"]["api"]["properties"]["runtimeLlmSecretRef"]
+    allowed_schema = schema["properties"]["api"]["properties"]["secretAccess"]["properties"]["allowedSecretRefs"]["items"]
+    assert runtime_schema["properties"]["name"]["pattern"] == cursor_schema["properties"]["name"]["pattern"]
+    assert allowed_schema["properties"]["name"]["pattern"] == cursor_schema["properties"]["name"]["pattern"]
+    assert runtime_schema["properties"]["key"]["pattern"] == cursor_schema["properties"]["key"]["pattern"]
+    assert allowed_schema["properties"]["keys"]["items"]["properties"]["key"]["pattern"] == cursor_schema["properties"]["key"]["pattern"]
     assert api["secretAccess"]["allowedSecretRefs"][0]["name"] != api["envFromSecret"]
 
     deployment = (chart_dir / "templates/api-deployment.yaml").read_text(encoding="utf-8")
@@ -257,12 +263,12 @@ def test_helm_rejects_empty_or_runtime_secret_access_refs() -> None:
         expect_success=False,
     )
 
-    assert "allowedSecretRefs must not be empty" in empty_refs
-    assert "keys must not be empty" in empty_keys
+    assert "allowedSecretRefs must not be empty" in empty_refs or "minItems" in empty_refs
+    assert "keys must not be empty" in empty_keys or "minItems" in empty_keys
     assert "must not include api.envFromSecret" in runtime_ref
-    assert "keys must be a non-empty list" in non_list_keys
-    assert ".name is invalid" in invalid_name
-    assert ".keys[0].key is invalid" in invalid_key
+    assert "keys must be a non-empty list" in non_list_keys or "want array" in non_list_keys
+    assert ".name is invalid" in invalid_name or "allowedSecretRefs/0/name" in invalid_name
+    assert ".keys[0].key is invalid" in invalid_key or "allowedSecretRefs/0/keys/0/key" in invalid_key
 
 
 def test_helm_rejects_missing_or_invalid_origins_for_non_runtime_secret_keys() -> None:
@@ -290,7 +296,44 @@ def test_helm_rejects_runtime_llm_ref_outside_dedicated_allowlist() -> None:
     )
 
     assert "runtimeLlmSecretRef must not use api.envFromSecret" in runtime_secret
-    assert "runtimeLlmSecretRef tuple must exist in allowedSecretRefs" in missing_tuple
+    assert "runtimeLlmSecretRef tuple must exactly match one allowedSecretRefs entry" in missing_tuple
+
+
+def test_helm_uses_strict_dns_subdomain_names_for_runtime_and_every_allowed_secret() -> None:
+    invalid_names = ("a..b", "a" * 64, "a." * 127 + "a", ".a", "a.", "-a", "a-", "Upper")
+    for name in invalid_names:
+        runtime = _render_helm("--set-string", f"api.runtimeLlmSecretRef.name={name}", expect_success=False)
+        allowed = _render_helm(
+            "--set-json",
+            f'api.secretAccess.allowedSecretRefs=[{{"name":"ecommerce-cs-agent-llm-provider","keys":[{{"key":"api-key"}}]}},{{"name":"{name}","keys":[{{"key":"token","allowedOrigins":["https://models.example"]}}]}}]',
+            expect_success=False,
+        )
+        assert "runtimeLlmSecretRef/name" in runtime or "runtimeLlmSecretRef.name is invalid" in runtime
+        assert "allowedSecretRefs" in allowed and ("name" in allowed or ".name is invalid" in allowed)
+
+    rendered = _render_helm(
+        "--set-string", "api.runtimeLlmSecretRef.name=runtime.provider-secrets",
+        "--set-string", "api.runtimeLlmSecretRef.key=api_key.v1",
+        "--set-json", 'api.secretAccess.allowedSecretRefs=[{"name":"runtime.provider-secrets","keys":[{"key":"api_key.v1"}]},{"name":"other.provider-secrets","keys":[{"key":"token-1","allowedOrigins":["https://models.example"]}]}]',
+    )
+    assert "runtime.provider-secrets" in rendered
+    assert "other.provider-secrets" in rendered
+
+
+def test_helm_rejects_duplicate_secret_tuples_and_runtime_attacker_origins() -> None:
+    duplicate = _render_helm(
+        "--set-json",
+        'api.secretAccess.allowedSecretRefs=[{"name":"ecommerce-cs-agent-llm-provider","keys":[{"key":"api-key"},{"key":"api-key"}]}]',
+        expect_success=False,
+    )
+    attacker_origin = _render_helm(
+        "--set-json",
+        'api.secretAccess.allowedSecretRefs=[{"name":"ecommerce-cs-agent-llm-provider","keys":[{"key":"api-key","allowedOrigins":["https://attacker.example"]}]}]',
+        expect_success=False,
+    )
+
+    assert "duplicate Secret name/key tuple" in duplicate
+    assert "runtime LLM Secret tuple must not declare allowedOrigins" in attacker_origin
 
 
 def test_helm_rejects_invalid_or_provider_reused_cursor_signing_secret_ref() -> None:

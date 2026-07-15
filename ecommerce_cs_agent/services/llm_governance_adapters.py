@@ -25,7 +25,7 @@ import psycopg
 KubernetesTransport = Callable[[Request, "_Deadline", str | None], tuple[int, bytes]]
 ProviderTransport = Callable[[Request, "_Deadline", str, str], tuple[int, bytes]]
 Resolver = Callable[[str, int, float], list[str]]
-_SECRET_REF = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?$")
+_SECRET_REF = re.compile(r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$")
 _SECRET_KEY = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
 _MAX_RESPONSE_BYTES = 1024 * 1024
 _KUBERNETES_TLS_SERVER_NAME = "kubernetes.default.svc"
@@ -513,11 +513,11 @@ class KubernetesSecretProviderConnectionTester:
         namespace = env.get("LLM_GOVERNANCE_SECRET_NAMESPACE", "").strip()
         if not namespace and Path(namespace_file).is_file():
             namespace = Path(namespace_file).read_text(encoding="utf-8").strip()
-        allowed_secret_origins = cls._parse_allowed_secret_refs(
-            env.get("LLM_GOVERNANCE_ALLOWED_SECRET_REFS", "")
-        )
         runtime_ref = cls._parse_runtime_secret_ref(
             env.get("LLM_GOVERNANCE_RUNTIME_LLM_SECRET_REF", "")
+        )
+        allowed_secret_origins = cls._parse_allowed_secret_refs(
+            env.get("LLM_GOVERNANCE_ALLOWED_SECRET_REFS", ""), runtime_ref=runtime_ref
         )
         runtime_base_url = env.get("LLM_BASE_URL", "").strip()
         if runtime_ref and runtime_ref in allowed_secret_origins and runtime_base_url:
@@ -540,14 +540,19 @@ class KubernetesSecretProviderConnectionTester:
 
     @staticmethod
     def _valid_ref(value: Any) -> bool:
-        return isinstance(value, str) and bool(_SECRET_REF.fullmatch(value))
+        return isinstance(value, str) and len(value) <= 253 and bool(_SECRET_REF.fullmatch(value))
 
     @staticmethod
     def _valid_secret_key(value: Any) -> bool:
         return isinstance(value, str) and bool(_SECRET_KEY.fullmatch(value))
 
     @classmethod
-    def _parse_allowed_secret_refs(cls, raw_value: str) -> dict[tuple[str, str], set[str]]:
+    def _parse_allowed_secret_refs(
+        cls,
+        raw_value: str,
+        *,
+        runtime_ref: tuple[str, str] | None = None,
+    ) -> dict[tuple[str, str], set[str]]:
         if not raw_value.strip():
             return {}
         try:
@@ -567,12 +572,17 @@ class KubernetesSecretProviderConnectionTester:
             if not cls._valid_ref(name) or not isinstance(keys, list) or not keys:
                 raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
             for key_entry in keys:
-                if not isinstance(key_entry, dict) or set(key_entry) != {"key", "allowedOrigins"}:
+                if not isinstance(key_entry, dict) or not {"key"} <= set(key_entry) <= {"key", "allowedOrigins"}:
                     raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
-                key, origins = key_entry["key"], key_entry["allowedOrigins"]
+                key, origins = key_entry["key"], key_entry.get("allowedOrigins", [])
                 if not cls._valid_secret_key(key) or not isinstance(origins, list):
                     raise RuntimeError("Kubernetes namespace and Secret allowlist are required")
-                refs[(name, key)] = set(origins)
+                secret_tuple = (name, key)
+                if secret_tuple in refs or (secret_tuple == runtime_ref and origins):
+                    raise RuntimeError("Kubernetes Secret allowlist contains duplicate or unsafe runtime origins")
+                refs[secret_tuple] = set(origins)
+        if runtime_ref is not None and runtime_ref not in refs:
+            raise RuntimeError("Kubernetes Secret allowlist must contain the runtime Secret tuple exactly once")
         return refs
 
     @classmethod

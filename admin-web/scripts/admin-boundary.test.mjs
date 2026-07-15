@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import ts from "typescript";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const adminRoot = path.resolve(scriptDir, "..");
@@ -52,7 +53,47 @@ function assertLlmUiUsesSecretReferencesOnly(source) {
   );
 }
 
-function collectSource(dir, { includeTests = true } = {}) {
+function assertNoRawCredentialAst(source, fileName) {
+  const forbidden = new Set([
+    "apikey",
+    "credential",
+    "credentialvalue",
+    "secretvalue",
+    "rawsecret",
+    "password",
+    "accesstoken",
+    "refreshtoken",
+    "privatekey",
+    "clientsecret",
+    "authorization",
+    "bearertoken"
+  ]);
+  const canonical = (value) => value.replace(/[-_]/g, "").toLowerCase();
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, fileName.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const namedLoginScope = (node) => {
+    if (!(ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isVariableDeclaration(node) || ts.isPropertyAssignment(node))) return false;
+    return node.name && canonical(node.name.getText(sourceFile).replace(/^['"]|['"]$/g, "")) === "login";
+  };
+  const check = (value, loginScope) => {
+    const normalized = canonical(value);
+    if (forbidden.has(normalized) && !(normalized === "password" && loginScope)) {
+      throw new Error(`forbidden raw credential field ${value} in ${fileName}`);
+    }
+  };
+  const visit = (node, loginScope = false) => {
+    const nextLoginScope = loginScope || namedLoginScope(node);
+    if (ts.isIdentifier(node)) check(node.text, nextLoginScope);
+    if (ts.isStringLiteral(node) && node.parent && "name" in node.parent && node.parent.name === node) check(node.text, nextLoginScope);
+    if (ts.isJsxAttribute(node) && node.name.getText(sourceFile) === "name" && node.initializer) {
+      if (ts.isStringLiteral(node.initializer)) check(node.initializer.text, nextLoginScope);
+      if (ts.isJsxExpression(node.initializer) && node.initializer.expression && ts.isStringLiteral(node.initializer.expression)) check(node.initializer.expression.text, nextLoginScope);
+    }
+    ts.forEachChild(node, (child) => visit(child, nextLoginScope));
+  };
+  visit(sourceFile);
+}
+
+function collectSourceFiles(dir, { includeTests = true } = {}) {
   const root = repoPath(dir);
   assert.ok(existsSync(root), `${dir} must exist`);
   const files = [];
@@ -67,7 +108,11 @@ function collectSource(dir, { includeTests = true } = {}) {
     }
   };
   walk(root);
-  return files.map((file) => `\n/* ${path.relative(adminRoot, file)} */\n${readFileSync(file, "utf8")}`).join("\n");
+  return files;
+}
+
+function collectSource(dir, options = {}) {
+  return collectSourceFiles(dir, options).map((file) => `\n/* ${path.relative(adminRoot, file)} */\n${readFileSync(file, "utf8")}`).join("\n");
 }
 
 function sliceBetween(source, start, end) {
@@ -318,6 +363,25 @@ test("Provider credential boundary keeps the real DOM allowlist regression and s
   assert.match(regression, /providerControlMutant/);
   assert.match(regression, /"credential", "密钥值"/);
   assert.match(packageJson.scripts.test, /system-admin\/src\/system-admin\.test\.tsx/);
+});
+
+test("System Admin production AST rejects raw credential fields with an auth-login-only password exception", () => {
+  for (const file of collectSourceFiles("system-admin/src", { includeTests: false })) {
+    assertNoRawCredentialAst(readFileSync(file, "utf8"), file);
+  }
+  assert.doesNotThrow(() => assertNoRawCredentialAst("// password is handled only by auth\nconst note = 'password is never an LLM field';", "comment.ts"));
+  assert.doesNotThrow(() => assertNoRawCredentialAst("const login = async (email, password) => ({ email, password });", "auth.ts"));
+});
+
+test("System Admin AST credential guard rejects API, type, and child-component mutants", () => {
+  const mutants = [
+    ["system-api.ts", "export const systemApi = { createLlmProvider: (credential_value: string) => credential_value };"],
+    ["system-types.ts", "export type LlmProvider = { credential_value: string };"],
+    ["LlmProviderChild.tsx", "export const Child = () => <input name=\"credential_value\" />;"],
+  ];
+  for (const [file, source] of mutants) {
+    assert.throws(() => assertNoRawCredentialAst(source, file), /credential_value/);
+  }
 });
 
 test("shared components do not import System Admin request-state types", () => {

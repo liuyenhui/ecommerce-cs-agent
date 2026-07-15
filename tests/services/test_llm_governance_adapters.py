@@ -352,6 +352,65 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
     ]
 
 
+@pytest.mark.parametrize("invalid_name", ["a..b", "a" * 64, "a." * 127 + "a", ".a", "a.", "-a", "a-", "Upper"])
+def test_kubernetes_secret_tester_rejects_non_dns_subdomain_secret_names(invalid_name: str) -> None:
+    with pytest.raises(RuntimeError, match="runtime LLM Secret reference"):
+        KubernetesSecretProviderConnectionTester._parse_runtime_secret_ref(
+            json.dumps({"name": invalid_name, "key": "api-key"})
+        )
+
+
+@pytest.mark.parametrize(
+    "allowed_refs",
+    [
+        [{"name": "runtime.provider", "keys": [{"key": "api-key"}, {"key": "api-key"}]}],
+        [{"name": "runtime.provider", "keys": [{"key": "api-key"}]}, {"name": "runtime.provider", "keys": [{"key": "api-key"}]}],
+        [{"name": "runtime.provider", "keys": [{"key": "api-key", "allowedOrigins": ["https://attacker.example"]}]}],
+    ],
+)
+def test_kubernetes_secret_tester_rejects_duplicate_or_explicit_runtime_origins(allowed_refs: list[dict[str, object]]) -> None:
+    environment = {
+        "KUBERNETES_SERVICE_HOST": "10.96.0.1",
+        "KUBERNETES_SERVICE_PORT_HTTPS": "443",
+        "LLM_GOVERNANCE_SECRET_NAMESPACE": "runtime",
+        "LLM_GOVERNANCE_RUNTIME_LLM_SECRET_REF": json.dumps({"name": "runtime.provider", "key": "api-key"}),
+        "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": json.dumps(allowed_refs),
+        "LLM_BASE_URL": "https://models.example.test/v1",
+    }
+
+    with pytest.raises(RuntimeError, match="Secret allowlist"):
+        KubernetesSecretProviderConnectionTester.from_environment(environ=environment)
+
+
+def test_kubernetes_secret_tester_accepts_unique_multi_ref_and_auto_binds_runtime_origin(tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("service-account-token", encoding="utf-8")
+    ca_file.write_text("ca", encoding="utf-8")
+    environment = {
+        "KUBERNETES_SERVICE_HOST": "10.96.0.1",
+        "KUBERNETES_SERVICE_PORT_HTTPS": "443",
+        "LLM_GOVERNANCE_SECRET_NAMESPACE": "runtime",
+        "LLM_GOVERNANCE_RUNTIME_LLM_SECRET_REF": json.dumps({"name": "runtime.provider", "key": "api_key.v1"}),
+        "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": json.dumps([
+            {"name": "runtime.provider", "keys": [{"key": "api_key.v1"}]},
+            {"name": "other.provider", "keys": [{"key": "token-1", "allowedOrigins": ["https://other.example"]}]},
+        ]),
+        "LLM_BASE_URL": "https://models.example.test/v1",
+    }
+
+    tester = KubernetesSecretProviderConnectionTester.from_environment(
+        environ=environment,
+        token_file=str(token_file),
+        ca_file=str(ca_file),
+    )
+
+    assert tester._allowed_secret_origins == {
+        ("runtime.provider", "api_key.v1"): {"https://models.example.test"},
+        ("other.provider", "token-1"): {"https://other.example"},
+    }
+
+
 @pytest.mark.parametrize(
     "environment",
     [

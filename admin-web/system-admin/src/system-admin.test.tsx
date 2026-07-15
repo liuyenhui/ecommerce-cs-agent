@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { AdminFrame, RequestStateView } from "../../shared/components";
+import { fieldLabel } from "../../shared/data";
 import { DashboardPage } from "./pages/DashboardPage";
 import { AuditPage } from "./pages/AuditPage";
 import { HealthPage } from "./pages/HealthPage";
@@ -98,6 +99,14 @@ afterEach(() => {
 });
 
 describe("System Admin operations shell", () => {
+  it("uses fixed readable mobile labels for every core System Admin table field", () => {
+    expect(fieldLabel("release_id")).toBe("发布 ID");
+    expect(fieldLabel("version_number")).toBe("版本号");
+    expect(fieldLabel("published_at")).toBe("发布时间");
+    expect(fieldLabel("actor_system_user_id")).toBe("操作者 ID");
+    expect(fieldLabel("sensitive_access")).toBe("敏感访问");
+    expect(fieldLabel("future_system_field")).not.toContain("_");
+  });
   it("renders all nine task-oriented navigation destinations with icons", () => {
     const html = markup(<SystemNavigation activePage="dashboard" collapsed={false} onChange={() => undefined} />);
 
