@@ -191,6 +191,70 @@ def test_provider_create_accepts_maximum_legal_kubernetes_secret_reference(
     assert len(service.providers) == 1
 
 
+@pytest.mark.parametrize("field", ["namespace", "name", "key"])
+@pytest.mark.parametrize(
+    ("prefix", "suffix"),
+    [(" ", " "), ("", "\n"), ("\t", "")],
+)
+def test_provider_create_rejects_padded_secret_references_before_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    prefix: str,
+    suffix: str,
+) -> None:
+    client, service = _client(monkeypatch)
+    secret_ref = dict(PROVIDER["secret_ref"])
+    secret_ref[field] = f"{prefix}{secret_ref[field]}{suffix}"
+
+    rejected_create = client.post(
+        "/v1/system-admin/llm/providers",
+        headers=SYSTEM_HEADERS,
+        json={**PROVIDER, "secret_ref": secret_ref},
+    )
+
+    assert rejected_create.status_code == 422
+    assert service.providers == {}
+    details = rejected_create.json()["error"]["details"]
+    assert any(
+        detail["loc"] == ["body", "secret_ref", field] and detail["type"] == "value_error"
+        for detail in details
+    )
+
+
+def test_provider_update_rejects_immutable_secret_reference_without_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, service = _client(monkeypatch)
+
+    created = client.post(
+        "/v1/system-admin/llm/providers",
+        headers=SYSTEM_HEADERS,
+        json={**PROVIDER, "idempotency_key": "valid-before-immutable-update"},
+    )
+    rejected_update = client.patch(
+        f"/v1/system-admin/llm/providers/{created.json()['provider_id']}",
+        headers=SYSTEM_HEADERS,
+        json={
+            "name": "must-not-persist",
+            "secret_ref": PROVIDER["secret_ref"],
+            "expected_revision": 1,
+            "reason": "Secret reference is immutable",
+            "idempotency_key": "immutable-secret-update",
+        },
+    )
+
+    assert created.status_code == 201
+    assert rejected_update.status_code == 422
+    details = rejected_update.json()["error"]["details"]
+    assert any(
+        detail["loc"] == ["body", "secret_ref"] and detail["type"] == "extra_forbidden"
+        for detail in details
+    )
+    provider = next(iter(service.providers.values()))
+    assert provider["name"] == PROVIDER["name"]
+    assert provider["revision"] == 1
+
+
 @pytest.mark.parametrize("sensitive_field", ["secret_value", "authorization", "prompt"])
 def test_provider_request_rejects_sensitive_or_unknown_fields(monkeypatch: pytest.MonkeyPatch, sensitive_field: str) -> None:
     client, _service = _client(monkeypatch)
