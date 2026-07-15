@@ -862,6 +862,67 @@ def test_local_acs_debug_uses_real_postgres_with_connection_test_unavailable(
     }
 
 
+@pytest.mark.parametrize(
+    ("environment", "debug_mode", "expects_kubernetes_tester"),
+    [
+        ("production", "local-acs", True),
+        ("prod", "local-acs", True),
+        ("staging", "local-acs", True),
+        ("development", None, True),
+        ("development", "LOCAL-ACS", True),
+        ("development", "local-acs ", True),
+        ("development", "local-acs", False),
+        ("dev", "local-acs", False),
+    ],
+)
+def test_local_acs_debug_cannot_bypass_other_runtime_modes(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: str,
+    debug_mode: str | None,
+    expects_kubernetes_tester: bool,
+) -> None:
+    captured: dict[str, Any] = {"kubernetes_calls": 0}
+
+    def fake_postgres(_database_url: str, **kwargs: Any) -> InMemoryLlmGovernanceRepository:
+        captured["connection_tester"] = kwargs["connection_tester"]
+        return InMemoryLlmGovernanceRepository()
+
+    def fake_kubernetes_tester() -> Any:
+        captured["kubernetes_calls"] += 1
+        return lambda _provider, _request: {"status": "passed", "latency_ms": 1}
+
+    if debug_mode is None:
+        monkeypatch.delenv("ACS_DEBUG_MODE", raising=False)
+    else:
+        monkeypatch.setenv("ACS_DEBUG_MODE", debug_mode)
+    monkeypatch.setattr(app_module, "PostgresLlmGovernanceRepository", fake_postgres)
+    monkeypatch.setattr(
+        app_module.KubernetesSecretProviderConnectionTester,
+        "from_environment",
+        fake_kubernetes_tester,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "PostgresEvaluationReleaseGateChecker",
+        lambda _database_url: (lambda _version, _run_id: {"status": "passed"}),
+    )
+
+    create_app(
+        Settings(
+            environment=environment,
+            database_url="postgresql://db.example.test/app",
+            llm_cursor_signing_key=CURSOR_SIGNING_KEY,
+        )
+    )
+
+    assert captured["kubernetes_calls"] == int(expects_kubernetes_tester)
+    result = captured["connection_tester"]({}, {})
+    if expects_kubernetes_tester:
+        assert result["status"] == "passed"
+    else:
+        assert result["error_code"] == "tester_unavailable"
+
+
 def test_non_test_app_rejects_injected_in_memory_llm_repository() -> None:
     with pytest.raises(RuntimeError, match="test-only"):
         create_app(
