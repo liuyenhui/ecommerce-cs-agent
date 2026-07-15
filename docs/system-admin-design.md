@@ -77,22 +77,22 @@
 | 模块 | 核心能力 |
 | --- | --- |
 | 系统首页 | 展示租户总数、活跃店铺、今日决策量、自动回复率、转人工率、错误率、待处理任务和关键告警。 |
-| 租户管理 | 创建、停用、冻结租户；维护租户状态、套餐标记、联系人、开通来源和备注。 |
-| 店铺管理 | 创建店铺、绑定平台、维护 `external_store_id`、平台账号引用、启用状态和资料配置进度。 |
+| 租户管理 | 当前创建和查看组织、联系人/外部引用及状态；停用、冻结和状态 PATCH 尚未实现。 |
+| 店铺管理 | 当前创建和查看店铺、平台、`external_store_id`、启用状态和资料配置进度；状态 PATCH 尚未实现。 |
 | 客户管理员开通（后续候选，当前不可用） | 后续可评估初始客户管理员邀请、重发邀请、禁用异常客户账号和查看客户登录记录；当前 System Admin 不提供这些接口。 |
 | 配置完成度 | 跨租户查看商品资料、价格快照、知识审核、规则和动作能力是否满足上线条件。 |
-| 资料体检总览 | 查看缺说明书、缺 SKU 图、价格过期、知识未审核、解析失败和信息冲突的租户/店铺列表。 |
-| 知识审核队列总览 | 查看各租户待审核知识候选、拒绝率、审核积压时间和高风险片段数量。 |
-| 规则与动作治理 | 查看店铺规则版本、系统默认规则模板、动作能力配置、风险等级、回调地址和确认要求。 |
+| 资料体检总览（后续增强） | 当前只通过配置完成度聚合商品、价格、知识和 API 集成四项；更细的说明书/SKU/解析冲突尚无独立 System Admin API。 |
+| 知识审核队列总览（后续增强） | 当前没有独立跨租户知识队列 API。 |
+| 规则与动作治理（后续增强） | 当前没有平台级规则模板或动作模板 System Admin API。 |
 | 消息决策追踪 | 按 `decision_id`、请求 ID、外部消息 ID、租户、店铺、平台和时间查询完整决策摘要。 |
 | 上下文与动作排障 | 查看 `context_requests[]`、上下文回填、`action_request`、`action_result`、超时、重试和失败原因。 |
 | 异步任务中心 | 查看资料解析、Markdown 转换、知识抽取、embedding、批量导入、评测运行等任务状态。 |
 | LLM 治理 | 管理 LLM Provider、Kubernetes Secret 引用、模型参数、场景主/降级路由、连接测试、草稿、发布、回滚、调用量、成本、延迟、错误、Token 和审计。 |
 | 评测与发布门禁 | 查看 deterministic 测试、盲测、红线用例、Prompt/Graph/规则版本和发布阻断原因。 |
-| API 与接入凭据 | 管理租户 API Key / Bearer Token 引用、轮换状态、最后使用时间、限流和 IP 白名单预留。 |
-| Webhook 与回调 | 查看 callback 配置、签名状态、失败重试、死信记录和最近回调错误。 |
+| API 与接入凭据（后续增强） | 当前没有 System Admin API Key 列表或轮换 API。 |
+| Webhook 与回调（后续增强） | 当前没有 System Admin callback / dead-letter 管理 API。 |
 | 系统审计 | 查看系统后台登录、权限变更、跨租户访问、代运营修改、敏感数据查看和高风险变更。 |
-| 系统健康 | 查看 API、Worker、PostgreSQL、Redis、对象存储、pgvector、队列、K8s deployment 和 ingress 健康。 |
+| 系统健康 | 当前返回 API、PostgreSQL/pgcrypto、pgvector 和任务队列健康；Worker、Redis、对象存储、K8s deployment/ingress 探针是后续扩展。 |
 
 ## 5. UI 原型与开发规范
 
@@ -289,26 +289,22 @@
 | 分组 | 接口方向 | 说明 |
 | --- | --- | --- |
 | 系统登录 | `POST /v1/system-admin/auth/login`、`POST /v1/system-admin/auth/logout`、`GET /v1/system-admin/auth/me` | 系统后台登录、退出和当前系统用户信息。 |
-| 系统用户 | `GET /v1/system-admin/users`、`POST /v1/system-admin/users`、`PATCH /v1/system-admin/users/{user_id}` | 管理系统后台账号、角色和状态。 |
+| 系统用户 | `GET /v1/system-admin/users`、`POST /v1/system-admin/users` | 查看和创建系统后台账号；当前没有用户 PATCH。 |
 | 组织管理 | `GET /v1/system-admin/organizations`、`POST /v1/system-admin/organizations` | 创建和查看客户组织。 |
-| 店铺管理 | `GET /v1/system-admin/stores`、`POST /v1/system-admin/stores`、`PATCH /v1/system-admin/stores/{store_id}` | 创建店铺、维护平台、外部引用和启用状态。 |
-| 配置完成度 | `GET /v1/system-admin/readiness/stores`、`GET /v1/system-admin/readiness/stores/{store_id}` | 跨租户查看上线检查项。 |
-| 资料体检 | `GET /v1/system-admin/product-health` | 汇总资料缺口、价格过期、解析失败和知识未审核状态。 |
-| 规则治理 | `GET /v1/system-admin/rules`、`POST /v1/system-admin/rule-templates`、`PATCH /v1/system-admin/rule-templates/{template_id}` | 查看规则状态，维护系统默认规则模板。 |
-| 动作治理 | `GET /v1/system-admin/action-capabilities`、`POST /v1/system-admin/action-templates` | 查看动作能力和维护默认动作模板。 |
+| 店铺管理 | `GET /v1/system-admin/stores`、`POST /v1/system-admin/stores` | 创建和查看店铺、平台、外部引用和启用状态；当前没有店铺 PATCH。 |
+| 配置完成度 | `GET /v1/system-admin/readiness/stores` | 跨租户查看上线检查项；以 `organization_id`、`store_id`、`status` 和页码筛选。 |
 | 决策追踪 | `GET /v1/system-admin/message-traces`、`GET /v1/system-admin/message-traces/{decision_id}` | 跨租户查询消息决策摘要、LangGraph 运行回放和排障信息。 |
 | 任务中心 | `GET /v1/system-admin/tasks`、`POST /v1/system-admin/tasks/{task_id}/retry` | 查看和重试幂等安全任务。 |
 | 系统总览 | `GET /v1/system-admin/dashboard-summary` | 返回服务端聚合的租户、店铺、决策、阻断、任务、告警和待发布配置指标。 |
 | LLM Provider | `GET/POST /v1/system-admin/llm/providers`、`PATCH /v1/system-admin/llm/providers/{provider_id}`、`POST /v1/system-admin/llm/providers/{provider_id}/connection-tests` | 管理 Provider、Secret 引用和连接测试，不返回密钥值。 |
-| LLM 配置版本 | `GET/POST /v1/system-admin/llm/config-versions`、`PATCH /v1/system-admin/llm/config-versions/{version_id}`、`POST /v1/system-admin/llm/config-versions/{version_id}/publish`、`POST /v1/system-admin/llm/config-versions/{version_id}/rollback` | 管理草稿、校验、发布、运行版本和回滚。 |
-| LLM 场景路由 | `GET/PATCH /v1/system-admin/llm/config-versions/{version_id}/routes` | 管理业务场景的主模型、降级模型与运行参数。 |
-| LLM 用量 | `GET /v1/system-admin/llm/usage/summary`、`GET /v1/system-admin/llm/usage/timeseries`、`GET /v1/system-admin/llm/usage/breakdown`、`GET /v1/system-admin/llm/invocations` | 查看真实调用、Token、成本、延迟、失败和脱敏调用元数据。 |
-| 评测与发布 | `GET /v1/system-admin/eval-runs`、`GET /v1/system-admin/releases`、`POST /v1/system-admin/releases` | 查看评测报告和发布版本。 |
-| API 凭据 | `GET /v1/system-admin/api-keys`、`POST /v1/system-admin/api-keys/{key_id}/rotate` | 管理租户接入凭据引用和轮换状态。 |
+| LLM 配置版本 | `GET /v1/system-admin/llm/config-versions`、`GET /v1/system-admin/llm/config-versions/{version_id}`、`POST /v1/system-admin/llm/config-versions/drafts`、`POST .../{version_id}/validate`、`POST .../{version_id}/submit-publish`、`POST .../{version_id}/publish`、`POST .../{version_id}/rollback` | 管理草稿、校验、评测绑定、发布、运行版本和回滚。 |
+| LLM 场景路由 | `PUT` 或 `PATCH /v1/system-admin/llm/config-versions/{version_id}/routes` | 以完整集合替换草稿的主模型、降级模型与运行参数。 |
+| LLM 发布记录 | `GET /v1/system-admin/llm/releases` | 按组织读取真实 `llm_release_record`，使用 HMAC cursor 分页。 |
+| LLM 用量 | `GET /v1/system-admin/llm/usage/summary`、`GET /v1/system-admin/llm/usage/timeseries`、`GET /v1/system-admin/llm/usage/breakdown`、`GET /v1/system-admin/llm/usage/invocations` | 查看真实调用、Token、成本、延迟、失败和脱敏调用元数据。 |
 | 审计 | `GET /v1/system-admin/audit-logs` | 查询系统后台操作、跨租户访问和敏感数据查看记录。 |
 | 健康检查 | `GET /v1/system-admin/health` | 汇总 API、Worker、存储、队列和部署健康。 |
 
-后续候选（当前 API 与 OpenAPI 均不可用）：组织状态 `PATCH`、组织管理员邀请，以及客户管理员禁用/恢复。实现前不得把这些候选路径作为当前能力展示或调用。
+后续候选（当前 API 与 OpenAPI 均不可用）：组织/店铺/系统用户状态 `PATCH`、客户管理员邀请/重发邀请/禁用恢复、独立评测运行 list/create workflow、独立通用 release API、平台级规则/动作模板和 API 凭据轮换。实现前不得把这些候选路径作为当前能力展示或调用。
 
 接口约束：
 
@@ -340,19 +336,56 @@
 | 接口 | 权限要求 | 请求关键字段 | 响应关键字段 | 审计要求 | 分页 / 筛选 | 主要错误 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `GET /v1/system-admin/auth/me` | 已登录系统 Admin | Cookie session | `user.system_user_id`、`email`、`roles`、`capabilities` | 可记录登录态校验，不记录敏感字段 | 无 | 401 |
-| `GET /v1/system-admin/users` | 超级管理员、安全审计 | `status`、`role`、`page`、`page_size` | `items[].system_user_id`、`email`、`roles`、`status`、`last_login_at`、`page_info` | 查询系统账号可写安全审计 | `status`、`role`、分页 | 401、403 |
+| `GET /v1/system-admin/users` | `super_admin`、`security_auditor` | 无查询参数 | `items[].system_user_id`、`email`、`roles`、`status`、`page_info` | 查询系统账号写安全审计 | 当前返回服务端默认第一页 | 401、403 |
 | `POST /v1/system-admin/users` | 超级管理员 | `email`、`display_name`、`roles`、`reason`、`idempotency_key` | `user`、`audit_log_id` | 必须记录创建原因、授予角色和操作者 | 无 | 401、403、409、422、`ROLE_FORBIDDEN`、`AUDIT_REASON_REQUIRED` |
-| `GET /v1/system-admin/organizations` | 平台运营、技术支持、安全审计 | `status`、`page`、`page_size` | `items[].organization_id`、`name`、`status`、`external_ref`、`created_at`、`page_info` | 跨组织列表查询写访问审计 | 状态、分页 | 401、403 |
-| `POST /v1/system-admin/organizations` | 平台运营或更高权限 | `name`、`status`、`external_ref`、`contact`、`reason`、`idempotency_key` | `organization`、`audit_log_id` | 必须记录开通原因和差异摘要 | 无 | 401、403、409、422、`AUDIT_REASON_REQUIRED` |
-| `GET /v1/system-admin/stores` | 平台运营、技术支持、安全审计 | `organization_id`、`store_id`、`status`、`page`、`page_size` | `items[].store_id`、`organization_id`、`platform`、`external_store_id`、`readiness_status`、`page_info` | 跨组织查询写访问审计 | 组织、店铺、状态、分页 | 401、403、`ORGANIZATION_SCOPE_REQUIRED` |
-| `POST /v1/system-admin/stores` | 平台运营或更高权限 | `organization_id`、`name`、`platform`、`external_store_id`、`status`、`reason`、`idempotency_key` | `store`、`audit_log_id` | 必须记录目标组织、店铺和开通原因 | 无 | 401、403、404、409、422 |
-| `GET /v1/system-admin/readiness/stores` | 平台运营、技术支持、安全审计 | `organization_id`、`store_id`、`status`、`page`、`page_size` | `items[].organization_id`、`store_id`、`status`、`checks[]`、`updated_at`、`page_info` | 跨组织 readiness 查询写访问审计 | 组织、店铺、状态、分页 | 401、403 |
-| `GET /v1/system-admin/message-traces` | 技术支持或更高权限；raw payload 需专门能力 | `organization_id`、`store_id`、`decision_id`、`external_message_id`、`include_raw_payload`、`reason`、时间、分页 | `items[].decision_id`、`organization_id`、`store_id`、`action`、`risk_level`、`sensitive_access`、`created_at`、`page_info` | 跨组织查询必须写审计；`include_raw_payload=true` 必须记录 `reason` 和 `sensitive_access=true` | 组织、店铺、决策、消息、时间、分页 | 401、403、422、`RAW_PAYLOAD_ACCESS_DENIED`、`AUDIT_REASON_REQUIRED` |
-| `GET /v1/system-admin/message-traces/{decision_id}` | 技术支持或更高权限 | `include_raw_payload`、`reason` | `trace`、`trace.graph`、`raw_payload`、`audit_log_id` | 查看详情写跨组织审计；运行回放默认显示脱敏引用；raw payload 访问必须单独审计 | 无 | 401、403、404、422、`RAW_PAYLOAD_ACCESS_DENIED` |
-| `GET /v1/system-admin/tasks` | 技术支持、发布管理员、安全审计 | `organization_id`、`store_id`、`task_type`、`status`、`page`、`page_size` | `items[].task_id`、`task_type`、`status`、`input_ref`、`output_ref`、`error_summary`、`retry_count`、`page_info` | 跨组织任务查询写访问审计 | 组织、店铺、任务类型、状态、分页 | 401、403 |
-| `POST /v1/system-admin/tasks/{task_id}/retry` | 技术支持或发布管理员 | `idempotency_key`、`reason` | `task_id`、`status`、`audit_log_id` | 必须记录重试原因、幂等键和目标任务 | 无 | 401、403、404、409、422、`IDEMPOTENCY_CONFLICT` |
-| `GET /v1/system-admin/audit-logs` | 安全审计、超级管理员 | `organization_id`、`store_id`、`actor_user_id`、`sensitive_access`、时间、分页 | `items[].audit_log_id`、`actor_system_user_id`、`organization_id`、`store_id`、`object_type`、`object_id`、`action`、`reason`、`diff_summary`、`sensitive_access`、`created_at`、`page_info` | 查询审计日志本身可写二级审计；不得返回明文 secret | 组织、店铺、操作者、敏感访问、时间、分页 | 401、403 |
-| `GET /v1/system-admin/health` | 技术支持、发布管理员、超级管理员 | 无 | `status`、`checked_at`、`dependencies[].name`、`status`、`message`、`checked_at` | 可记录高权限健康查看；不返回密钥、连接串、token | 无 | 401、403、500 |
+| `GET /v1/system-admin/organizations` | 任一有效 System Admin session | `status`、`page`、`page_size` | `items[].organization_id`、`name`、`status`、`external_ref`、`created_at`、`page_info` | 跨组织列表查询写访问审计 | 状态、分页 | 401 |
+| `POST /v1/system-admin/organizations` | `super_admin`、`platform_operator` | `name`、`status`、`external_ref`、`contact`、`reason`、`idempotency_key` | `organization`、`audit_log_id` | 必须记录开通原因和差异摘要 | 无 | 401、403、409、422、`AUDIT_REASON_REQUIRED` |
+| `GET /v1/system-admin/stores` | 任一有效 System Admin session | `organization_id`、`store_id`、`status`、`page`、`page_size` | `items[].store_id`、`organization_id`、`platform`、`external_store_id`、`readiness_status`、`page_info` | 跨组织查询写访问审计 | 组织、店铺、状态、分页 | 401 |
+| `POST /v1/system-admin/stores` | `super_admin`、`platform_operator` | `organization_id`、`name`、`platform`、`external_store_id`、`status`、`reason`、`idempotency_key` | `store`、`audit_log_id` | 必须记录目标组织、店铺和开通原因 | 无 | 401、403、404、409、422 |
+| `GET /v1/system-admin/readiness/stores` | 任一有效 System Admin session | `organization_id`、`store_id`、`status`、`page`、`page_size` | `items[].organization_id`、`store_id`、`status`、`checks[]`、`updated_at`、`page_info` | 跨组织 readiness 查询写访问审计 | 组织、店铺、状态、分页 | 401 |
+| `GET /v1/system-admin/message-traces` | `super_admin`、`technical_support`、`security_auditor`；raw payload 另需 `trace:raw_payload:read` | `organization_id`、`store_id`、`decision_id`、`external_message_id`、`include_raw_payload`、`reason`、时间、分页 | `items[].decision_id`、`organization_id`、`store_id`、`action`、`risk_level`、`sensitive_access`、`created_at`、`page_info` | 跨组织查询必须写审计；`include_raw_payload=true` 必须记录 `reason` 和 `sensitive_access=true` | 至少提供组织、店铺、决策/消息或时间范围之一；分页 | 401、403、422、`RAW_PAYLOAD_ACCESS_DENIED`、`AUDIT_REASON_REQUIRED` |
+| `GET /v1/system-admin/message-traces/{decision_id}` | `super_admin`、`technical_support`、`security_auditor`；raw payload 另需专门能力 | `include_raw_payload`、`reason` | `trace`、`trace.graph`、`raw_payload`、`audit_log_id` | 查看详情写跨组织审计；运行回放默认显示脱敏引用；raw payload 访问必须单独审计 | 无 | 401、403、404、422、`RAW_PAYLOAD_ACCESS_DENIED` |
+| `GET /v1/system-admin/tasks` | 任一有效 System Admin session | `organization_id`、`store_id`、`task_type`、`status`、`page`、`page_size` | `items[].task_id`、`task_type`、`status`、`retryable`、`input_ref`、`output_ref`、`error_summary`、`retry_count`、`page_info` | 跨组织任务查询写访问审计 | 组织、店铺、任务类型、状态、分页 | 401 |
+| `POST /v1/system-admin/tasks/{task_id}/retry` | `super_admin`、`technical_support`、`platform_operator` | `idempotency_key`、`reason` | `task_id`、`status`、`audit_log_id` | 只允许服务端标记为 `status=failed` 且 `retryable=true` 的任务；入队后 `retryable=false`，记录原因和幂等键 | 无 | 401、403、404、409、422、`IDEMPOTENCY_CONFLICT` |
+| `GET /v1/system-admin/audit-logs` | 任一有效 System Admin session | `organization_id`、`store_id`、`actor_user_id`、`action`、`action_prefix`、`sensitive_access`、`time_from`、`time_to`、分页 | `items[].audit_log_id`、`actor_system_user_id`、`organization_id`、`store_id`、`object_type`、`object_id`、`action`、`reason`、`diff_summary`、`sensitive_access`、`created_at`、`page_info` | `action_prefix` 在计数与分页前由服务端过滤；查询本身写二级审计，不得返回明文 secret | 组织、店铺、操作者、动作/前缀、敏感访问、`[time_from,time_to)`、分页 | 401、422 |
+| `GET /v1/system-admin/health` | 任一有效 System Admin session | 无 | `status`、`checked_at`、`dependencies[].name`、`status`、`message`、`checked_at` | 记录健康查看；不返回密钥、连接串、token | 无 | 401、500 |
+
+### 7.2 LLM 治理契约
+
+角色矩阵以 OpenAPI 的 `x-roles` 和服务层集合为准：
+
+| 能力 | 允许角色 |
+| --- | --- |
+| Provider、配置版本、发布记录、用量读取 | `super_admin`、`release_admin`、`technical_support`、`security_auditor` |
+| Provider 创建/更新、草稿/路由/校验/提交/发布/回滚 | `super_admin`、`release_admin` |
+| Provider 连接测试 | `super_admin`、`release_admin`、`technical_support` |
+
+接口与关键字段：
+
+| 接口 | 请求关键字段 | 响应关键字段与语义 |
+| --- | --- | --- |
+| `GET/POST /v1/system-admin/llm/providers` | 创建：`name`、`provider_type`、`base_url`、`secret_ref{namespace,name,key}`、`enabled`、`reason`、`idempotency_key` | `LlmProvider` 返回引用和脱敏健康状态，不返回 Secret 值。 |
+| `PATCH /v1/system-admin/llm/providers/{provider_id}` | `expected_revision`、可选 `name`/`enabled`、`reason`、`idempotency_key` | 只允许改名称和启用状态；`provider_type`、`base_url`、`secret_ref` 不可原地替换。 |
+| `POST .../providers/{provider_id}/connection-tests` | `config_version_id`、可选 `timeout_seconds`（1–20）与 `max_tokens`（1–256）、`reason`、`idempotency_key` | 返回 `status`、`latency_ms`、安全 `error_code`、`redacted_error_message`；不返回上游请求/响应正文。 |
+| `GET /v1/system-admin/llm/config-versions` | 必填 canonical UUID `organization_id`；`limit` 1–100，默认 50；可选 `cursor` | `items[]` 含 `version_id`、组织、版本号、状态、revision、hash、routes、release/evaluation 摘要；`page_info{limit,has_more,next_cursor}`。 |
+| `GET /v1/system-admin/llm/releases` | 与版本列表相同，`organization_id` 必填 | 返回真实 `llm_release_record`：评测绑定、提交/发布操作者与时间、回滚来源和 revision；读取写 `llm.release.list` 审计，但不记录原始 cursor。 |
+| `GET /v1/system-admin/llm/config-versions/{version_id}` | canonical UUID `version_id` | 读取单版本和完整 routes，供跨页发布记录回滚前加载。 |
+| `POST /v1/system-admin/llm/config-versions/drafts` | canonical UUID `organization_id`、可选 `description`、`reason`、`idempotency_key` | 创建 `draft`；不自动伪造 Provider、路由、评测或发布记录。 |
+| `PUT` / `PATCH .../{version_id}/routes` | `expected_revision`、1–32 个完整 `routes[]`、`reason`、`idempotency_key` | 两种方法都是完整替换；每条包含 scenario、主/降级 Provider-model 对、enabled、temperature、Token、超时、重试、熔断与恢复探测。 |
+| `POST .../{version_id}/validate` | `expected_revision`、`reason`、`idempotency_key` | 要求三个必需场景各一次、引用 Provider 可用，且当前 Provider revision 对该草稿有通过的连接测试。 |
+| `POST .../{version_id}/submit-publish` | `expected_revision`、`evaluation_run_id`、`reason`、`idempotency_key` | 评测必须是服务端可验证、绑定相同组织/配置版本/revision/hash 且门禁通过的 snapshot；成功创建真实 release record。当前没有独立 eval list/create API。 |
+| `POST .../{version_id}/publish` | `expected_revision`、`reason`、`idempotency_key` | 只发布 `pending_publish`；同组织旧 running 版本转为 superseded。 |
+| `POST .../{version_id}/rollback` | `reason`、`idempotency_key` | 从已发布历史创建新的 running 版本和 release record，不改写或删除原历史。 |
+
+配置版本状态流为 `draft -> validated -> pending_publish -> running`；新版本发布后原 running 变为 `superseded`，被新回滚版本替换的运行版本可变为 `rolled_back`。release record 使用 `pending -> running -> superseded/rolled_back`。所有写请求都要求非空 `reason`、1–128 字符 `idempotency_key`；相同动作和同键同请求重放原响应，不同请求复用返回 409。带 `expected_revision` 的写入遇到旧 revision 返回 409 `stale_revision`，客户端必须重新读取，不得覆盖。
+
+版本、发布记录和调用明细都使用服务端签发的 `payload.signature` HMAC-SHA256 不透明 cursor。cursor 绑定资源类型和规范化 scope，排他地从上一页最后一项之后继续；无下一页时 `next_cursor=null`。无签名、篡改、跨资源或跨组织/筛选复用返回 422。`LLM_CURSOR_SIGNING_KEY` 必须来自独立 Kubernetes Secret，至少 32 字节，并在所有 API replica 间一致；轮换会让旧 cursor 返回 422，调用方应从第一页重新查询。
+
+用量四接口共享筛选：`start_at`、`end_at`（RFC3339 且 `[start_at,end_at)`）、`provider_config_id`、`model`、`scenario`、`organization_id`、`store_id`、`currency`（`CNY`/`USD`）、`status`（`succeeded`/`failed`/`timed_out`/`rejected`）和 `route_role`（`primary`/`fallback`）。`breakdown` 另要求 `group_by=provider|model|scenario|organization|store|status|error_code`；invocations 另支持 `limit` 1–500 和 cursor。汇总返回 calls、输入/输出/总 Token、P95、错误率、降级率和成本：零调用时计数为 0、比率/P95 为 null；混合币种时 `estimated_cost_micros=null`，以 `cost_by_currency` 分币种表达。调用明细只含调用/时间、Provider、模型、场景、组织/可空店铺、主降级角色、Token、延迟、状态、安全错误码、估算成本和币种，不含 Prompt、客户消息、模型回复或 Secret。当前 migration 保护 invocation history 不允许普通 UPDATE/DELETE，但仓库尚未实现按天数自动清理或可配置留存周期；留存周期仍属后续能力，不在本文虚构数值。
+
+Secret 引用固定为 `secret_ref: {namespace, name, key}`。运行时模型凭据由 Helm `api.runtimeLlmSecretRef{name,key}` 注入，cursor 由独立 `api.cursorSigningSecretRef{name,key}` 注入；Provider 连接测试 allowlist 使用 `api.secretAccess.allowedSecretRefs[].name` 与 `keys[].{key,allowedOrigins}`，namespace 由 Pod downward API 单独注入。Secret 名使用 DNS-1123 subdomain、key 使用 Kubernetes key 规则；禁止重复 `(name,key)`，runtime tuple 必须唯一匹配 allowlist 且不得自行声明 origins，其 origin 只从 `LLM_BASE_URL` 绑定。额外 tuple 必须声明精确、无凭据的公网 HTTPS origin。禁止运行时 Secret、Provider Secret 与 cursor Secret 复用，任何 Secret 值都不进入 API 响应、数据库、日志、values 或文档。连接测试拒绝内部/Kubernetes/混合 DNS、非公网地址、重定向、origin 不匹配和 DNS rebinding，并在验证后固定 IP、保留原 SNI/Host。
+
+持久化由 `migrations/012_system_admin_llm_governance.sql` 提供：`llm_provider_config`、`llm_config_version`、`llm_eval_run`、`llm_release_record`、`llm_scenario_route`、`llm_connection_test`、`llm_invocation_metric`。System Admin 基础审计与任务表来自 `migrations/006_system_admin_ops.sql` 的 `system_admin_audit_log` 扩展和 `background_task`。development/production 缺少 `DATABASE_URL` 或 `LLM_CURSOR_SIGNING_KEY` 时启动 fail fast；只有显式 test 环境可用 InMemory 仓库，且默认集合为空，测试必须显式注入数据。
 
 统一错误响应：
 
@@ -429,10 +462,10 @@
 - 系统管理员可以登录 `system-admin.ecommerce-cs-agent-dev.fcihome.com` 独立系统后台；客户后台账号不能登录系统后台。
 - `admin.ecommerce-cs-agent-dev.fcihome.com` 不展示系统后台入口，`system-admin.ecommerce-cs-agent-dev.fcihome.com` 不复用客户后台登录页、Cookie 或路由守卫。
 - 平台运营可以创建租户和店铺；当前不提供客户后台初始管理员邀请，邀请能力属于后续候选。
-- 系统后台可以查看各店铺资料、知识、规则、动作能力和 API 接入完成度。
+- 系统后台可以查看各店铺商品、价格、知识和 API 接入四项完成度；规则与动作能力的独立跨租户治理属于后续增强。
 - 技术支持可以按 `decision_id`、请求 ID 或外部消息 ID 查询消息决策摘要。
 - 系统后台可以查看资料解析、知识抽取、embedding、批量导入和评测任务状态。
-- 系统后台可以查看 LLM provider、API、Worker、数据库、对象存储和队列健康状态。
+- 系统后台可以查看 LLM Provider 脱敏状态，以及 API、PostgreSQL/pgcrypto、pgvector 和任务队列健康；Worker、Redis、对象存储和 K8s 探针尚未接入当前健康响应。
 - 发布管理员可以创建 LLM 配置草稿、验证 Provider、配置主/降级路由、通过评测门禁发布或回滚，并查看真实调用、Token、成本、延迟和失败统计。
 - development/production 缺少 PostgreSQL 时系统后台启动失败；不得回退到 Demo Organization、Demo PDD Store 或其他 In-memory 示例记录。
 - 系统首页总数来自服务端聚合，列表总数来自 `page.total`；不得用当前页数组长度冒充系统总量。

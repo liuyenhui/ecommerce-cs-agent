@@ -150,6 +150,13 @@ KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent
 
 日志中如包含 provider 请求头、key、prompt 原文或客户 payload，先脱敏再分享。
 
+若配置版本、调用明细或发布记录翻页返回 422 `invalid_cursor`：
+
+1. 确认调用方没有把 cursor 用于不同资源、组织或筛选；cursor 只对原规范化 scope 有效。
+2. 确认 `LLM_CURSOR_SIGNING_KEY` 来自独立 `api.cursorSigningSecretRef`，与 runtime/Provider Secret 不同，且所有 API replica 指向同一 Secret name/key。
+3. 若刚完成签名 key 轮换，旧 cursor 按设计失效；不要恢复旧 key 或输出 cursor payload，直接从第一页重新查询。
+4. 轮换后观察所有 API Pod rollout 完成，再做跨 replica 连续翻页 smoke；发布记录只写 Secret 引用和验证结果，不写 key 值或原始 cursor。
+
 ## 7. K8s rollout 失败
 
 检查顺序：

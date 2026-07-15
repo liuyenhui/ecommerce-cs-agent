@@ -234,9 +234,9 @@ LLM cursor 签名 Secret：`ecommerce-cs-agent-llm-cursor`
 | --- | --- |
 | `signing-key` | 注入 `LLM_CURSOR_SIGNING_KEY`，用于配置版本、调用明细和发布记录 cursor 的 HMAC-SHA256 签名；至少 32 字节 |
 
-该 Secret 由 `api.cursorSigningSecretRef` 引用，与运行时 Secret 和 Provider 凭据 Secret 分离。仓库只保存 Secret 名与 key；真实随机值必须通过受控 Secret 渠道创建并轮换。轮换后已有 cursor 会失效并返回 422，调用方应从第一页重新查询。
+该 Secret 由 `api.cursorSigningSecretRef{name,key}` 引用，与运行时 Secret 和 Provider 凭据 Secret 分离；namespace 是 Helm release namespace。仓库只保存 Secret 名与 key；真实随机值必须通过受控 Secret 渠道创建并轮换。所有 API replica 必须读取同一个至少 32 字节的 key，否则 cursor 会随机失效。轮换后已有 cursor 会失效并返回 422，调用方应从第一页重新查询；轮换发布记录只保存时间、Secret 引用和 rollout 结果，不保存 key 值。
 
-模型凭据必须放在单独的 Secret 中，禁止复用 `ecommerce-cs-agent-runtime`。该 Secret 只允许包含模型 Provider 所需凭据 key；不得包含 `DATABASE_URL`、`JWT_SECRET`、`SESSION_SECRET` 或其他运行时密钥。Helm 的 `api.secretAccess.allowedSecretRefs` 必须按 `(Secret name, key)` 配置允许的 `allowedOrigins`；每个 origin 必须是无用户信息、路径、查询或片段的精确 HTTPS origin。API ServiceAccount 的 Role 只授予这些专用 Secret 的 `get` 权限。dev 发布前需通过受控 Secret 渠道创建该专用 Secret，不在 values、文档、日志或聊天中记录凭据值。
+模型凭据必须放在单独的 Secret 中，禁止复用 `ecommerce-cs-agent-runtime`。数据库/API 的 Provider 记录使用 `secret_ref{namespace,name,key}`；Helm allowlist 的 namespace 固定为 Pod 所在 namespace，并由 downward API 注入。该 Secret 只允许包含模型 Provider 所需凭据 key；不得包含 `DATABASE_URL`、`JWT_SECRET`、`SESSION_SECRET` 或其他运行时密钥。Helm 的 `api.secretAccess.allowedSecretRefs` 必须按 `(Secret name, key)` 配置允许的 `allowedOrigins`；每个 origin 必须是无用户信息、路径、查询或片段的精确 HTTPS origin。API ServiceAccount 的 Role 只授予这些专用 Secret 的 `get` 权限。dev 发布前需通过受控 Secret 渠道创建该专用 Secret，不在 values、文档、日志或聊天中记录凭据值。
 
 API Deployment 的 `LLM_API_KEY` 通过 `secretKeyRef` 从 `api.runtimeLlmSecretRef` 指定的专用 Secret 与 key 注入，不写入 values 或渲染产物。该 `(name, key)` 必须同时存在于 `api.secretAccess.allowedSecretRefs`，且名称不得等于 `api.envFromSecret`；`ecommerce-cs-agent-runtime` 继续只通过 `envFrom` 提供非模型凭据运行配置。
 
