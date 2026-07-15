@@ -821,6 +821,47 @@ def test_non_test_app_selects_postgres_llm_repository(monkeypatch: pytest.Monkey
     assert callable(captured["kwargs"]["release_gate_checker"])
 
 
+def test_local_acs_debug_uses_real_postgres_with_connection_test_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    sentinel = InMemoryLlmGovernanceRepository()
+
+    def fake_postgres(database_url: str, **kwargs: Any) -> InMemoryLlmGovernanceRepository:
+        captured["database_url"] = database_url
+        captured["kwargs"] = kwargs
+        return sentinel
+
+    monkeypatch.setenv("ACS_DEBUG_MODE", "local-acs")
+    monkeypatch.setattr(app_module, "PostgresLlmGovernanceRepository", fake_postgres)
+    monkeypatch.setattr(
+        app_module.KubernetesSecretProviderConnectionTester,
+        "from_environment",
+        lambda: (_ for _ in ()).throw(AssertionError("local debug must not require an in-cluster service account")),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "PostgresEvaluationReleaseGateChecker",
+        lambda _database_url: (lambda _version, _run_id: {"status": "passed"}),
+    )
+
+    create_app(
+        Settings(
+            environment="development",
+            database_url="postgresql://db.example.test/app",
+            llm_cursor_signing_key=CURSOR_SIGNING_KEY,
+        )
+    )
+
+    assert captured["database_url"] == "postgresql://db.example.test/app"
+    tester = captured["kwargs"]["connection_tester"]
+    assert tester({}, {}) == {
+        "status": "failed",
+        "latency_ms": 0,
+        "error_code": "tester_unavailable",
+    }
+
+
 def test_non_test_app_rejects_injected_in_memory_llm_repository() -> None:
     with pytest.raises(RuntimeError, match="test-only"):
         create_app(

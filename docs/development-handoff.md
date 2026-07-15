@@ -6,6 +6,7 @@
 
 ### 2026-07-15
 
+- `ACS_DEBUG_MODE=local-acs` 继续使用真实开发 PostgreSQL 与对象存储，但不再要求本机具备 Kubernetes Pod 的 ServiceAccount token/CA。此模式下 LLM Provider 连接测试明确返回 `tester_unavailable`；生产及普通 development 运行仍必须通过集群内 Secret allowlist 适配器，不能用本地调试开关绕过。
 - LLM Secret OpenAPI pattern 不再使用可在末尾换行前匹配的 `$`，改用 ECMA 兼容的严格输入末尾断言，并由真实 `Draft202012Validator` 覆盖最小/最大合法边界及首尾空白、换行拒绝。Runbook 区分 POST 的 `validation_error`、不可变 PATCH 字段的 `extra_forbidden` 和直接 service 的 `invalid_secret_ref`；测试文档不再硬编码个人 `.venv` 绝对路径。
 - System Admin 文档与契约按真实实现再次收口：Secret namespace/name/key 在 API/Pydantic、直接 service 写入和 runtime adapter 统一校验；完成度只返回商品、价格、知识、API 接入四项；“评测与发布”只表示 LLM 配置版本、绑定评测快照和 `/v1/system-admin/llm/releases`；健康响应只声明 API、PostgreSQL/pgcrypto、pgvector、queue 四类依赖。
 - LLM Secret 部署边界统一收紧：cursor、runtime 与所有 Provider Secret 名称都使用完整 DNS-1123 subdomain 校验，Secret key 使用 Kubernetes key 规则；`allowedSecretRefs` 禁止重复 `(name,key)`，runtime tuple 必须唯一匹配且不得声明 `allowedOrigins`，其 origin 只从 `LLM_BASE_URL` 自动绑定。Helm values schema、模板和 Python runtime adapter 使用同一规则，并由矩阵测试防止直接环境变量绕过。System Admin 的原始凭据门禁以真实 Provider DOM 精确 allowlist 为主、TypeScript AST 扫描为辅；InMemory Admin 测试数据必须显式注入，生产构造默认空且无数据库时 fail fast。

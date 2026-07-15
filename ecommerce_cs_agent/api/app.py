@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone
+import os
 from typing import Any, Callable
 import uuid
 
@@ -93,7 +94,19 @@ def create_app(
             raise RuntimeError("DATABASE_URL is required for System Admin LLM governance outside test")
         if not settings.llm_cursor_signing_key:
             raise RuntimeError("LLM_CURSOR_SIGNING_KEY is required for System Admin LLM governance outside test")
-        connection_tester = llm_connection_tester or KubernetesSecretProviderConnectionTester.from_environment()
+        local_acs_debug = (
+            settings.environment.lower() in {"development", "dev"}
+            and os.environ.get("ACS_DEBUG_MODE") == "local-acs"
+        )
+        connection_tester = llm_connection_tester
+        if connection_tester is None and local_acs_debug:
+            connection_tester = lambda _provider, _request: {
+                "status": "failed",
+                "latency_ms": 0,
+                "error_code": "tester_unavailable",
+            }
+        if connection_tester is None:
+            connection_tester = KubernetesSecretProviderConnectionTester.from_environment()
         release_gate_checker = llm_release_gate_checker or PostgresEvaluationReleaseGateChecker(
             settings.database_url
         )
