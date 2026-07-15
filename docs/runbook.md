@@ -148,7 +148,7 @@ KUBECONFIG=~/.kube/bpg-debian12-master-public.yaml kubectl -n ecommerce-cs-agent
 
 检查 `allowedOrigins` 时只核对 origin 和 Secret/key 名称，不要读取凭据值。Provider 连接测试要求所有 DNS 结果均为公网地址，并在一次请求内固定已验证 IP；内部 Provider、重定向和 DNS 混合解析属于预期拒绝。DNS 使用进程级固定 daemon worker 与有界 outstanding 队列，容量耗尽会快速返回超时，不会为每个请求创建线程。Kubernetes Secret 读取要求 `KUBERNETES_SERVICE_HOST` 是 IP literal，TCP 固定连接该 IP，TLS 使用受信 `kubernetes.default.svc` 名称和集群 CA，且不使用业务 Pod 的 Provider 代理。HTTP CONNECT 代理也先通过同一有界解析器解析并固定 IP，不把代理主机名交给 `create_connection`。DNS、Secret 读取和 Provider 请求共享 20 秒绝对截止时间；TCP、CONNECT、TLS、请求头和分块响应体每阶段都只使用剩余时间，socket 到期 guard 会关闭仍在慢速读写的连接，任一阶段耗尽后不会继续下一阶段。
 
-若 Provider 创建/更新返回 422 `invalid_secret_ref`，先核对 namespace 是最长 63 字符且不含点的 DNS-1123 label，Secret name 是最长 253 字符且每段最长 63 字符的 DNS-1123 subdomain，key 是最长 253 字符的 Kubernetes data key。不要尝试绕过 API：直接 service 写入和 runtime adapter 使用同一校验，并会在持久化或 Secret 读取前拒绝相同非法值。
+通过 `POST /v1/system-admin/llm/providers` 创建 Provider 时，非法 `secret_ref` 返回 422 `validation_error`，详情定位到 `secret_ref.namespace`、`secret_ref.name` 或 `secret_ref.key`。`PATCH /v1/system-admin/llm/providers/{provider_id}` 不接受 `secret_ref`：Provider 端点与 Secret 引用不可原地替换，提交该字段返回 422 `validation_error` / `extra_forbidden`，需要更换引用时应按现有安全流程创建新 Provider。只有绕过 Pydantic API 模型、直接调用 LLM governance service create/update 时，非法引用才使用 422 `invalid_secret_ref`。三条路径都要求 namespace 是最长 63 字符且不含点的 DNS-1123 label，Secret name 是最长 253 字符且每段最长 63 字符的 DNS-1123 subdomain，key 是最长 253 字符的 Kubernetes data key；首尾空白或换行都必须拒绝，且不得写入持久化状态。
 
 日志中如包含 provider 请求头、key、prompt 原文或客户 payload，先脱敏再分享。
 

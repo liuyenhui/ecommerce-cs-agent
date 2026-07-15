@@ -250,6 +250,9 @@ def test_provider_url_rejects_credentials_query_fragment_and_non_https(base_url:
         {"namespace": "a" * 64, "name": "llm", "key": "api-key"},
         {"namespace": "runtime", "name": "a" * 64, "key": "api-key"},
         {"namespace": "runtime", "name": "llm", "key": ""},
+        {"namespace": "runtime\n", "name": "llm", "key": "api-key"},
+        {"namespace": "runtime", "name": "llm\n", "key": "api-key"},
+        {"namespace": "runtime", "name": "llm", "key": "api-key\n"},
     ],
 )
 def test_direct_service_provider_writes_reject_invalid_secret_references(

@@ -352,7 +352,7 @@ def test_kubernetes_secret_tester_reads_namespace_from_downward_env_or_service_a
     ]
 
 
-@pytest.mark.parametrize("invalid_name", ["a..b", "a" * 64, "a." * 127 + "a", ".a", "a.", "-a", "a-", "Upper"])
+@pytest.mark.parametrize("invalid_name", ["a..b", "a" * 64, "a." * 127 + "a", ".a", "a.", "-a", "a-", "Upper", "runtime\n"])
 def test_kubernetes_secret_tester_rejects_non_dns_subdomain_secret_names(invalid_name: str) -> None:
     with pytest.raises(RuntimeError, match="runtime LLM Secret reference"):
         KubernetesSecretProviderConnectionTester._parse_runtime_secret_ref(
@@ -360,7 +360,7 @@ def test_kubernetes_secret_tester_rejects_non_dns_subdomain_secret_names(invalid
         )
 
 
-@pytest.mark.parametrize("invalid_namespace", ["runtime.dev", "Bad_Name", "a" * 64, "", "-runtime"])
+@pytest.mark.parametrize("invalid_namespace", ["runtime.dev", "Bad_Name", "a" * 64, "", "-runtime", "runtime\n", " runtime"])
 def test_kubernetes_secret_tester_rejects_non_dns_label_namespaces(
     tmp_path: Path,
     invalid_namespace: str,
@@ -479,6 +479,19 @@ def test_kubernetes_secret_tester_accepts_unique_multi_ref_and_auto_binds_runtim
                     {
                         "name": "ecommerce-cs-agent-llm-provider",
                         "keys": [{"key": "bad/key", "allowedOrigins": []}],
+                    }
+                ]
+            ),
+        },
+        {
+            "KUBERNETES_SERVICE_HOST": "10.96.0.1",
+            "KUBERNETES_SERVICE_PORT_HTTPS": "443",
+            "LLM_GOVERNANCE_SECRET_NAMESPACE": "runtime",
+            "LLM_GOVERNANCE_ALLOWED_SECRET_REFS": json.dumps(
+                [
+                    {
+                        "name": "ecommerce-cs-agent-llm-provider",
+                        "keys": [{"key": "api-key\n", "allowedOrigins": []}],
                     }
                 ]
             ),

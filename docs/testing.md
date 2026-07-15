@@ -4,7 +4,7 @@
 
 ## 1. 当前可运行测试
 
-当前仓库已把 Python、Admin Web、OpenAPI、Helm 和部署边界测试纳入项目依赖。仓库根目录优先使用本仓库 `.venv`；隔离 worktree 没有 `.venv` 时，可使用主仓库 `/Users/huiliu/Documents/software/ecommerce-cs-agent/.venv/bin/python` 或对应 `pytest`，但工作目录仍保持在当前 worktree。
+当前仓库已把 Python、Admin Web、OpenAPI、Helm 和部署边界测试纳入项目依赖。仓库根目录优先使用 `$PROJECT_ROOT/.venv/bin/python`；隔离 worktree 没有 `.venv` 时，应激活已安装本项目 dev 依赖的 Python 环境并使用 `python -m pytest`，工作目录仍保持在当前 worktree。不得在项目文档中硬编码个人用户目录下的虚拟环境路径。
 
 本地全量 Python 测试：
 

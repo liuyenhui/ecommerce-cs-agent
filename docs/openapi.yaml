@@ -3145,9 +3145,9 @@ components:
       required: [namespace, name, key]
       description: Kubernetes Secret 定位引用；接口、数据库和审计均不得读取或返回对应值。
       properties:
-        namespace: {type: string, minLength: 1, maxLength: 63, pattern: "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$"}
-        name: {type: string, minLength: 1, maxLength: 253, pattern: "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$"}
-        key: {type: string, minLength: 1, maxLength: 253, pattern: "^[A-Za-z0-9._-]+$"}
+        namespace: {type: string, minLength: 1, maxLength: 63, pattern: "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?![\\s\\S])"}
+        name: {type: string, minLength: 1, maxLength: 253, pattern: "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*(?![\\s\\S])"}
+        key: {type: string, minLength: 1, maxLength: 253, pattern: "^[A-Za-z0-9._-]+(?![\\s\\S])"}
 
     LlmProviderCreateRequest:
       type: object

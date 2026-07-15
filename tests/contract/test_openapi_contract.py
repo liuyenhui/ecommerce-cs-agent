@@ -810,11 +810,12 @@ class OpenApiContractTest(unittest.TestCase):
         namespace = secret_ref["properties"]["namespace"]
         name = secret_ref["properties"]["name"]
         key = secret_ref["properties"]["key"]
-        dns_label = "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$"
-        dns_subdomain = "^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*$"
+        strict_end = r"(?![\s\S])"
+        dns_label = f"^[a-z0-9](?:[-a-z0-9]{{0,61}}[a-z0-9])?{strict_end}"
+        dns_subdomain = f"^[a-z0-9](?:[-a-z0-9]{{0,61}}[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]{{0,61}}[a-z0-9])?)*{strict_end}"
         self.assertEqual((namespace["maxLength"], namespace["pattern"]), (63, dns_label))
         self.assertEqual((name["maxLength"], name["pattern"]), (253, dns_subdomain))
-        self.assertEqual((key["maxLength"], key["pattern"]), (253, "^[A-Za-z0-9._-]+$"))
+        self.assertEqual((key["maxLength"], key["pattern"]), (253, f"^[A-Za-z0-9._-]+{strict_end}"))
 
         readiness_codes = self.document["components"]["schemas"]["ReadinessCheck"]["properties"]["code"]["enum"]
         self.assertEqual(
@@ -828,6 +829,30 @@ class OpenApiContractTest(unittest.TestCase):
             set(self.document["components"]["schemas"]["HealthDependency"]["required"]),
             {"name", "status", "message", "checked_at"},
         )
+
+    def test_llm_secret_reference_schema_strictly_validates_input_boundaries(self):
+        secret_ref = self.document["components"]["schemas"]["LlmSecretReference"]
+        maximum_name = ".".join(["a" * 63, "b" * 63, "c" * 63, "d" * 61])
+        legal_references = [
+            {"namespace": "a", "name": "a", "key": "A"},
+            {"namespace": "a" * 63, "name": maximum_name, "key": "K" * 253},
+            {"namespace": "runtime-1", "name": "provider.runtime-1", "key": "api_key.v1-"},
+        ]
+        for reference in legal_references:
+            with self.subTest(reference=reference):
+                assert_schema_valid(reference, secret_ref, self.document)
+
+        base = {"namespace": "runtime", "name": "llm-provider", "key": "api-key"}
+        invalid_references = []
+        for field in ("namespace", "name", "key"):
+            for prefix, suffix in (("", "\n"), (" ", ""), ("", " "), ("\t", ""), ("", "\t")):
+                reference = dict(base)
+                reference[field] = f"{prefix}{reference[field]}{suffix}"
+                invalid_references.append((field, prefix, suffix, reference))
+        for field, prefix, suffix, reference in invalid_references:
+            with self.subTest(field=field, prefix=prefix, suffix=suffix):
+                with self.assertRaises(ValidationError):
+                    assert_schema_valid(reference, secret_ref, self.document)
 
     def test_llm_governance_contract_documents_roles_lifecycle_filters_and_mixed_currency(self):
         paths = self.document["paths"]
