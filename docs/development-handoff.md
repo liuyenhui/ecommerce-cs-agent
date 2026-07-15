@@ -6,6 +6,7 @@
 
 ### 2026-07-15
 
+- Kubernetes API 与模型 Provider 的自定义 TLS socket 均在系统默认安全上下文上显式固定最低 `TLSv1.2`，保留证书校验、SNI、固定 IP 和绝对 Deadline 约束；回归测试同时覆盖集群 CA 与公共 CA 两条 context 构造路径，以满足 CodeQL 协议下限门禁。
 - `dev:acs:env` 从 runtime Secret 与独立 `ecommerce-cs-agent-llm-cursor/signing-key` 合并生成本机 `0600` 环境文件，标准 `dev:api:acs-local` 无需手工注入 cursor key。`ACS_DEBUG_MODE=local-acs` 继续使用真实开发 PostgreSQL 与对象存储，但不要求本机具备 Kubernetes Pod 的 ServiceAccount token/CA；LLM Provider 连接测试明确返回 `tester_unavailable`。生产、staging、普通 development 及非精确调试开关仍必须通过集群内 Secret allowlist 适配器，不能绕过。
 - LLM Secret OpenAPI pattern 不再使用可在末尾换行前匹配的 `$`，改用 ECMA 兼容的严格输入末尾断言，并由真实 `Draft202012Validator` 覆盖最小/最大合法边界及首尾空白、换行拒绝。Runbook 区分 POST 的 `validation_error`、不可变 PATCH 字段的 `extra_forbidden` 和直接 service 的 `invalid_secret_ref`；测试文档不再硬编码个人 `.venv` 绝对路径。
 - System Admin 文档与契约按真实实现再次收口：Secret namespace/name/key 在 API/Pydantic、直接 service 写入和 runtime adapter 统一校验；完成度只返回商品、价格、知识、API 接入四项；“评测与发布”只表示 LLM 配置版本、绑定评测快照和 `/v1/system-admin/llm/releases`；健康响应只声明 API、PostgreSQL/pgcrypto、pgvector、queue 四类依赖。

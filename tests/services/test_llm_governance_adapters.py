@@ -37,6 +37,28 @@ def _provider(provider_type: str = "openai") -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize("ca_file", [None, "/tmp/kubernetes-ca.crt"])
+def test_tls_context_explicitly_requires_tls_1_2_or_newer(
+    monkeypatch: pytest.MonkeyPatch,
+    ca_file: str | None,
+) -> None:
+    calls: dict[str, object] = {}
+
+    class Context:
+        minimum_version: object | None = None
+
+    def fake_default_context(**kwargs: object) -> Context:
+        calls["kwargs"] = kwargs
+        return Context()
+
+    monkeypatch.setattr(adapter_module.ssl, "create_default_context", fake_default_context)
+
+    context = adapter_module._secure_tls_context(ca_file=ca_file)
+
+    assert context.minimum_version is adapter_module.ssl.TLSVersion.TLSv1_2
+    assert calls["kwargs"] == ({"cafile": ca_file} if ca_file else {})
+
+
 def test_bounded_resolver_pool_caps_workers_outstanding_jobs_and_recovers() -> None:
     pool_type = getattr(adapter_module, "_BoundedResolverPool", None)
     assert pool_type is not None, "bounded resolver pool is required"

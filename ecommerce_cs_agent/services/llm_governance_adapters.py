@@ -35,6 +35,12 @@ _MAX_RESPONSE_BYTES = 1024 * 1024
 _KUBERNETES_TLS_SERVER_NAME = "kubernetes.default.svc"
 
 
+def _secure_tls_context(*, ca_file: str | None = None) -> ssl.SSLContext:
+    context = ssl.create_default_context(**({"cafile": ca_file} if ca_file else {}))
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
 class _SecurityPolicyError(ValueError):
     pass
 
@@ -268,7 +274,7 @@ class _KubernetesApiTransport:
             kubernetes_ip = str(ipaddress.ip_address(parsed.hostname))
         except ValueError:
             raise _SecurityPolicyError("invalid_kubernetes_request") from None
-        context = ssl.create_default_context(cafile=ca_file)
+        context = _secure_tls_context(ca_file=ca_file)
         port = parsed.port or 443
         raw_socket = socket.create_connection((kubernetes_ip, port), timeout=deadline.remaining())
         guard = _guard_socket(raw_socket, deadline)
@@ -404,7 +410,7 @@ class _PinnedProviderTransport:
         connection: http.client.HTTPConnection | None = None
         path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
         try:
-            context = ssl.create_default_context()
+            context = _secure_tls_context()
             _set_deadline_timeout(raw_socket, deadline)
             tls_socket = context.wrap_socket(
                 raw_socket,
