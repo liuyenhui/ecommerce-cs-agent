@@ -15,7 +15,7 @@ import fs, {
 import { createServer } from "node:http";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -39,7 +39,7 @@ SYSTEM_ADMIN_PASSWORD="system pass && echo inert"
 `;
 
 async function withLoginStateCliSandbox(run) {
-  const sandbox = mkdtempSync(join(tmpdir(), "admin-web-login-state-cli-"));
+  const sandbox = mkdtempSync(join("/tmp", "admin-web-login-state-cli-"));
   const repositoryRoot = join(sandbox, "repository");
   const scriptsDirectory = join(repositoryRoot, "scripts");
   const credentialFile = join(
@@ -49,6 +49,10 @@ async function withLoginStateCliSandbox(run) {
   );
   const kubectlMarker = join(sandbox, "kubectl-was-called");
   const fakeBin = join(sandbox, "bin");
+  const outputDir = join(
+    "/tmp",
+    `ecommerce-admin-auth-${basename(sandbox)}`,
+  );
   mkdirSync(scriptsDirectory, { recursive: true });
   mkdirSync(fakeBin);
   copyFileSync(
@@ -127,12 +131,28 @@ async function withLoginStateCliSandbox(run) {
       repositoryRoot,
       credentialFile,
       kubectlMarker,
+      outputDir,
       runCli,
       runCliAsync,
     });
   } finally {
+    rmSync(outputDir, { recursive: true, force: true });
     rmSync(sandbox, { recursive: true, force: true });
   }
+}
+
+function writeCliCredentialFile({ credentialFile, repositoryRoot }) {
+  initializeAdminCredentialFile({ filePath: credentialFile, repositoryRoot });
+  writeFileSync(
+    credentialFile,
+    `CUSTOMER_ADMIN_EMAIL=output-path-customer@example.test
+CUSTOMER_ADMIN_PASSWORD=output-path-customer-secret
+SYSTEM_ADMIN_EMAIL=output-path-system@example.test
+SYSTEM_ADMIN_PASSWORD=output-path-system-secret
+`,
+    "utf8",
+  );
+  chmodSync(credentialFile, 0o600);
 }
 
 async function withLocalHttpServer(handler, run) {
@@ -163,6 +183,28 @@ async function readRequestJson(request) {
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function withSuccessfulAdminServer(run) {
+  return withLocalHttpServer(async (request, response) => {
+    const pathname = new URL(request.url, "http://fixture.test").pathname;
+    response.setHeader("Content-Type", "application/json");
+    if (request.method === "POST") {
+      await readRequestJson(request);
+      const cookie =
+        pathname === "/v1/admin/auth/login"
+          ? "agent_admin_session=fixture-customer-session"
+          : "agent_system_admin_session=fixture-system-session";
+      response.setHeader("Set-Cookie", `${cookie}; Path=/; HttpOnly`);
+      response.end("{}");
+      return;
+    }
+    response.end(
+      JSON.stringify({
+        user: { email: "fixture@example.test", role: "fixture" },
+      }),
+    );
+  }, run);
 }
 
 test("CLI initializes an external owner-only credential file before side effects", async () => {
@@ -228,6 +270,7 @@ test("CLI uses a secure file for isolated Customer and System login states", asy
       repositoryRoot,
       credentialFile,
       kubectlMarker,
+      outputDir,
       runCliAsync,
     }) => {
       const customerEmail = "customer-cli@example.test";
@@ -236,7 +279,6 @@ test("CLI uses a secure file for isolated Customer and System login states", asy
       const systemPassword = "system-cli-password-secret";
       const customerCookieValue = "customer-cookie-secret";
       const systemCookieValue = "system-cookie-secret";
-      const outputDir = join(sandbox, "login-state");
       const customerRequests = [];
       const systemRequests = [];
 
@@ -363,7 +405,10 @@ SYSTEM_ADMIN_PASSWORD=${systemPassword}
           assert.equal(result.status, 0, result.stderr);
           assert.equal(result.signal, null);
           assert.throws(() => lstatSync(kubectlMarker), { code: "ENOENT" });
-          assert.equal(lstatSync(outputDir).mode & 0o777, 0o700);
+          const outputInfo = lstatSync(outputDir);
+          assert.equal(outputInfo.isDirectory(), true);
+          assert.equal(outputInfo.isSymbolicLink(), false);
+          assert.equal(outputInfo.mode & 0o777, 0o700);
 
           const customerStatePath = join(
             outputDir,
@@ -373,8 +418,19 @@ SYSTEM_ADMIN_PASSWORD=${systemPassword}
             outputDir,
             "system-admin.storageState.json",
           );
-          assert.equal(lstatSync(customerStatePath).mode & 0o777, 0o600);
-          assert.equal(lstatSync(systemStatePath).mode & 0o777, 0o600);
+          const customerStateInfo = lstatSync(customerStatePath);
+          const systemStateInfo = lstatSync(systemStatePath);
+          assert.equal(customerStateInfo.isFile(), true);
+          assert.equal(customerStateInfo.isSymbolicLink(), false);
+          assert.equal(customerStateInfo.mode & 0o777, 0o600);
+          assert.equal(systemStateInfo.isFile(), true);
+          assert.equal(systemStateInfo.isSymbolicLink(), false);
+          assert.equal(systemStateInfo.mode & 0o777, 0o600);
+          if (typeof process.getuid === "function") {
+            assert.equal(outputInfo.uid, process.getuid());
+            assert.equal(customerStateInfo.uid, process.getuid());
+            assert.equal(systemStateInfo.uid, process.getuid());
+          }
 
           const customerState = JSON.parse(
             readFileSync(customerStatePath, "utf8"),
@@ -454,11 +510,10 @@ SYSTEM_ADMIN_PASSWORD=${systemPassword}
 
 test("CLI authentication failures expose only method, pathname, and status", async () => {
   await withLoginStateCliSandbox(
-    async ({ sandbox, repositoryRoot, runCliAsync }) => {
+    async ({ sandbox, repositoryRoot, outputDir, runCliAsync }) => {
       const echoedPassword = "auth-failure-password-secret";
       const echoedBodyMarker = "raw-auth-response-body-marker";
       const requestedPaths = [];
-      const outputDir = join(sandbox, "failed-login-state");
       const homeDirectory = join(sandbox, "home");
       const credentialFile = defaultAdminCredentialsFile(homeDirectory);
 
@@ -521,11 +576,14 @@ SYSTEM_ADMIN_PASSWORD=unused-system-password
 
 test("CLI redacts malformed JSON from a successful login response", async () => {
   await withLoginStateCliSandbox(
-    async ({ sandbox, repositoryRoot, credentialFile, runCliAsync }) => {
+    async ({
+      repositoryRoot,
+      credentialFile,
+      outputDir,
+      runCliAsync,
+    }) => {
       const submittedPassword = "pwLGIN7";
       const responseFragment = "LGIN7";
-      const outputDir = join(sandbox, "malformed-login-state");
-
       initializeAdminCredentialFile({ filePath: credentialFile, repositoryRoot });
       writeFileSync(
         credentialFile,
@@ -576,11 +634,14 @@ SYSTEM_ADMIN_PASSWORD=unused-system-password
 
 test("CLI redacts malformed JSON from a successful auth me response", async () => {
   await withLoginStateCliSandbox(
-    async ({ sandbox, repositoryRoot, credentialFile, runCliAsync }) => {
+    async ({
+      repositoryRoot,
+      credentialFile,
+      outputDir,
+      runCliAsync,
+    }) => {
       const sessionCookieValue = "ckMEJ8";
       const responseFragment = "MEJ8";
-      const outputDir = join(sandbox, "malformed-me-state");
-
       initializeAdminCredentialFile({ filePath: credentialFile, repositoryRoot });
       writeFileSync(
         credentialFile,
@@ -639,13 +700,12 @@ SYSTEM_ADMIN_PASSWORD=unused-system-password
 
 test("CLI fails before side effects when an explicit credential file is missing", async () => {
   await withLoginStateCliSandbox(
-    ({ sandbox, kubectlMarker, runCli }) => {
+    ({ sandbox, kubectlMarker, outputDir, runCli }) => {
       const missingCredentialFile = join(
         sandbox,
         "missing-parent",
         "missing-credentials.env",
       );
-      const outputDir = join(sandbox, "must-not-exist");
       const result = runCli([
         "--credentials-file",
         missingCredentialFile,
@@ -666,8 +726,7 @@ test("CLI fails before side effects when an explicit credential file is missing"
 
 test("CLI rejects a recognized option token as a credentials file value", async () => {
   await withLoginStateCliSandbox(
-    ({ sandbox, kubectlMarker, runCli }) => {
-      const outputDir = join(sandbox, "must-not-exist");
+    ({ kubectlMarker, outputDir, runCli }) => {
       const result = runCli([
         "--credentials-file",
         "--skip-kubectl",
@@ -689,6 +748,581 @@ test("CLI rejects a recognized option token as a credentials file value", async 
     },
   );
 });
+
+test("CLI rejects an output directory inside the repository without mutation", async () => {
+  await withLoginStateCliSandbox(
+    ({
+      repositoryRoot,
+      credentialFile,
+      kubectlMarker,
+      runCli,
+    }) => {
+      writeCliCredentialFile({ credentialFile, repositoryRoot });
+      chmodSync(repositoryRoot, 0o755);
+      const repositoryMode = lstatSync(repositoryRoot).mode & 0o777;
+      const outputDir = join(
+        repositoryRoot,
+        "ecommerce-admin-auth-inside-repository",
+      );
+      const result = runCli([
+        "--credentials-file",
+        credentialFile,
+        "--skip-kubectl",
+        "--output-dir",
+        outputDir,
+        "--customer-url",
+        "http://127.0.0.1:1",
+        "--system-url",
+        "http://127.0.0.1:1",
+      ]);
+
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /outside the repository/u);
+      assert.equal(lstatSync(repositoryRoot).mode & 0o777, repositoryMode);
+      assert.throws(() => lstatSync(outputDir), { code: "ENOENT" });
+      assert.throws(() => lstatSync(kubectlMarker), { code: "ENOENT" });
+    },
+  );
+});
+
+test("CLI rejects an output directory outside tmp before network", async () => {
+  await withLoginStateCliSandbox(
+    ({ repositoryRoot, credentialFile, kubectlMarker, runCli }) => {
+      writeCliCredentialFile({ credentialFile, repositoryRoot });
+      const outsideTmpParent = mkdtempSync(
+        join(dirname(PROJECT_ROOT), ".admin-output-outside-tmp-"),
+      );
+      const outputDir = join(
+        outsideTmpParent,
+        "ecommerce-admin-auth-outside-tmp",
+      );
+
+      try {
+        const result = runCli([
+          "--credentials-file",
+          credentialFile,
+          "--skip-kubectl",
+          "--output-dir",
+          outputDir,
+          "--customer-url",
+          "http://127.0.0.1:1",
+          "--system-url",
+          "http://127.0.0.1:1",
+        ]);
+
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /under \/tmp/u);
+        assert.throws(() => lstatSync(outputDir), { code: "ENOENT" });
+        assert.throws(() => lstatSync(kubectlMarker), { code: "ENOENT" });
+      } finally {
+        rmSync(outsideTmpParent, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+test("CLI rejects an invalid output path before kubectl", async () => {
+  await withLoginStateCliSandbox(
+    ({ repositoryRoot, credentialFile, kubectlMarker, runCli }) => {
+      writeCliCredentialFile({ credentialFile, repositoryRoot });
+      const outsideTmpParent = mkdtempSync(
+        join(dirname(PROJECT_ROOT), ".admin-output-before-kubectl-"),
+      );
+      const outputDir = join(
+        outsideTmpParent,
+        "ecommerce-admin-auth-before-kubectl",
+      );
+
+      try {
+        const result = runCli([
+          "--credentials-file",
+          credentialFile,
+          "--output-dir",
+          outputDir,
+          "--customer-url",
+          "http://127.0.0.1:1",
+          "--system-url",
+          "http://127.0.0.1:1",
+        ]);
+
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /under \/tmp/u);
+        assert.throws(() => lstatSync(outputDir), { code: "ENOENT" });
+        assert.throws(() => lstatSync(kubectlMarker), { code: "ENOENT" });
+      } finally {
+        rmSync(outsideTmpParent, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+test("CLI rejects an existing output directory symlink", async () => {
+  await withLoginStateCliSandbox(
+    ({
+      sandbox,
+      repositoryRoot,
+      credentialFile,
+      kubectlMarker,
+      outputDir,
+      runCli,
+    }) => {
+      writeCliCredentialFile({ credentialFile, repositoryRoot });
+      const targetDirectory = join(sandbox, "output-symlink-target");
+      mkdirSync(targetDirectory, { mode: 0o700 });
+      symlinkSync(targetDirectory, outputDir);
+
+      const result = runCli([
+        "--credentials-file",
+        credentialFile,
+        "--skip-kubectl",
+        "--output-dir",
+        outputDir,
+        "--customer-url",
+        "http://127.0.0.1:1",
+        "--system-url",
+        "http://127.0.0.1:1",
+      ]);
+
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /symbolic link/u);
+      assert.equal(lstatSync(outputDir).isSymbolicLink(), true);
+      assert.deepEqual(
+        fs.readdirSync(targetDirectory).sort(),
+        [],
+      );
+      assert.throws(() => lstatSync(kubectlMarker), { code: "ENOENT" });
+    },
+  );
+});
+
+test("CLI rejects an existing broad output directory without chmod", async () => {
+  await withLoginStateCliSandbox(
+    ({
+      repositoryRoot,
+      credentialFile,
+      kubectlMarker,
+      outputDir,
+      runCli,
+    }) => {
+      writeCliCredentialFile({ credentialFile, repositoryRoot });
+      mkdirSync(outputDir, { mode: 0o755 });
+      chmodSync(outputDir, 0o755);
+
+      const result = runCli([
+        "--credentials-file",
+        credentialFile,
+        "--skip-kubectl",
+        "--output-dir",
+        outputDir,
+        "--customer-url",
+        "http://127.0.0.1:1",
+        "--system-url",
+        "http://127.0.0.1:1",
+      ]);
+
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /mode 0700/u);
+      assert.equal(lstatSync(outputDir).mode & 0o777, 0o755);
+      assert.throws(() => lstatSync(kubectlMarker), { code: "ENOENT" });
+    },
+  );
+});
+
+test("CLI rejects an output directory without the required leaf prefix", async () => {
+  await withLoginStateCliSandbox(
+    ({
+      sandbox,
+      repositoryRoot,
+      credentialFile,
+      kubectlMarker,
+      runCli,
+    }) => {
+      writeCliCredentialFile({ credentialFile, repositoryRoot });
+      const outputDir = join("/tmp", `admin-output-${basename(sandbox)}`);
+
+      try {
+        const result = runCli([
+          "--credentials-file",
+          credentialFile,
+          "--skip-kubectl",
+          "--output-dir",
+          outputDir,
+          "--customer-url",
+          "http://127.0.0.1:1",
+          "--system-url",
+          "http://127.0.0.1:1",
+        ]);
+
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /ecommerce-admin-auth-/u);
+        assert.throws(() => lstatSync(outputDir), { code: "ENOENT" });
+        assert.throws(() => lstatSync(kubectlMarker), { code: "ENOENT" });
+      } finally {
+        rmSync(outputDir, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+test("CLI rejects a nested output directory under a writable tmp parent", async () => {
+  await withLoginStateCliSandbox(
+    ({
+      sandbox,
+      repositoryRoot,
+      credentialFile,
+      kubectlMarker,
+      runCli,
+    }) => {
+      writeCliCredentialFile({ credentialFile, repositoryRoot });
+      const writableParent = join(
+        "/tmp",
+        `admin-output-parent-${basename(sandbox)}`,
+      );
+      const outputDir = join(
+        writableParent,
+        "ecommerce-admin-auth-nested",
+      );
+      mkdirSync(writableParent, { mode: 0o777 });
+      chmodSync(writableParent, 0o777);
+
+      try {
+        const result = runCli([
+          "--credentials-file",
+          credentialFile,
+          "--skip-kubectl",
+          "--output-dir",
+          outputDir,
+          "--customer-url",
+          "http://127.0.0.1:1",
+          "--system-url",
+          "http://127.0.0.1:1",
+        ]);
+
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /direct child of \/tmp/u);
+        assert.equal(lstatSync(writableParent).mode & 0o777, 0o777);
+        assert.throws(() => lstatSync(outputDir), { code: "ENOENT" });
+        assert.throws(() => lstatSync(kubectlMarker), { code: "ENOENT" });
+      } finally {
+        rmSync(writableParent, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+test("CLI never overwrites a pre-existing customer storage state file", async () => {
+  await withLoginStateCliSandbox(
+    async ({ repositoryRoot, credentialFile, outputDir, runCliAsync }) => {
+      writeCliCredentialFile({ credentialFile, repositoryRoot });
+      mkdirSync(outputDir, { mode: 0o700 });
+      chmodSync(outputDir, 0o700);
+      const statePath = join(outputDir, "customer-admin.storageState.json");
+      const originalContent = "existing-state-must-remain\n";
+      writeFileSync(statePath, originalContent, { mode: 0o600 });
+
+      await withSuccessfulAdminServer(async (origin) => {
+        const result = await runCliAsync([
+          "--credentials-file",
+          credentialFile,
+          "--skip-kubectl",
+          "--output-dir",
+          outputDir,
+          "--customer-url",
+          origin,
+          "--system-url",
+          origin,
+        ]);
+
+        assert.equal(
+          readFileSync(statePath, "utf8") === originalContent,
+          true,
+        );
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /already exists/u);
+      });
+    },
+  );
+});
+
+test("CLI never follows a customer storage state symlink", async () => {
+  await withLoginStateCliSandbox(
+    async ({
+      sandbox,
+      repositoryRoot,
+      credentialFile,
+      outputDir,
+      runCliAsync,
+    }) => {
+      writeCliCredentialFile({ credentialFile, repositoryRoot });
+      mkdirSync(outputDir, { mode: 0o700 });
+      chmodSync(outputDir, 0o700);
+      const statePath = join(outputDir, "customer-admin.storageState.json");
+      const symlinkTarget = join(sandbox, "state-symlink-target");
+      const originalContent = "symlink-target-must-remain\n";
+      writeFileSync(symlinkTarget, originalContent, { mode: 0o600 });
+      symlinkSync(symlinkTarget, statePath);
+
+      await withSuccessfulAdminServer(async (origin) => {
+        const result = await runCliAsync([
+          "--credentials-file",
+          credentialFile,
+          "--skip-kubectl",
+          "--output-dir",
+          outputDir,
+          "--customer-url",
+          origin,
+          "--system-url",
+          origin,
+        ]);
+
+        assert.equal(
+          readFileSync(symlinkTarget, "utf8") === originalContent,
+          true,
+        );
+        assert.equal(lstatSync(statePath).isSymbolicLink(), true);
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /already exists/u);
+      });
+    },
+  );
+});
+
+test("CLI leaves no customer state when the System state file exists", async () => {
+  await withLoginStateCliSandbox(
+    async ({ repositoryRoot, credentialFile, outputDir, runCliAsync }) => {
+      writeCliCredentialFile({ credentialFile, repositoryRoot });
+      mkdirSync(outputDir, { mode: 0o700 });
+      chmodSync(outputDir, 0o700);
+      const customerStatePath = join(
+        outputDir,
+        "customer-admin.storageState.json",
+      );
+      const systemStatePath = join(
+        outputDir,
+        "system-admin.storageState.json",
+      );
+      const originalContent = "existing-system-state-must-remain\n";
+      writeFileSync(systemStatePath, originalContent, { mode: 0o600 });
+
+      await withSuccessfulAdminServer(async (origin) => {
+        const result = await runCliAsync([
+          "--credentials-file",
+          credentialFile,
+          "--skip-kubectl",
+          "--output-dir",
+          outputDir,
+          "--customer-url",
+          origin,
+          "--system-url",
+          origin,
+        ]);
+
+        assert.throws(() => lstatSync(customerStatePath), { code: "ENOENT" });
+        assert.equal(
+          readFileSync(systemStatePath, "utf8") === originalContent,
+          true,
+        );
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /already exists/u);
+      });
+    },
+  );
+});
+
+test("CLI leaves no customer state when the System state is a symlink", async () => {
+  await withLoginStateCliSandbox(
+    async ({
+      sandbox,
+      repositoryRoot,
+      credentialFile,
+      outputDir,
+      runCliAsync,
+    }) => {
+      writeCliCredentialFile({ credentialFile, repositoryRoot });
+      mkdirSync(outputDir, { mode: 0o700 });
+      chmodSync(outputDir, 0o700);
+      const customerStatePath = join(
+        outputDir,
+        "customer-admin.storageState.json",
+      );
+      const systemStatePath = join(
+        outputDir,
+        "system-admin.storageState.json",
+      );
+      const symlinkTarget = join(sandbox, "system-state-symlink-target");
+      const originalContent = "system-symlink-target-must-remain\n";
+      writeFileSync(symlinkTarget, originalContent, { mode: 0o600 });
+      symlinkSync(symlinkTarget, systemStatePath);
+
+      await withSuccessfulAdminServer(async (origin) => {
+        const result = await runCliAsync([
+          "--credentials-file",
+          credentialFile,
+          "--skip-kubectl",
+          "--output-dir",
+          outputDir,
+          "--customer-url",
+          origin,
+          "--system-url",
+          origin,
+        ]);
+
+        assert.throws(() => lstatSync(customerStatePath), { code: "ENOENT" });
+        assert.equal(
+          readFileSync(symlinkTarget, "utf8") === originalContent,
+          true,
+        );
+        assert.equal(lstatSync(systemStatePath).isSymbolicLink(), true);
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /already exists/u);
+      });
+    },
+  );
+});
+
+test("CLI removes Customer state when its descriptor close fails", async () => {
+  await withLoginStateCliSandbox(
+    async ({
+      sandbox,
+      repositoryRoot,
+      credentialFile,
+      outputDir,
+      runCliAsync,
+    }) => {
+      writeCliCredentialFile({ credentialFile, repositoryRoot });
+      const customerStatePath = join(
+        outputDir,
+        "customer-admin.storageState.json",
+      );
+      const systemStatePath = join(
+        outputDir,
+        "system-admin.storageState.json",
+      );
+      const preloadPath = join(sandbox, "fail-customer-state-close.mjs");
+      writeFileSync(
+        preloadPath,
+        `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+
+const originalOpenSync = fs.openSync;
+const originalCloseSync = fs.closeSync;
+let customerStateDescriptor;
+let closeFailureInjected = false;
+
+fs.openSync = (path, ...args) => {
+  const descriptor = originalOpenSync(path, ...args);
+  if (String(path) === process.env.ADMIN_CLOSE_FAILURE_TARGET) {
+    customerStateDescriptor = descriptor;
+  }
+  return descriptor;
+};
+fs.closeSync = (descriptor, ...args) => {
+  if (
+    !closeFailureInjected
+    && descriptor === customerStateDescriptor
+  ) {
+    closeFailureInjected = true;
+    const error = new Error("synthetic state close failure");
+    error.code = "EIO";
+    throw error;
+  }
+  return originalCloseSync(descriptor, ...args);
+};
+syncBuiltinESMExports();
+`,
+        "utf8",
+      );
+
+      await withSuccessfulAdminServer(async (origin) => {
+        const existingNodeOptions = process.env.NODE_OPTIONS
+          ? `${process.env.NODE_OPTIONS} `
+          : "";
+        const result = await runCliAsync([
+          "--credentials-file",
+          credentialFile,
+          "--skip-kubectl",
+          "--output-dir",
+          outputDir,
+          "--customer-url",
+          origin,
+          "--system-url",
+          origin,
+        ], {
+          env: {
+            ADMIN_CLOSE_FAILURE_TARGET: customerStatePath,
+            NODE_OPTIONS: `${existingNodeOptions}--import=${preloadPath}`,
+          },
+        });
+
+        const stateResidue = [customerStatePath, systemStatePath].map((path) => {
+          try {
+            lstatSync(path);
+            return true;
+          } catch (error) {
+            if (error?.code === "ENOENT") return false;
+            throw error;
+          }
+        });
+        assert.deepEqual(stateResidue, [false, false]);
+        assert.notEqual(result.status, 0);
+        assert.equal(
+          result.stderr.trim(),
+          "admin web login state failed: Storage state file close failed for customer-admin.",
+        );
+        const commandOutput = `${result.stdout}\n${result.stderr}`;
+        const leakedCookieKinds = [
+          ["customer cookie", "fixture-customer-session"],
+          ["system cookie", "fixture-system-session"],
+        ]
+          .filter(([, value]) => commandOutput.includes(value))
+          .map(([kind]) => kind);
+        assert.deepEqual(leakedCookieKinds, []);
+      });
+    },
+  );
+});
+
+test(
+  "CLI accepts a direct canonical tmp output path",
+  { skip: fs.realpathSync("/tmp") === resolve("/tmp") },
+  async () => {
+    await withLoginStateCliSandbox(
+      async ({
+        sandbox,
+        repositoryRoot,
+        credentialFile,
+        runCliAsync,
+      }) => {
+        writeCliCredentialFile({ credentialFile, repositoryRoot });
+        const outputDir = join(
+          fs.realpathSync("/tmp"),
+          `ecommerce-admin-auth-canonical-${basename(sandbox)}`,
+        );
+
+        try {
+          await withSuccessfulAdminServer(async (origin) => {
+            const result = await runCliAsync([
+              "--credentials-file",
+              credentialFile,
+              "--skip-kubectl",
+              "--output-dir",
+              outputDir,
+              "--customer-url",
+              origin,
+              "--system-url",
+              origin,
+            ]);
+
+            assert.equal(result.status, 0, result.stderr);
+            assert.equal(lstatSync(outputDir).isDirectory(), true);
+          });
+        } finally {
+          rmSync(outputDir, { recursive: true, force: true });
+        }
+      },
+    );
+  },
+);
 
 test("CLI fails closed for a dangling default credential symlink", async () => {
   await withLoginStateCliSandbox(

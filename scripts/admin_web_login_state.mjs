@@ -1,8 +1,26 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, chmodSync, lstatSync } from "node:fs";
-import { join } from "node:path";
+import {
+  closeSync,
+  fchmodSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  realpathSync,
+  unlinkSync,
+  writeFileSync
+} from "node:fs";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep
+} from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -148,6 +166,165 @@ function pathEntryExists(path) {
   }
 }
 
+function isPathContainedBy(parentPath, candidatePath) {
+  const relativePath = relative(parentPath, candidatePath);
+  return (
+    relativePath === ""
+    || (
+      relativePath !== ".."
+      && !relativePath.startsWith(`..${sep}`)
+      && !isAbsolute(relativePath)
+    )
+  );
+}
+
+function currentUserId() {
+  if (typeof process.getuid !== "function") {
+    throw new Error("Secure output directories require POSIX ownership support.");
+  }
+  return process.getuid();
+}
+
+function assertOutputDirectoryInfo(outputDir, expectedUid) {
+  const info = lstatSync(outputDir);
+  if (info.isSymbolicLink()) {
+    throw new Error("Output directory must not be a symbolic link.");
+  }
+  if (!info.isDirectory()) {
+    throw new Error("Output directory must be a directory.");
+  }
+  if (info.uid !== expectedUid) {
+    throw new Error("Output directory must be owned by the current user.");
+  }
+  if ((info.mode & 0o777) !== 0o700) {
+    throw new Error("Output directory must have mode 0700.");
+  }
+  return info;
+}
+
+function outputPathContext(outputDir) {
+  const resolvedOutputDir = resolve(outputDir);
+  if (!basename(resolvedOutputDir).startsWith("ecommerce-admin-auth-")) {
+    throw new Error(
+      "Output directory leaf must start with ecommerce-admin-auth-."
+    );
+  }
+
+  const tmpPaths = {
+    lexical: resolve("/tmp"),
+    real: realpathSync("/tmp")
+  };
+  const repositoryPaths = {
+    lexical: resolve(REPOSITORY_ROOT),
+    real: realpathSync(REPOSITORY_ROOT)
+  };
+  if (
+    isPathContainedBy(repositoryPaths.lexical, resolvedOutputDir)
+    || isPathContainedBy(repositoryPaths.real, resolvedOutputDir)
+  ) {
+    throw new Error("Output directory must be outside the repository.");
+  }
+
+  const isLexicallyUnderTmp =
+    isPathContainedBy(tmpPaths.lexical, resolvedOutputDir)
+    || isPathContainedBy(tmpPaths.real, resolvedOutputDir);
+  if (!isLexicallyUnderTmp) {
+    throw new Error("Output directory must be under /tmp.");
+  }
+
+  const canonicalCandidate = isPathContainedBy(
+    tmpPaths.lexical,
+    resolvedOutputDir
+  )
+    ? resolve(
+        tmpPaths.real,
+        relative(tmpPaths.lexical, resolvedOutputDir)
+      )
+    : resolvedOutputDir;
+  if (isPathContainedBy(repositoryPaths.real, canonicalCandidate)) {
+    throw new Error("Output directory must be outside the repository.");
+  }
+
+  const lexicalParent = dirname(resolvedOutputDir);
+  if (
+    lexicalParent !== tmpPaths.lexical
+    && lexicalParent !== tmpPaths.real
+  ) {
+    throw new Error("Output directory must be a direct child of /tmp.");
+  }
+  const realParent = realpathSync(lexicalParent);
+  if (realParent !== tmpPaths.real) {
+    throw new Error("Output directory parent must resolve to /tmp.");
+  }
+
+  const expectedRealPath = join(realParent, basename(resolvedOutputDir));
+  if (isPathContainedBy(repositoryPaths.real, expectedRealPath)) {
+    throw new Error("Output directory must be outside the repository.");
+  }
+  return {
+    expectedRealPath,
+    expectedUid: currentUserId(),
+    path: resolvedOutputDir
+  };
+}
+
+function preflightOutputDirectory(outputDir) {
+  const context = outputPathContext(outputDir);
+  if (!pathEntryExists(context.path)) {
+    return { ...context, existed: false };
+  }
+
+  const info = assertOutputDirectoryInfo(context.path, context.expectedUid);
+  if (realpathSync(context.path) !== context.expectedRealPath) {
+    throw new Error("Output directory must resolve directly under /tmp.");
+  }
+  return {
+    ...context,
+    dev: info.dev,
+    existed: true,
+    ino: info.ino
+  };
+}
+
+function prepareOutputDirectory(preflight) {
+  if (!preflight.existed) {
+    try {
+      mkdirSync(preflight.path, { recursive: false, mode: 0o700 });
+    } catch (error) {
+      if (error?.code === "EEXIST") {
+        throw new Error("Output directory appeared after preflight.");
+      }
+      throw error;
+    }
+  }
+
+  const info = assertOutputDirectoryInfo(preflight.path, preflight.expectedUid);
+  if (
+    preflight.existed
+    && (info.dev !== preflight.dev || info.ino !== preflight.ino)
+  ) {
+    throw new Error("Output directory changed after preflight.");
+  }
+  if (realpathSync(preflight.path) !== preflight.expectedRealPath) {
+    throw new Error("Output directory must resolve directly under /tmp.");
+  }
+  return {
+    ...preflight,
+    dev: info.dev,
+    ino: info.ino
+  };
+}
+
+function revalidateOutputDirectory(prepared) {
+  const info = assertOutputDirectoryInfo(prepared.path, prepared.expectedUid);
+  if (info.dev !== prepared.dev || info.ino !== prepared.ino) {
+    throw new Error("Output directory changed during login.");
+  }
+  if (realpathSync(prepared.path) !== prepared.expectedRealPath) {
+    throw new Error("Output directory must resolve directly under /tmp.");
+  }
+}
+
 function passwordFromHash(label, hash, envPassword) {
   if (envPassword) return envPassword;
   if (!hash) throw new Error(`${label} password is missing. Set ${label.toUpperCase().replaceAll(" ", "_")}_PASSWORD.`);
@@ -247,11 +424,155 @@ async function loginAdmin(kind, baseUrl, payload, expectedCookieName) {
   };
 }
 
-function writeStorageState(outputDir, name, storageState) {
-  const path = join(outputDir, `${name}.storageState.json`);
-  writeFileSync(path, `${JSON.stringify(storageState, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(path, 0o600);
-  return path;
+function removeCreatedStorageState(created) {
+  try {
+    const currentInfo = lstatSync(created.path);
+    if (
+      !currentInfo.isSymbolicLink()
+      && currentInfo.isFile()
+      && currentInfo.dev === created.dev
+      && currentInfo.ino === created.ino
+    ) {
+      unlinkSync(created.path);
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
+function cleanupCreatedStorageStates(createdStates) {
+  for (const created of [...createdStates].reverse()) {
+    removeCreatedStorageState(created);
+  }
+}
+
+function storageStateTargets(outputDir, states) {
+  return states.map(({ name, storageState }) => ({
+    name,
+    path: join(outputDir, `${name}.storageState.json`),
+    storageState
+  }));
+}
+
+function preflightStorageStateTargets(targets) {
+  for (const target of targets) {
+    if (pathEntryExists(target.path)) {
+      throw new Error(`Storage state file already exists for ${target.name}.`);
+    }
+  }
+}
+
+function writeStorageState(target, expectedUid) {
+  let fileDescriptor;
+  let created;
+  try {
+    fileDescriptor = openSync(target.path, "wx", 0o600);
+    const initialInfo = fstatSync(fileDescriptor);
+    created = {
+      dev: initialInfo.dev,
+      ino: initialInfo.ino,
+      path: target.path
+    };
+    writeFileSync(
+      fileDescriptor,
+      `${JSON.stringify(target.storageState, null, 2)}\n`,
+      { encoding: "utf8" }
+    );
+    fchmodSync(fileDescriptor, 0o600);
+    const finalInfo = fstatSync(fileDescriptor);
+    if (
+      !finalInfo.isFile()
+      || finalInfo.uid !== expectedUid
+      || (finalInfo.mode & 0o777) !== 0o600
+      || finalInfo.dev !== created.dev
+      || finalInfo.ino !== created.ino
+    ) {
+      throw new Error(
+        `Storage state file verification failed for ${target.name}.`
+      );
+    }
+    const descriptorToClose = fileDescriptor;
+    fileDescriptor = undefined;
+    try {
+      closeSync(descriptorToClose);
+    } catch {
+      throw new Error(
+        `Storage state file close failed for ${target.name}.`
+      );
+    }
+    return created;
+  } catch (error) {
+    let cleanupFailed = false;
+    if (fileDescriptor !== undefined) {
+      const descriptorToClose = fileDescriptor;
+      fileDescriptor = undefined;
+      try {
+        closeSync(descriptorToClose);
+      } catch {
+        // Cleanup by the recorded inode remains safe even if close failed.
+      }
+    }
+    if (created) {
+      try {
+        removeCreatedStorageState(created);
+      } catch {
+        cleanupFailed = true;
+      }
+    }
+    if (cleanupFailed) {
+      throw new Error(
+        `Storage state file cleanup failed for ${target.name}.`
+      );
+    }
+    if (error?.code === "EEXIST") {
+      throw new Error(`Storage state file already exists for ${target.name}.`);
+    }
+    throw error;
+  } finally {
+    if (fileDescriptor !== undefined) {
+      const descriptorToClose = fileDescriptor;
+      fileDescriptor = undefined;
+      try {
+        closeSync(descriptorToClose);
+      } catch {
+        let cleanupFailed = false;
+        if (created) {
+          try {
+            removeCreatedStorageState(created);
+          } catch {
+            cleanupFailed = true;
+          }
+        }
+        if (cleanupFailed) {
+          throw new Error(
+            `Storage state file cleanup failed for ${target.name}.`
+          );
+        }
+        throw new Error(
+          `Storage state file close failed for ${target.name}.`
+        );
+      }
+    }
+  }
+}
+
+function writeStorageStates(outputDir, states) {
+  const targets = storageStateTargets(outputDir, states);
+  preflightStorageStateTargets(targets);
+  const createdStates = [];
+  try {
+    for (const target of targets) {
+      createdStates.push(writeStorageState(target, currentUserId()));
+    }
+    return createdStates.map((created) => created.path);
+  } catch (error) {
+    try {
+      cleanupCreatedStorageStates(createdStates);
+    } catch {
+      throw new Error("Storage state transaction cleanup failed.");
+    }
+    throw error;
+  }
 }
 
 function userSummary(me) {
@@ -287,6 +608,8 @@ async function main() {
     return;
   }
 
+  const outputPreflight = preflightOutputDirectory(args.outputDir);
+
   const fileCredentials =
     args.credentialsFile || pathEntryExists(credentialsFile)
       ? loadAdminCredentialFile({
@@ -306,8 +629,8 @@ async function main() {
   const systemHash = (!args.skipKubectl ? kubectlSecretValue(args, "SYSTEM_ADMIN_INITIAL_PASSWORD_HASH") : "") || customerHash;
   const systemPassword = passwordFromHash("system admin", systemHash, credentials.SYSTEM_ADMIN_PASSWORD);
 
-  mkdirSync(args.outputDir, { recursive: true, mode: 0o700 });
-  chmodSync(args.outputDir, 0o700);
+  const preparedOutput = prepareOutputDirectory(outputPreflight);
+  const outputDir = preparedOutput.path;
 
   const customer = await loginAdmin(
     "customer",
@@ -329,13 +652,19 @@ async function main() {
     "agent_system_admin_session"
   );
 
-  const customerStatePath = writeStorageState(args.outputDir, "customer-admin", customer.storageState);
-  const systemStatePath = writeStorageState(args.outputDir, "system-admin", system.storageState);
+  revalidateOutputDirectory(preparedOutput);
+  const [customerStatePath, systemStatePath] = writeStorageStates(
+    outputDir,
+    [
+      { name: "customer-admin", storageState: customer.storageState },
+      { name: "system-admin", storageState: system.storageState }
+    ]
+  );
 
   console.log(JSON.stringify(
     {
       ok: true,
-      outputDir: args.outputDir,
+      outputDir,
       customer: {
         url: args.customerUrl,
         authMe: "PASS",
