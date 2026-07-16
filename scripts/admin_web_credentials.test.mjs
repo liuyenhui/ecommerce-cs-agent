@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs, {
   chmodSync,
+  closeSync,
   copyFileSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -31,6 +34,30 @@ import {
 } from "./admin_web_credentials.mjs";
 
 const PROJECT_ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+function readSecureTestFixture(filePath) {
+  const noFollow = fs.constants.O_NOFOLLOW;
+  assert.equal(
+    typeof noFollow,
+    "number",
+    "secure fixture reads require O_NOFOLLOW",
+  );
+  const descriptor = openSync(
+    filePath,
+    fs.constants.O_RDONLY | noFollow,
+  );
+  try {
+    const info = fstatSync(descriptor);
+    assert.equal(info.isFile(), true);
+    assert.equal(info.isSymbolicLink(), false);
+    return {
+      info,
+      text: readFileSync(descriptor, "utf8"),
+    };
+  } finally {
+    closeSync(descriptor);
+  }
+}
 
 const completeText = `CUSTOMER_ADMIN_EMAIL="customer@example.test"
 CUSTOMER_ADMIN_PASSWORD="customer pass; $HOME # inert"
@@ -240,9 +267,10 @@ test("CLI initializes an external owner-only credential file before side effects
 
     assert.equal(first.status, 0, first.stderr);
     assert.equal(first.signal, null);
+    const credentialSnapshot = readSecureTestFixture(credentialFile);
     assert.equal(lstatSync(dirname(credentialFile)).mode & 0o777, 0o700);
-    assert.equal(lstatSync(credentialFile).mode & 0o777, 0o600);
-    assert.equal(readFileSync(credentialFile, "utf8"), ADMIN_CREDENTIAL_TEMPLATE);
+    assert.equal(credentialSnapshot.info.mode & 0o777, 0o600);
+    assert.equal(credentialSnapshot.text, ADMIN_CREDENTIAL_TEMPLATE);
     assert.throws(() => lstatSync(kubectlMarker), { code: "ENOENT" });
 
     const output = `${first.stdout}\n${first.stderr}`;
@@ -269,7 +297,10 @@ test("CLI initializes an external owner-only credential file before side effects
     ]);
     assert.notEqual(second.status, 0);
     assert.match(second.stderr, /already exists/u);
-    assert.equal(readFileSync(credentialFile, "utf8"), ADMIN_CREDENTIAL_TEMPLATE);
+    assert.equal(
+      readSecureTestFixture(credentialFile).text,
+      ADMIN_CREDENTIAL_TEMPLATE,
+    );
     assert.throws(() => lstatSync(kubectlMarker), { code: "ENOENT" });
   });
 });
@@ -428,8 +459,11 @@ SYSTEM_ADMIN_PASSWORD=${systemPassword}
             outputDir,
             "system-admin.storageState.json",
           );
-          const customerStateInfo = lstatSync(customerStatePath);
-          const systemStateInfo = lstatSync(systemStatePath);
+          const customerStateSnapshot =
+            readSecureTestFixture(customerStatePath);
+          const systemStateSnapshot = readSecureTestFixture(systemStatePath);
+          const customerStateInfo = customerStateSnapshot.info;
+          const systemStateInfo = systemStateSnapshot.info;
           assert.equal(customerStateInfo.isFile(), true);
           assert.equal(customerStateInfo.isSymbolicLink(), false);
           assert.equal(customerStateInfo.mode & 0o777, 0o600);
@@ -442,12 +476,8 @@ SYSTEM_ADMIN_PASSWORD=${systemPassword}
             assert.equal(systemStateInfo.uid, process.getuid());
           }
 
-          const customerState = JSON.parse(
-            readFileSync(customerStatePath, "utf8"),
-          );
-          const systemState = JSON.parse(
-            readFileSync(systemStatePath, "utf8"),
-          );
+          const customerState = JSON.parse(customerStateSnapshot.text);
+          const systemState = JSON.parse(systemStateSnapshot.text);
           assert.deepEqual(
             {
               customerCookieCount: customerState.cookies.length,
@@ -1629,7 +1659,8 @@ test("initializes an owner-only credential file and refuses to overwrite it", ()
     assert.equal(parentInfo.isSymbolicLink(), false);
     assert.equal(parentInfo.mode & 0o777, 0o700);
 
-    const fileInfo = lstatSync(credentialFile);
+    const credentialSnapshot = readSecureTestFixture(credentialFile);
+    const fileInfo = credentialSnapshot.info;
     assert.equal(fileInfo.isFile(), true);
     assert.equal(fileInfo.isSymbolicLink(), false);
     assert.equal(fileInfo.mode & 0o777, 0o600);
@@ -1639,7 +1670,7 @@ test("initializes an owner-only credential file and refuses to overwrite it", ()
       assert.equal(fileInfo.uid, process.getuid());
     }
 
-    assert.equal(readFileSync(credentialFile, "utf8"), ADMIN_CREDENTIAL_TEMPLATE);
+    assert.equal(credentialSnapshot.text, ADMIN_CREDENTIAL_TEMPLATE);
     assert.throws(
       () =>
         initializeAdminCredentialFile({
