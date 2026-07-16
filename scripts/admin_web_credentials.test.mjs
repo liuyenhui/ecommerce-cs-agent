@@ -48,6 +48,7 @@ async function withLoginStateCliSandbox(run) {
     "admin-test-credentials.env",
   );
   const kubectlMarker = join(sandbox, "kubectl-was-called");
+  const kubectlCalls = join(sandbox, "kubectl-calls");
   const fakeBin = join(sandbox, "bin");
   const outputDir = join(
     "/tmp",
@@ -65,7 +66,16 @@ async function withLoginStateCliSandbox(run) {
   );
   writeFileSync(
     join(fakeBin, "kubectl"),
-    `#!/bin/sh\n: > "${kubectlMarker}"\nexit 97\n`,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(kubectlMarker)}, "");
+const match = /^jsonpath=\\{\\.data\\.([^}]+)\\}$/.exec(process.argv.at(-1) || "");
+const key = match?.[1] || "unknown";
+fs.appendFileSync(${JSON.stringify(kubectlCalls)}, \`\${key}\\n\`);
+if (process.env.FAKE_KUBECTL_ENABLED !== "1") process.exit(97);
+const values = JSON.parse(process.env.FAKE_KUBECTL_VALUES_JSON || "{}");
+process.stdout.write(Buffer.from(values[key] || "", "utf8").toString("base64"));
+`,
     { mode: 0o700 },
   );
 
@@ -131,6 +141,7 @@ async function withLoginStateCliSandbox(run) {
       repositoryRoot,
       credentialFile,
       kubectlMarker,
+      kubectlCalls,
       outputDir,
       runCli,
       runCliAsync,
@@ -393,7 +404,6 @@ SYSTEM_ADMIN_PASSWORD=${systemPassword}
           const result = await runCliAsync([
             "--credentials-file",
             credentialFile,
-            "--skip-kubectl",
             "--customer-url",
             customerOrigin,
             "--system-url",
@@ -503,6 +513,123 @@ SYSTEM_ADMIN_PASSWORD=${systemPassword}
             .map(([kind]) => kind);
           assert.deepEqual(leakedSecretKinds, []);
         });
+      });
+    },
+  );
+});
+
+test("CLI queries only missing fields and falls back to the Customer password", async () => {
+  await withLoginStateCliSandbox(
+    async ({
+      sandbox,
+      kubectlCalls,
+      outputDir,
+      runCliAsync,
+    }) => {
+      const customerEmail = "partial-customer@example.test";
+      const customerPassword = "partial-customer-password";
+      const systemEmail = "partial-system@example.test";
+      const submittedCredentials = [];
+
+      await withLocalHttpServer(async (request, response) => {
+        const pathname = new URL(request.url, "http://fixture.test").pathname;
+        response.setHeader("Content-Type", "application/json");
+        if (request.method === "POST") {
+          const payload = await readRequestJson(request);
+          submittedCredentials.push({
+            pathname,
+            email: payload.email,
+            passwordMatchesCustomer: payload.password === customerPassword,
+          });
+          const cookie =
+            pathname === "/v1/admin/auth/login"
+              ? "agent_admin_session=partial-customer-session"
+              : "agent_system_admin_session=partial-system-session";
+          response.setHeader("Set-Cookie", `${cookie}; Path=/; HttpOnly`);
+          response.end("{}");
+          return;
+        }
+        response.end(
+          JSON.stringify({
+            user: { email: "partial-fixture@example.test", role: "fixture" },
+          }),
+        );
+      }, async (origin) => {
+        const result = await runCliAsync([
+          "--customer-url",
+          origin,
+          "--system-url",
+          origin,
+          "--output-dir",
+          outputDir,
+        ], {
+          env: {
+            HOME: join(sandbox, "home"),
+            CUSTOMER_ADMIN_PASSWORD: customerPassword,
+            SYSTEM_ADMIN_EMAIL: systemEmail,
+            FAKE_KUBECTL_ENABLED: "1",
+            FAKE_KUBECTL_VALUES_JSON: JSON.stringify({
+              ADMIN_INITIAL_EMAIL: customerEmail,
+              SYSTEM_ADMIN_INITIAL_PASSWORD_HASH: "",
+            }),
+          },
+        });
+
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(
+          readFileSync(kubectlCalls, "utf8").trim().split("\n"),
+          [
+            "ADMIN_INITIAL_EMAIL",
+            "SYSTEM_ADMIN_INITIAL_PASSWORD_HASH",
+          ],
+        );
+        assert.deepEqual(submittedCredentials, [
+          {
+            pathname: "/v1/admin/auth/login",
+            email: customerEmail,
+            passwordMatchesCustomer: true,
+          },
+          {
+            pathname: "/v1/system-admin/auth/login",
+            email: systemEmail,
+            passwordMatchesCustomer: true,
+          },
+        ]);
+        const commandOutput = `${result.stdout}\n${result.stderr}`;
+        assert.equal(commandOutput.includes(customerPassword), false);
+      });
+    },
+  );
+});
+
+test("CLI uses complete environment credentials without kubectl", async () => {
+  await withLoginStateCliSandbox(
+    async ({
+      sandbox,
+      kubectlMarker,
+      outputDir,
+      runCliAsync,
+    }) => {
+      await withSuccessfulAdminServer(async (origin) => {
+        const result = await runCliAsync([
+          "--customer-url",
+          origin,
+          "--system-url",
+          origin,
+          "--output-dir",
+          outputDir,
+        ], {
+          env: {
+            HOME: join(sandbox, "home"),
+            CUSTOMER_ADMIN_EMAIL: "environment-customer@example.test",
+            CUSTOMER_ADMIN_PASSWORD: "environment-customer-password",
+            SYSTEM_ADMIN_EMAIL: "environment-system@example.test",
+            SYSTEM_ADMIN_PASSWORD: "environment-system-password",
+          },
+        });
+
+        assert.equal(result.status, 0, result.stderr);
+        assert.throws(() => lstatSync(kubectlMarker), { code: "ENOENT" });
       });
     },
   );

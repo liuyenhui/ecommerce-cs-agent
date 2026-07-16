@@ -620,14 +620,19 @@ async function main() {
   const credentials = mergeAdminCredentialSources(fileCredentials, process.env);
 
   const customerEmail = credentials.CUSTOMER_ADMIN_EMAIL || (!args.skipKubectl ? kubectlSecretValue(args, "ADMIN_INITIAL_EMAIL") : "");
-  const customerHash = !args.skipKubectl ? kubectlSecretValue(args, "ADMIN_INITIAL_PASSWORD_HASH") : "";
+  const customerHash = !credentials.CUSTOMER_ADMIN_PASSWORD && !args.skipKubectl
+    ? kubectlSecretValue(args, "ADMIN_INITIAL_PASSWORD_HASH")
+    : "";
   const customerPassword = passwordFromHash("customer admin", customerHash, credentials.CUSTOMER_ADMIN_PASSWORD);
 
   const systemEmail = credentials.SYSTEM_ADMIN_EMAIL
     || (!args.skipKubectl ? kubectlSecretValue(args, "SYSTEM_ADMIN_INITIAL_EMAIL") : "")
     || customerEmail;
-  const systemHash = (!args.skipKubectl ? kubectlSecretValue(args, "SYSTEM_ADMIN_INITIAL_PASSWORD_HASH") : "") || customerHash;
-  const systemPassword = passwordFromHash("system admin", systemHash, credentials.SYSTEM_ADMIN_PASSWORD);
+  const systemHash = !credentials.SYSTEM_ADMIN_PASSWORD && !args.skipKubectl
+    ? kubectlSecretValue(args, "SYSTEM_ADMIN_INITIAL_PASSWORD_HASH")
+    : "";
+  const systemPassword = credentials.SYSTEM_ADMIN_PASSWORD
+    || (systemHash ? passwordFromHash("system admin", systemHash, "") : customerPassword);
 
   const preparedOutput = prepareOutputDirectory(outputPreflight);
   const outputDir = preparedOutput.path;
