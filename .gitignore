@@ -2,6 +2,9 @@
 .codegraph/
 .env
 *.env
+**/admin-test-credentials.env
+**/*.storageState.json
+**/ecommerce-admin-auth-*/
 .local/
 .venv/
 .pytest_cache/

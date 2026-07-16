@@ -11,6 +11,9 @@ __pycache__
 .env
 .env.*
 !.env.example
+**/admin-test-credentials.env
+**/*.storageState.json
+**/ecommerce-admin-auth-*/
 node_modules
 docs/vendor
 evals/cases/generated

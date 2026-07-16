@@ -57,13 +57,13 @@ SYSTEM_ADMIN_EMAIL
 SYSTEM_ADMIN_PASSWORD
 ```
 
-本文不记录任何值。不得把这些值或该文件发送到聊天、加入 Git、上传云存储，或写入 Kubernetes Secret、Helm values、Docker build context / 镜像。首次使用时只创建空模板，再通过批准的本机安全渠道填写：
+本文不记录任何值。可复用的明文密码和完整的本机四 key 便利文件都只允许留在本机，不得发送到聊天、加入 Git、上传云存储，或复制到 Kubernetes、Helm values、Docker build context / 镜像。运行时初始邮箱与密码哈希仍按项目规则通过批准的 Kubernetes Secret key 管理，例如 `ADMIN_INITIAL_EMAIL`、`ADMIN_INITIAL_PASSWORD_HASH`、`SYSTEM_ADMIN_INITIAL_EMAIL` 和 `SYSTEM_ADMIN_INITIAL_PASSWORD_HASH`；本机文件不替代运行时 Secret，本流程也不得把明文密码放入 Kubernetes Secret。首次使用时只创建空模板，再通过批准的本机安全渠道填写：
 
 ```bash
 node scripts/admin_web_login_state.mjs --init-credentials-file
 ```
 
-登录测试生成的 Playwright `storageState` 只允许写入 `/tmp/ecommerce-admin-auth-*`，目录权限保持 `0700`、文件权限保持 `0600`。测试结束后立即删除对应目录；不得提交、分享或长期保存其中的 Cookie。
+登录测试生成的 Playwright `storageState` 强制直接写入 `/tmp/ecommerce-admin-auth-*`，输出目录必须归当前用户所有、权限保持 `0700` 且不得是符号链接，状态文件权限保持 `0600`。双登录任一步失败时脚本清理本次事务已生成的状态文件；测试结束后也必须删除对应目录，不得提交、分享或长期保存其中的 Cookie。
 
 ## 5. 提交前检查
 
