@@ -4,6 +4,10 @@
 
 ## 最近文档更新
 
+### 2026-07-16
+
+- 确认本机 Admin live 测试凭据使用仓库外 `~/.config/ecommerce-cs-agent/admin-test-credentials.env`：同时保存 Customer/System 邮箱与密码，目录 `0700`、文件 `0600`，禁止 shell 执行、符号链接、仓库内路径、宽权限和日志回显；临时 storageState 继续只写 `/tmp` 并在测试后删除。详见 [本机 Admin 测试凭据设计](superpowers/specs/2026-07-16-local-admin-test-credentials-design.md)。
+
 ### 2026-07-15
 
 - Kubernetes API 与模型 Provider 的自定义 TLS socket 均在系统默认安全上下文上显式固定最低 `TLSv1.2`，保留证书校验、SNI、固定 IP 和绝对 Deadline 约束；回归测试同时覆盖集群 CA 与公共 CA 两条 context 构造路径，以满足 CodeQL 协议下限门禁。
