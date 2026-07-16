@@ -44,7 +44,28 @@
 
 调试时如果需要确认变量是否存在，只输出变量名、来源或是否为空，不输出值。例如只记录 `LLM_API_KEY 已从 Secret 注入`，不要记录 key 内容。
 
-## 4. 提交前检查
+## 4. 本机 Admin live 测试凭据
+
+Customer Admin 与 System Admin 的本机 live 测试账号只能保存在 `~/.config/ecommerce-cs-agent/admin-test-credentials.env`。该路径必须位于仓库外，父目录归当前用户所有且权限为 `0700`，文件归当前用户所有且权限为 `0600`；父目录和文件都不得是符号链接，也不得把文件当作 shell 脚本执行。
+
+文件只允许包含以下四个 key，且四项都必须存在：
+
+```text
+CUSTOMER_ADMIN_EMAIL
+CUSTOMER_ADMIN_PASSWORD
+SYSTEM_ADMIN_EMAIL
+SYSTEM_ADMIN_PASSWORD
+```
+
+本文不记录任何值。可复用的明文密码和完整的本机四 key 便利文件都只允许留在本机，不得发送到聊天、加入 Git、上传云存储，或复制到 Kubernetes、Helm values、Docker build context / 镜像。运行时初始邮箱与密码哈希仍按项目规则通过批准的 Kubernetes Secret key 管理，例如 `ADMIN_INITIAL_EMAIL`、`ADMIN_INITIAL_PASSWORD_HASH`、`SYSTEM_ADMIN_INITIAL_EMAIL` 和 `SYSTEM_ADMIN_INITIAL_PASSWORD_HASH`；本机文件不替代运行时 Secret，本流程也不得把明文密码放入 Kubernetes Secret。首次使用时只创建空模板，再通过批准的本机安全渠道填写：
+
+```bash
+node scripts/admin_web_login_state.mjs --init-credentials-file
+```
+
+登录测试生成的 Playwright `storageState` 强制直接写入 `/tmp/ecommerce-admin-auth-*`，输出目录必须归当前用户所有、权限保持 `0700` 且不得是符号链接，状态文件权限保持 `0600`。双登录任一步失败时脚本清理本次事务已生成的状态文件；测试结束后也必须删除对应目录，不得提交、分享或长期保存其中的 Cookie。
+
+## 5. 提交前检查
 
 提交前至少执行以下检查，并人工确认 staged diff 中没有 Secret、客户数据或无关生成物：
 
@@ -60,7 +81,7 @@ git diff --cached | rg -n "sk-|ghp_|gho_|BEGIN .*PRIVATE KEY|SMTP_PASSWORD|DATAB
 - `git diff --cached` 中不应出现 Secret 明文、客户数据、请求头、cookie、kubeconfig、registry 凭据或私钥内容。
 - 敏感模式 `rg` 命中后必须逐条确认。即使是占位值，也应判断是否容易被误认为真实 Secret。
 
-## 5. 发现误加入 Secret 的处理
+## 6. 发现误加入 Secret 的处理
 
 如果发现 Secret、客户数据或敏感生成物已经加入索引：
 

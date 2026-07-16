@@ -40,6 +40,9 @@ jobs:
           cache: npm
           cache-dependency-path: admin-web/package-lock.json
 
+      - name: Admin credential helper tests
+        run: npm run test:admin-credentials
+
       - name: Install Admin Web dependencies
         working-directory: admin-web
         run: npm ci

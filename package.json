@@ -5,6 +5,7 @@
     "dev:acs:env": "node scripts/acs_local_env.mjs",
     "dev:acs:port-forward": "node scripts/acs_port_forward.mjs",
     "dev:api:acs-local": "bash -lc 'set -a; . ./.local/acs-runtime.env; set +a; ACS_DEBUG_MODE=local-acs .venv/bin/python -m uvicorn ecommerce_cs_agent.api.app:app --host 127.0.0.1 --port 8000'",
-    "dev:admin:customer": "npm --prefix admin-web run dev:customer"
+    "dev:admin:customer": "npm --prefix admin-web run dev:customer",
+    "test:admin-credentials": "node --test scripts/admin_web_credentials.test.mjs"
   }
 }
