@@ -26,6 +26,27 @@ npm --prefix admin-web run build:customer
 npm --prefix admin-web run build:system
 ```
 
+本机 Admin 凭据 helper 的确定性测试不访问 live 服务，也不需要安装 Admin Web 依赖：
+
+```bash
+npm run test:admin-credentials
+```
+
+Customer Admin 与 System Admin 的本机 live 测试账号只保存在仓库外 `~/.config/ecommerce-cs-agent/admin-test-credentials.env`。需要生成两套隔离的 Playwright `storageState` 时，显式使用该安全文件并禁用 Kubernetes Secret 回退：
+
+```bash
+AUTH_STATE_DIR="$(mktemp -d /tmp/ecommerce-admin-auth-XXXXXX)"
+chmod 700 "$AUTH_STATE_DIR"
+node scripts/admin_web_login_state.mjs \
+  --credentials-file "$HOME/.config/ecommerce-cs-agent/admin-test-credentials.env" \
+  --skip-kubectl \
+  --output-dir "$AUTH_STATE_DIR"
+# 完成本机 UI 测试后：
+rm -rf "$AUTH_STATE_DIR"
+```
+
+该命令不得输出密码、Cookie 或认证响应正文；生成目录必须保持在 `/tmp/ecommerce-admin-auth-*`，测试结束后必须删除。凭据文件的 owner、`0700` 父目录、`0600` 文件及 symlink / 仓库内路径拒绝规则见 [本地敏感文件与生成物管理](security-local-files.md)。
+
 Helm 与部署边界：
 
 ```bash

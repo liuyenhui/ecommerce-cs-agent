@@ -6,6 +6,7 @@
 
 ### 2026-07-16
 
+- 实现本机 Admin live 测试凭据安全门禁：严格四 key 模块只接受仓库外路径，并校验当前 owner、父目录 `0700`、文件 `0600`、symlink 拒绝与日志脱敏；PR checks 和镜像发布 verify job 均运行确定性 helper 测试，Customer/System 隔离登录的临时 `storageState` 只写 `/tmp/ecommerce-admin-auth-*` 并在测试后删除。
 - 确认本机 Admin live 测试凭据使用仓库外 `~/.config/ecommerce-cs-agent/admin-test-credentials.env`：同时保存 Customer/System 邮箱与密码，目录 `0700`、文件 `0600`，禁止 shell 执行、符号链接、仓库内路径、宽权限和日志回显；临时 storageState 继续只写 `/tmp` 并在测试后删除。详见 [本机 Admin 测试凭据设计](superpowers/specs/2026-07-16-local-admin-test-credentials-design.md)。
 
 ### 2026-07-15
