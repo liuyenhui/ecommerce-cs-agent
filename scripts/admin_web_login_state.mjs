@@ -1,8 +1,18 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdirSync, writeFileSync, chmodSync, lstatSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import {
+  defaultAdminCredentialsFile,
+  initializeAdminCredentialFile,
+  loadAdminCredentialFile,
+  mergeAdminCredentialSources,
+} from "./admin_web_credentials.mjs";
+
+const REPOSITORY_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 const DEFAULTS = {
   namespace: "ecommerce-cs-agent-dev",
@@ -17,7 +27,7 @@ function usage() {
   console.log(`Usage: node scripts/admin_web_login_state.mjs [options]
 
 Logs in to Customer Admin and System Admin without printing credentials or cookies.
-It writes Playwright-compatible storageState files with mode 0600.
+It writes Playwright-compatible storageState files under a 0700 directory with mode 0600.
 
 Options:
   --namespace <name>       Kubernetes namespace. Default: ${DEFAULTS.namespace}
@@ -27,10 +37,19 @@ Options:
   --system-url <url>       System Admin URL. Default: ${DEFAULTS.systemUrl}
   --organization-id <id>   Customer organization_id. Default: ${DEFAULTS.organizationId}
   --output-dir <path>      Output directory. Default: /tmp/ecommerce-admin-auth-<timestamp>
+  --credentials-file <path>
+                           Credential file. Default: repository-external
+                           ${defaultAdminCredentialsFile()}
+  --init-credentials-file  Create the selected credential file and parent with
+                           modes 0600 and 0700, then exit without logging in.
   --skip-kubectl           Only use CUSTOMER_ADMIN_* and SYSTEM_ADMIN_* env vars.
   -h, --help               Show this help.
 
-Environment overrides:
+Credential precedence:
+  Non-empty environment values override the credential file. Kubernetes Secret
+  fallback remains available unless --skip-kubectl is set.
+
+Environment values:
   CUSTOMER_ADMIN_EMAIL
   CUSTOMER_ADMIN_PASSWORD
   SYSTEM_ADMIN_EMAIL
@@ -39,15 +58,35 @@ Environment overrides:
 Notes:
   - Secret password hashes are only usable when stored as plain:<password>.
   - If a password is hashed, pass the plaintext through the corresponding env var.
+  - Never paste passwords into chat or commit the credential file.
   - The generated storageState files contain session cookies. Do not commit or share them.
 `);
 }
 
 function parseArgs(argv) {
+  const valueFlags = {
+    "--namespace": "namespace",
+    "--secret": "secret",
+    "--kubeconfig": "kubeconfig",
+    "--customer-url": "customerUrl",
+    "--system-url": "systemUrl",
+    "--organization-id": "organizationId",
+    "--output-dir": "outputDir",
+    "--credentials-file": "credentialsFile"
+  };
+  const recognizedOptions = new Set([
+    "-h",
+    "--help",
+    "--skip-kubectl",
+    "--init-credentials-file",
+    ...Object.keys(valueFlags)
+  ]);
   const args = {
     ...DEFAULTS,
     outputDir: join("/tmp", `ecommerce-admin-auth-${new Date().toISOString().replace(/[:.]/g, "-")}`),
-    skipKubectl: false
+    skipKubectl: false,
+    credentialsFile: "",
+    initCredentialsFile: false
   };
   for (let index = 2; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -59,19 +98,16 @@ function parseArgs(argv) {
       args.skipKubectl = true;
       continue;
     }
-    const valueFlags = {
-      "--namespace": "namespace",
-      "--secret": "secret",
-      "--kubeconfig": "kubeconfig",
-      "--customer-url": "customerUrl",
-      "--system-url": "systemUrl",
-      "--organization-id": "organizationId",
-      "--output-dir": "outputDir"
-    };
+    if (arg === "--init-credentials-file") {
+      args.initCredentialsFile = true;
+      continue;
+    }
     const key = valueFlags[arg];
     if (!key) throw new Error(`Unknown option: ${arg}`);
     const value = argv[index + 1];
-    if (!value) throw new Error(`Missing value for ${arg}`);
+    if (!value || recognizedOptions.has(value)) {
+      throw new Error(`Missing value for ${arg}`);
+    }
     args[key] = value;
     index += 1;
   }
@@ -99,6 +135,16 @@ function kubectlSecretValue(args, key) {
     return Buffer.from(encoded, "base64").toString("utf8");
   } catch (error) {
     throw new Error(`Failed to read Secret key ${key}. Check kubeconfig, namespace, and Secret name.`);
+  }
+}
+
+function pathEntryExists(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
   }
 }
 
@@ -147,10 +193,10 @@ async function postJson(url, payload) {
     body: JSON.stringify(payload),
     redirect: "manual"
   });
-  const body = await safeRead(response);
   if (!response.ok) {
-    throw new Error(`POST ${url} failed with ${response.status}: ${summarizeBody(body)}`);
+    throw new Error(`POST ${new URL(url).pathname} failed with HTTP ${response.status}`);
   }
+  const body = await readJsonResponse(response, "POST", url);
   return { response, body };
 }
 
@@ -158,26 +204,20 @@ async function getJson(url, cookieHeader) {
   const response = await fetch(url, {
     headers: Object.fromEntries([["Cookie", cookieHeader]])
   });
-  const body = await safeRead(response);
   if (!response.ok) {
-    throw new Error(`GET ${url} failed with ${response.status}: ${summarizeBody(body)}`);
+    throw new Error(`GET ${new URL(url).pathname} failed with HTTP ${response.status}`);
   }
-  return body;
+  return readJsonResponse(response, "GET", url);
 }
 
-async function safeRead(response) {
-  const contentType = response.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return response.json();
-  return response.text();
-}
-
-function summarizeBody(body) {
-  if (typeof body === "string") return body.slice(0, 160);
-  if (body && typeof body === "object" && "error" in body) {
-    const error = body.error;
-    if (error && typeof error === "object" && "message" in error) return String(error.message).slice(0, 160);
+async function readJsonResponse(response, method, url) {
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(
+      `${method} ${new URL(url).pathname} failed with HTTP ${response.status}: invalid JSON response`
+    );
   }
-  return JSON.stringify(body).slice(0, 160);
 }
 
 async function loginAdmin(kind, baseUrl, payload, expectedCookieName) {
@@ -229,15 +269,42 @@ async function main() {
     return;
   }
 
-  const customerEmail = process.env.CUSTOMER_ADMIN_EMAIL || (!args.skipKubectl ? kubectlSecretValue(args, "ADMIN_INITIAL_EMAIL") : "");
-  const customerHash = !args.skipKubectl ? kubectlSecretValue(args, "ADMIN_INITIAL_PASSWORD_HASH") : "";
-  const customerPassword = passwordFromHash("customer admin", customerHash, process.env.CUSTOMER_ADMIN_PASSWORD);
+  const credentialsFile = args.credentialsFile || defaultAdminCredentialsFile();
+  if (args.initCredentialsFile) {
+    const path = initializeAdminCredentialFile({
+      filePath: credentialsFile,
+      repositoryRoot: REPOSITORY_ROOT
+    });
+    console.log(JSON.stringify(
+      {
+        ok: true,
+        path,
+        warning: "Keep this local file private and uncommitted."
+      },
+      null,
+      2
+    ));
+    return;
+  }
 
-  const systemEmail = process.env.SYSTEM_ADMIN_EMAIL
+  const fileCredentials =
+    args.credentialsFile || pathEntryExists(credentialsFile)
+      ? loadAdminCredentialFile({
+          filePath: credentialsFile,
+          repositoryRoot: REPOSITORY_ROOT
+        })
+      : {};
+  const credentials = mergeAdminCredentialSources(fileCredentials, process.env);
+
+  const customerEmail = credentials.CUSTOMER_ADMIN_EMAIL || (!args.skipKubectl ? kubectlSecretValue(args, "ADMIN_INITIAL_EMAIL") : "");
+  const customerHash = !args.skipKubectl ? kubectlSecretValue(args, "ADMIN_INITIAL_PASSWORD_HASH") : "";
+  const customerPassword = passwordFromHash("customer admin", customerHash, credentials.CUSTOMER_ADMIN_PASSWORD);
+
+  const systemEmail = credentials.SYSTEM_ADMIN_EMAIL
     || (!args.skipKubectl ? kubectlSecretValue(args, "SYSTEM_ADMIN_INITIAL_EMAIL") : "")
     || customerEmail;
   const systemHash = (!args.skipKubectl ? kubectlSecretValue(args, "SYSTEM_ADMIN_INITIAL_PASSWORD_HASH") : "") || customerHash;
-  const systemPassword = passwordFromHash("system admin", systemHash, process.env.SYSTEM_ADMIN_PASSWORD);
+  const systemPassword = passwordFromHash("system admin", systemHash, credentials.SYSTEM_ADMIN_PASSWORD);
 
   mkdirSync(args.outputDir, { recursive: true, mode: 0o700 });
   chmodSync(args.outputDir, 0o700);
