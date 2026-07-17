@@ -22,6 +22,7 @@ RUN pip install --no-cache-dir \
         "psycopg[binary]>=3.2,<4" \
         "bcrypt>=4.1,<5" \
         "langgraph>=1.2,<2" \
+        "cryptography>=45,<47" \
     && pip install --no-cache-dir --no-deps .
 
 USER 10001:10001
