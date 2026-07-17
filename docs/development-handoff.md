@@ -6,7 +6,7 @@
 
 ### 2026-07-17
 
-- Dev 近似表达回归补齐两个确定性边界：地址“换成/换到”按外部动作请求处理，不先索取订单；真实 LLM 只能辅助阶段语义，不得扩张规则校验后的 `needs_context[]`，避免售前库存咨询因“出库”被额外索取物流。两条线上发现已加入离线模拟语料。
+- Dev 近似表达回归补齐确定性边界：地址修改支持“地址能换成/可以修改为/更换一下收货地址”等双向、有限间隔语序，按外部动作请求处理且不先索取订单；真实 LLM 只能辅助阶段语义，不得扩张规则校验后的 `needs_context[]`，避免售前库存咨询因“出库”被额外索取物流。线上发现及相邻表达已加入离线模拟语料。
 - Dev 30 条并发模拟回归发现 NodeBound `classify_service_stage` 在真实模型调用失败时会把确定性可识别的售中消息改成 `unknown + handoff`。分类节点现改为本地规则降级：保留规则主/次阶段和 typed context，继续经过风险、上下文、动作与自动回复门禁，同时在分类摘要和节点 LLM trace 保留 `fallback / llm_call_failed`；候选生成失败仍安全转人工，不做静默模型切换。
 - API 决策并发韧性实现：四个 LangGraph 决策入口改由 AnyIO 受限 worker 执行，`DECISION_MAX_CONCURRENCY` 默认 4；`/health` 改为无依赖异步 endpoint，Dev API 调整为两个 replica 并显式配置 startup/readiness/liveness probe。部署排障同时确认 PR #87 API 镜像漏装 cryptography，已加入 Dockerfile 与部署回归测试；凭据加密 Secret 继续 fail closed，值不得进入 Git、日志或聊天。
 - API 决策并发修复设计：同步 LangGraph/LLM 调用必须通过受限 worker 执行，不能阻塞 FastAPI event loop；`/health` 保持无依赖异步响应，Dev 使用两个 API replica 与显式 startup/readiness/liveness 探针。PR #87 所需凭据加密主密钥只允许以独立 Kubernetes Secret 注入，详见 [API 决策并发与韧性设计](superpowers/specs/2026-07-17-api-decision-concurrency-resilience-design.md)。

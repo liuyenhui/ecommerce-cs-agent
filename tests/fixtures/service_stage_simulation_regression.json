@@ -47,5 +47,8 @@
   {"id":"nearby-mixed-repair-01","kind":"nearby","message":"旧设备保修期内故障，另外新款售价多少？","expected_primary_stage":"after_sale","expected_secondary_stages":["pre_sale"],"expected_reason_code":"mixed_intent","expected_action":"context_request"},
   {"id":"nearby-mixed-repair-02","kind":"nearby","message":"先问旧机怎么维修，再看看新版多少钱。","expected_primary_stage":"after_sale","expected_secondary_stages":["pre_sale"],"expected_reason_code":"mixed_intent","expected_action":"context_request"},
   {"id":"nearby-address-replace-03","kind":"nearby","message":"我这单还没有发出，可以把地址换成公司前台吗？","expected_primary_stage":"in_sale","expected_secondary_stages":[],"expected_reason_code":"awaiting_fulfillment","expected_action":"action_request"},
-  {"id":"nearby-presale-stockout-03","kind":"nearby","message":"黑色款还有库存吗，今天能安排出库吗？","expected_primary_stage":"pre_sale","expected_secondary_stages":[],"expected_reason_code":"purchase_intent","expected_action":"context_request"}
+  {"id":"nearby-presale-stockout-03","kind":"nearby","message":"黑色款还有库存吗，今天能安排出库吗？","expected_primary_stage":"pre_sale","expected_secondary_stages":[],"expected_reason_code":"purchase_intent","expected_action":"context_request"},
+  {"id":"nearby-address-replace-04","kind":"nearby","message":"这单尚未出库，地址能换成新的收货地点吗？","expected_primary_stage":"in_sale","expected_secondary_stages":[],"expected_reason_code":"awaiting_fulfillment","expected_action":"action_request"},
+  {"id":"nearby-address-replace-05","kind":"nearby","message":"订单还没发货，地址可以修改为公司吗？","expected_primary_stage":"in_sale","expected_secondary_stages":[],"expected_reason_code":"awaiting_fulfillment","expected_action":"action_request"},
+  {"id":"nearby-address-replace-06","kind":"nearby","message":"这笔订单还没发出，我想更换一下收货地址。","expected_primary_stage":"in_sale","expected_secondary_stages":[],"expected_reason_code":"awaiting_fulfillment","expected_action":"action_request"}
 ]
