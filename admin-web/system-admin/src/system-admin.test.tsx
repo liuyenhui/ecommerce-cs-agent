@@ -388,8 +388,44 @@ describe("operational pages", () => {
     const result = await loadDashboardSupportingData(api, new Date("2026-07-15T12:00:00Z"));
 
     expect(releaseCalled).toBe(false);
-    expect(readinessFilters).toEqual({ status: "blocked", page_size: 5 });
+    expect(readinessFilters).toEqual({ status: "blocked", page_size: 100 });
     expect(result.pages).toHaveLength(3);
+  });
+
+  it("builds the dashboard summary from up to five product-content blockers in a widened candidate window", async () => {
+    let readinessFilters: unknown;
+    const productBlocked = Array.from({ length: 6 }, (_, index) => ({
+      store_id: `product-store-${index + 1}`,
+      status: "blocked",
+      checks: [{ code: "product_content", status: "blocked", message: "缺少商品资料" }],
+      updated_at: "2026-07-15T00:00:00Z"
+    }));
+    const priceOnly = {
+      store_id: "price-only",
+      status: "blocked",
+      checks: [
+        { code: "product_content", status: "pass", message: "商品资料完整" },
+        { code: "price_snapshot", status: "blocked", message: "缺少价格配置" }
+      ],
+      updated_at: "2026-07-15T00:00:00Z"
+    };
+    const emptyPage = { items: [], page: { page: 1, page_size: 5, total: 0 } };
+    const api = {
+      readiness: async (filters: unknown) => {
+        readinessFilters = filters;
+        return { items: [priceOnly, ...productBlocked], page: { page: 1, page_size: 100, total: 7 } };
+      },
+      tasks: async () => emptyPage,
+      traces: async () => emptyPage
+    };
+
+    const result = await loadDashboardSupportingData(api, new Date("2026-07-15T12:00:00Z"));
+
+    expect(readinessFilters).toEqual({ status: "blocked", page_size: 100 });
+    expect(result.pages[0]).toEqual({
+      items: productBlocked.slice(0, 5),
+      page: { page: 1, page_size: 5, total: 6 }
+    });
   });
 
   it("removes the retry control after the task is queued", () => {
