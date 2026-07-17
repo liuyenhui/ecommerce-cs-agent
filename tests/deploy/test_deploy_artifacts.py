@@ -485,7 +485,7 @@ def test_dev_dependencies_include_draft_2020_json_schema_validator() -> None:
 def test_api_image_installs_llm_credential_encryption_runtime() -> None:
     dockerfile = Path("Dockerfile.api").read_text(encoding="utf-8")
 
-    assert '"cryptography>=45,<47"' in dockerfile
+    assert dockerfile.count('"cryptography>=45,<47"') == 1
 
 
 def test_helm_chart_defines_k8s_security_defaults() -> None:
