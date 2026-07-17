@@ -6,6 +6,11 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const adminRoot = path.resolve(scriptDir, '..');
 const root = path.resolve(adminRoot, '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
+const sourceFiles = (directory) => fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+  const target = path.join(directory, entry.name);
+  if (entry.isDirectory()) return sourceFiles(target);
+  return /\.(ts|tsx)$/.test(entry.name) && !/\.test\.(ts|tsx)$/.test(entry.name) ? [target] : [];
+});
 const customerApp = read('admin-web/customer-admin/src/App.tsx');
 const systemApp = read('admin-web/system-admin/src/App.tsx');
 const systemWorkspace = read('admin-web/system-admin/src/SystemWorkspace.tsx');
@@ -32,11 +37,21 @@ const messageHistory = customerApp.slice(customerApp.indexOf('function MessageHi
 const customerLanding = customerApp.slice(customerApp.indexOf('function CustomerLanding'), customerApp.indexOf('function CustomerAdminShell'));
 const productContent = customerApp.slice(customerApp.indexOf('function ProductContent'), customerApp.indexOf('function ProductUploadModal'));
 const allSource = [customerApp, systemApp, sharedComponents, sharedData, sharedTraceReplay].join('\n');
+const adminProductionFiles = [
+  ...sourceFiles(path.join(adminRoot, 'shared')),
+  ...sourceFiles(path.join(adminRoot, 'customer-admin', 'src')),
+  ...sourceFiles(path.join(adminRoot, 'system-admin', 'src'))
+];
+const directLocaleTimeFiles = adminProductionFiles.filter((file) => fs.readFileSync(file, 'utf8').includes('.toLocaleString('));
+const intlDateTimeFiles = adminProductionFiles.filter((file) => fs.readFileSync(file, 'utf8').includes('Intl.DateTimeFormat'));
+const shanghaiDateTimeFile = path.join(adminRoot, 'shared', 'date-time.ts');
 
 const checks = [
   ['Customer landing uses authentic workflow proof instead of fake skeleton art', customerLanding.includes('/ai-workflow-proof.png') && !customerLanding.includes('previewLine') && !customerLanding.includes('previewTable') && !customerLanding.includes('previewNav')],
   ['Customer landing tells the approved four-step workflow story', ['客户提问', '查商品资料', '检查规则与风险', '安全回复或转人工'].every((copy) => customerLanding.includes(copy))],
   ['Admin Web regression guard is wired into npm test', packageJson.includes('assert-ui-regressions.mjs')],
+  ['Admin visible timestamps cannot use browser-local toLocaleString', 'new Date(value).toLocaleString()'.includes('.toLocaleString(') && directLocaleTimeFiles.length === 0],
+  ['Admin time-zone formatting has one shared implementation', intlDateTimeFiles.length === 1 && intlDateTimeFiles[0] === shanghaiDateTimeFile],
   ['Login auth failures render inline form error', loginPanel.includes('loginError') && loginPanel.includes('role="alert"') && styles.includes('.loginError')],
   ['Login 401 auth failures use user-facing credential copy', sharedComponents.includes('message.startsWith("401 ")') && loginPanel.includes('邮箱或密码错误')],
   ['Customer login renders open_erp_agent WeChat bridge entry only in customer wrapper', customerApp.includes('使用 open_erp_agent 微信登录') && customerApp.includes('https://www.fcihome.com/ai-cs/customer-admin-login') && !systemApp.includes('open_erp_agent 微信')],
