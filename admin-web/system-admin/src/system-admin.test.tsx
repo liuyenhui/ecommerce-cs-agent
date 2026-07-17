@@ -167,6 +167,10 @@ describe("System Admin operations shell", () => {
 
     render(<App />);
     const collapse = await screen.findByRole("button", { name: "收起桌面导航" });
+    const accountSummary = screen.getByRole("region", { name: "当前系统账号摘要" });
+    expect(accountSummary.textContent).toContain("Operator");
+    expect(accountSummary.closest(".rail")).not.toBeNull();
+    expect(accountSummary.closest(".systemWorkspace")).toBeNull();
     for (const label of systemNavigationItems.map((item) => item.label)) {
       expect(screen.getByRole("button", { name: label }).getAttribute("title")).toBeNull();
     }
