@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Ecommerce customer service agent v1 API."
 requires-python = ">=3.11"
 dependencies = [
+  "anyio>=4,<5",
   "fastapi>=0.115,<1",
   "uvicorn[standard]>=0.34,<1",
   "pydantic>=2.8,<3",

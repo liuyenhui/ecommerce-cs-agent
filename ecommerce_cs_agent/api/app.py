@@ -32,6 +32,7 @@ from ecommerce_cs_agent.services import oidc as oidc_service
 from ecommerce_cs_agent.services.admin import admin_repository_for
 from ecommerce_cs_agent.services.admin_auth import admin_auth_service_for, system_admin_auth_service_for
 from ecommerce_cs_agent.services.decision import DecisionService
+from ecommerce_cs_agent.services.decision_execution import BoundedDecisionExecutor
 from ecommerce_cs_agent.services.object_storage import ObjectStorageUnavailable, ObjectStorageValidationError
 from ecommerce_cs_agent.services.open_erp_integration import BillingLeaseError, OpenErpIntegrationService
 from ecommerce_cs_agent.services.product_analysis import product_document_analyzer_for
@@ -64,10 +65,12 @@ def create_app(
     llm_connection_tester: Callable[[dict[str, Any], dict[str, int]], dict[str, Any]] | None = None,
     llm_release_gate_checker: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
     llm_node_configuration_repository: Any | None = None,
+    decision_service_override: Any | None = None,
 ) -> FastAPI:
     settings = settings or load_settings()
     app = FastAPI(title="ecommerce-cs-agent", version="0.1.0")
     decisions = DecisionService(settings)
+    decision_executor = BoundedDecisionExecutor(max_concurrency=settings.decision_max_concurrency)
     admin_data = admin_repository_for(settings)
     product_analyzer = product_document_analyzer_for(settings)
     if settings.environment.lower() != "test" and any(
@@ -76,6 +79,7 @@ def create_app(
             admin_auth_service_override,
             system_admin_auth_service_override,
             system_admin_repository_override,
+            decision_service_override,
         )
     ):
         raise RuntimeError("Admin service injection is test-only")
@@ -146,6 +150,8 @@ def create_app(
             settings,
             reply_provider=NodeBoundReplyProvider(resolver=llm_node_configuration.resolve_node),
         )
+    if decision_service_override is not None:
+        decisions = decision_service_override
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -212,7 +218,7 @@ def create_app(
         return {"service": "ecommerce-cs-agent-admin", "status": "ok"}
 
     @app.get("/health")
-    def health() -> dict[str, str]:
+    async def health() -> dict[str, str]:
         return {
             "status": "ok",
             "service": settings.service_name,
@@ -234,7 +240,7 @@ def create_app(
                 raise api_error(exc.status_code, exc.code, exc.message) from exc
             payload = open_erp.enrich_reply_payload(connector, payload, lease)
         payload = _normalize_reply_decision_payload(payload)
-        return decisions.create_reply_decision(payload)
+        return await decision_executor.run(decisions.create_reply_decision, payload)
 
     def context_endpoint(context_type: str) -> Callable[..., Any]:
         async def refill(
@@ -247,7 +253,8 @@ def create_app(
             if not isinstance(payload.get(context_type), list):
                 raise api_error(422, "validation_error", f"{context_type} must be an array")
             try:
-                response = decisions.refill_context(
+                response = await decision_executor.run(
+                    decisions.refill_context,
                     decision_id,
                     context_type,
                     payload,
@@ -282,7 +289,8 @@ def create_app(
         if payload.get("status") not in {"succeeded", "failed", "timeout", "rejected"}:
             raise api_error(422, "validation_error", "invalid action result status")
         try:
-            response = decisions.submit_action_result(
+            response = await decision_executor.run(
+                decisions.submit_action_result,
                 decision_id,
                 payload,
                 principal_organization_id=_principal.organization_id,
@@ -552,7 +560,7 @@ def create_app(
                 "context": payload.get("context") or {"products": [], "orders": [], "logistics": [], "rules": []},
             }
         )
-        decision = decisions.create_reply_decision(decision_payload)
+        decision = await decision_executor.run(decisions.create_reply_decision, decision_payload)
         return JSONResponse(
             status_code=201,
             content={

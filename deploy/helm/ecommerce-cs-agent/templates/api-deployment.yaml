@@ -38,6 +38,8 @@ spec:
             - secretRef:
                 name: {{ .Values.api.envFromSecret }}
           env:
+            - name: DECISION_MAX_CONCURRENCY
+              value: {{ .Values.api.decisionMaxConcurrency | quote }}
             - name: LLM_GOVERNANCE_SECRET_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -71,13 +73,25 @@ spec:
             - name: NO_PROXY
               value: {{ .Values.proxy.noProxy | quote }}
             {{- end }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
           readinessProbe:
             httpGet:
               path: /health
               port: http
+            timeoutSeconds: 2
+            periodSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
               port: http
+            timeoutSeconds: 2
+            periodSeconds: 10
+            failureThreshold: 6
           resources:
             {{- toYaml .Values.api.resources | nindent 12 }}

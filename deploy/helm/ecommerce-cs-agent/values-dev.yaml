@@ -9,7 +9,8 @@ proxy:
   noProxy: localhost,127.0.0.1,.svc,.cluster.local,postgres.ecommerce-cs-agent-dev.svc.cluster.local,minio.ecommerce-cs-agent-dev.svc.cluster.local
 
 api:
-  replicas: 1
+  replicas: 2
+  decisionMaxConcurrency: 4
   envFromSecret: ecommerce-cs-agent-runtime
   runtimeLlmSecretRef:
     name: ecommerce-cs-agent-llm-provider

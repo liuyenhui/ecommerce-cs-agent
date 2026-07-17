@@ -5,6 +5,10 @@
     "api": {
       "type": "object",
       "properties": {
+        "decisionMaxConcurrency": {
+          "type": "integer",
+          "minimum": 1
+        },
         "cursorSigningSecretRef": {
           "type": "object",
           "additionalProperties": false,
@@ -97,7 +101,7 @@
           }
         }
       },
-      "required": ["cursorSigningSecretRef", "runtimeLlmSecretRef", "credentialEncryptionSecretRef", "llmNodeBindingEnabled", "secretAccess"]
+      "required": ["decisionMaxConcurrency", "cursorSigningSecretRef", "runtimeLlmSecretRef", "credentialEncryptionSecretRef", "llmNodeBindingEnabled", "secretAccess"]
     }
   },
   "required": ["api"]

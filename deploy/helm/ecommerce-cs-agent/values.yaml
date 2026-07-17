@@ -8,6 +8,7 @@ proxy:
 
 api:
   replicas: 1
+  decisionMaxConcurrency: 4
   envFromSecret: ecommerce-cs-agent-runtime
   runtimeLlmSecretRef:
     name: ecommerce-cs-agent-llm-provider

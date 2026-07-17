@@ -53,13 +53,15 @@
 - Modify: `deploy/helm/ecommerce-cs-agent/values.schema.json`
 - Modify: `deploy/helm/ecommerce-cs-agent/templates/api-deployment.yaml`
 - Modify: `tests/deploy/test_deploy_artifacts.py`
+- Modify: `Dockerfile.api`
 
-1. Add failing deployment tests for `DECISION_MAX_CONCURRENCY`, explicit startup/readiness/liveness timings, and two Dev API replicas.
+1. Add failing deployment tests for `DECISION_MAX_CONCURRENCY`, explicit startup/readiness/liveness timings, two Dev API replicas, and all direct runtime imports required by the no-deps API image build.
 2. Run focused deployment tests and confirm the expected failures.
 3. Add the Helm value and schema validation with a minimum of one.
 4. Render the environment variable and explicit probe budgets in the API Deployment.
 5. Set Dev API replicas to two.
-6. Run focused tests, Helm lint, and Helm template.
+6. Install AnyIO and cryptography explicitly in `Dockerfile.api`; PR #87 declared cryptography in `pyproject.toml` but omitted it from the no-deps image build, causing the new Pod to crash at import time.
+7. Run focused tests, Helm lint, and Helm template.
 
 ## Task 4: Restore the blocked Dev deployment Secret
 
@@ -76,7 +78,7 @@
 **Files:**
 
 - Modify: `docs/deployment.md`
-- Modify: `docs/testing-strategy.md`
+- Modify: `docs/testing.md`
 - Modify: `docs/requirements-test-matrix.md`
 - Modify: `docs/development-handoff.md`
 
