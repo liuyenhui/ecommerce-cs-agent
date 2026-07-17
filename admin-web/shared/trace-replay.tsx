@@ -4,6 +4,7 @@ import { applySelectedNodeStyles } from "./trace-graph-selection";
 import { reduceGraphUiState } from "./trace-graph-state";
 import { presentTraceNode, summarizeTraceProgress } from "./trace-node-presentation";
 import { presentDecisionTrace } from "./trace-presentation";
+import { formatShanghaiDateTime } from "./date-time";
 import type { JsonRecord } from "./types";
 
 type TraceNode = JsonRecord & {
@@ -421,8 +422,8 @@ function TraceNodeDetail({ node, status }: { node: TraceNode; status?: string })
           <div><dt>节点 ID</dt><dd>{node.id}</dd></div>
           <div><dt>类型</dt><dd>{String(node.kind || "langgraph_node")}</dd></div>
           <div><dt>原始状态</dt><dd>{String(node.status || "completed")}</dd></div>
-          <div><dt>开始</dt><dd>{String(node.started_at || "-")}</dd></div>
-          <div><dt>结束</dt><dd>{String(node.ended_at || "-")}</dd></div>
+          <div><dt>开始</dt><dd>{formatShanghaiDateTime(node.started_at)}</dd></div>
+          <div><dt>结束</dt><dd>{formatShanghaiDateTime(node.ended_at)}</dd></div>
         </dl>
         <div className="traceRefs">
           <div>

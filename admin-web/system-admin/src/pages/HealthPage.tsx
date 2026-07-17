@@ -1,5 +1,6 @@
 import React from "react";
 import { RequestStateView, SectionHeader } from "../../../shared/components";
+import { formatShanghaiDateTime } from "../../../shared/date-time";
 import type { HealthDependency, RequestState, SystemHealth } from "../system-types";
 
 const groupNames = { application: "应用", dependency: "依赖", deployment: "部署" } as const;
@@ -23,7 +24,7 @@ function DependencyRow({ item }: { item: HealthDependency }) {
 export function HealthPage({ state }: { state: RequestState<SystemHealth> }) {
   return <RequestStateView state={state}>{(health) => <>
     <SectionHeader label="HEALTH" title="系统健康" />
-    <div className={`healthSummary ${effectiveStatus(health)}`}><span>整体状态</span><strong>{effectiveStatus(health)}</strong><small>检查时间：{health.checked_at}</small></div>
+    <div className={`healthSummary ${effectiveStatus(health)}`}><span>整体状态</span><strong>{effectiveStatus(health)}</strong><small>检查时间：{formatShanghaiDateTime(health.checked_at)}</small></div>
     <div className="healthGroups">
       {(Object.keys(groupNames) as Array<keyof typeof groupNames>).map((group) => <section key={group}><h3>{groupNames[group]}</h3><ul>{health.dependencies.filter((item) => groupFor(item.name) === group).map((item) => <DependencyRow key={item.name} item={item} />)}</ul>{health.dependencies.some((item) => groupFor(item.name) === group) ? null : <p className="emptyText">服务端未返回此类检查项。</p>}</section>)}
     </div>

@@ -17,6 +17,7 @@ import {
   UploadCloud
 } from "lucide-react";
 import { requestJson } from "../../shared/api";
+import { formatShanghaiDateTime } from "../../shared/date-time";
 import {
   AdminFrame,
   AuditTable,
@@ -883,9 +884,7 @@ function orderLabel(trace: CustomerTrace) {
 function messageTimeLabel(trace: CustomerTrace) {
   const value = String(trace.sent_at || trace.created_at || trace.updated_at || "").trim();
   if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+  return formatShanghaiDateTime(value);
 }
 
 function decisionBadges(trace: CustomerTrace) {

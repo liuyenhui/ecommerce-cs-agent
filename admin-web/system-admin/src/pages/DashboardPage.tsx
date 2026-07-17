@@ -1,6 +1,7 @@
 import React from "react";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import { DataTable, EmptyState, Metric, RequestStateView, SectionHeader } from "../../../shared/components";
+import { formatShanghaiDateTime } from "../../../shared/date-time";
 import type { DashboardData, RequestState } from "../system-types";
 
 const readinessTooltip = "未满足上线条件包括：缺少商品资料、缺少价格配置、缺少已审核知识、API 未完成接入等情况。";
@@ -49,7 +50,7 @@ export function DashboardPage({ state, onNavigate }: { state: RequestState<Dashb
           <div className="panelFooterAction"><button type="button" onClick={() => onNavigate("readiness")}>查看全部未满足上线条件的店铺</button></div>
         </div>
       </div>
-      <p className="dataTimestamp">聚合生成时间：{summary.generated_at}</p>
+      <p className="dataTimestamp">聚合生成时间：{formatShanghaiDateTime(summary.generated_at)}</p>
     </>;
   }}</RequestStateView>;
 }

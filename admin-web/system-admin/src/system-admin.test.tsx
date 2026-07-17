@@ -264,6 +264,8 @@ describe("DashboardPage", () => {
     expect(html).not.toContain("上线阻断摘要");
     expect(html).not.toContain("999");
     expect(html).not.toContain("888");
+    expect(html).toContain("2026年7月15日 08:00:00");
+    expect(html).not.toContain("2026-07-15T00:00:00Z");
   });
 
   it("shows an explicit partial failure instead of pretending releases are empty", () => {
@@ -453,6 +455,8 @@ describe("operational pages", () => {
     expect(html).toContain("依赖");
     expect(html).toContain("部署");
     expect(html).toContain("degraded");
+    expect(html).toContain("检查时间：2026年7月15日 08:00:00");
+    expect(html).not.toContain("2026-07-15T00:00:00Z");
   });
 
   it("shows the server trace total instead of the current page row count", () => {
@@ -1129,6 +1133,7 @@ describe("LLM governance and releases", () => {
     fireEvent.click(screen.getByRole("tab", { name: "变更审计" }));
     expect(await screen.findByText("sys-real")).toBeTruthy();
     expect(screen.getByText("running")).toBeTruthy();
+    expect(screen.getByText("2026年7月15日 08:00:00")).toBeTruthy();
     expect(screen.queryByText("never-show")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
     await waitFor(() => expect(paths.some((path) => path.includes("action_prefix=llm.") && path.includes("page=2") && path.includes("page_size=20"))).toBe(true));
