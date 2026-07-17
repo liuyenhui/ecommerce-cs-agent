@@ -114,6 +114,7 @@ class OpenAICompatibleReplyProvider:
         parsed = self._chat_json(
             system=(
                 "Generate a concise Chinese customer-service candidate reply. It is a candidate only, not permission to send. "
+                "Return a JSON object with exactly one string field named reply_text. "
                 + stage_rules[service_stage["primary_stage"]]
             ),
             user=json.dumps(
