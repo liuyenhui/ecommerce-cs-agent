@@ -205,7 +205,7 @@ describe("request states", () => {
 
 describe("DashboardPage", () => {
   it("renders server dashboard-summary aggregates instead of list lengths", () => {
-    const html = markup(<DashboardPage state={{
+    const dashboard = <DashboardPage state={{
       kind: "success",
       data: {
         summary: {
@@ -227,7 +227,10 @@ describe("DashboardPage", () => {
         tasks: { items: [{ task_id: "task-1" }], page: { page: 1, page_size: 20, total: 888 } },
         decisions: { items: [], page: { page: 1, page_size: 20, total: 0 } }
       }
-    }} />);
+    }} />;
+    const html = markup(dashboard);
+    const { container } = render(dashboard);
+    const readinessDescription = within(container).getByText("以下店铺因缺少必要配置，暂时无法上线。");
 
     expect(html).toContain("47");
     expect(html).toContain("82");
@@ -237,8 +240,8 @@ describe("DashboardPage", () => {
     expect(html).toContain("未满足上线条件");
     expect(html).toContain("缺少商品资料的店铺");
     expect(html).toContain("以下店铺因缺少必要配置，暂时无法上线。");
-    expect(html).toContain('<div class="dashboardReadinessSummary">');
-    expect(html).toContain('<p class="panelDescription">以下店铺因缺少必要配置，暂时无法上线。</p>');
+    expect(readinessDescription.classList.contains("panelDescription")).toBe(true);
+    expect(readinessDescription.parentElement?.classList.contains("dashboardReadinessSummary")).toBe(true);
     expect(html).toContain("未满足上线条件包括：缺少商品资料、缺少价格配置、缺少已审核知识、API 未完成接入等情况。");
     expect(html).not.toContain("上线阻断摘要");
     expect(html).not.toContain("999");
