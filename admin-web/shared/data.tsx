@@ -1,4 +1,5 @@
 import type { EmptyStateProps, JsonRecord } from "./types";
+import { formatShanghaiDateTime, isDateTimeField } from "./date-time";
 
 const statusTone: Record<string, "ok" | "warn" | "bad" | "info"> = {
   active: "ok",
@@ -59,7 +60,8 @@ const fieldLabels: Record<string, string> = {
 
 export type SummaryItem = { label: string; value: string };
 
-export function renderCell(value: unknown) {
+export function renderCell(value: unknown, field = "") {
+  if (isDateTimeField(field)) return formatShanghaiDateTime(value);
   if (value === null || value === undefined || value === "") return "-";
   if (typeof value === "string") {
     const tone = toneFor(value);

@@ -64,7 +64,7 @@ export function TenantsPage({ state, onTenantPageChange }: {
                     <td data-label="类型">租户</td>
                     <td data-label="平台">-</td>
                     <td data-label="状态">{renderCell(tenant.status)}</td>
-                    <td data-label="创建时间">{renderCell(tenant.created_at)}</td>
+                    <td data-label="创建时间">{renderCell(tenant.created_at, "created_at")}</td>
                   </tr>
                   {expanded && stores.length ? stores.map((store, storeIndex) => {
                     const storeId = String(store.store_id || store.id || "");
@@ -73,7 +73,7 @@ export function TenantsPage({ state, onTenantPageChange }: {
                       <td data-label="类型">店铺</td>
                       <td data-label="平台">{renderCell(store.platform)}</td>
                       <td data-label="状态">{renderCell(store.status)}</td>
-                      <td data-label="创建时间">{renderCell(store.created_at)}</td>
+                      <td data-label="创建时间">{renderCell(store.created_at, "created_at")}</td>
                     </tr>;
                   }) : null}
                   {expanded && !stores.length ? <tr className="tenantStoreRow tenantStoreEmptyRow" id={childRowsId}><td data-label="店铺" colSpan={5}>暂无店铺</td></tr> : null}
