@@ -208,8 +208,22 @@ describe("request states", () => {
 });
 
 describe("DashboardPage", () => {
+  it("navigates from the readiness summary to the readiness page", () => {
+    const onNavigate = vi.fn();
+    render(<DashboardPage state={{ kind: "success", data: {
+      summary: { active_organizations: 1, active_stores: 1, decisions_today: 1, auto_reply_rate: 1, handoff_rate: 0, error_rate: 0, readiness_blockers: 1, pending_tasks: 0, critical_alerts: 0, recent_releases: [], recent_releases_status: "available", recent_releases_error: null, generated_at: "2026-07-15T00:00:00Z" },
+      readiness: { items: [{ store_id: "store-1" }], page: { page: 1, page_size: 5, total: 1 } },
+      tasks: { items: [], page: { page: 1, page_size: 5, total: 0 } },
+      decisions: { items: [], page: { page: 1, page_size: 5, total: 0 } }
+    } }} onNavigate={onNavigate} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "查看全部未满足上线条件的店铺" }));
+
+    expect(onNavigate).toHaveBeenCalledWith("readiness");
+  });
+
   it("renders server dashboard-summary aggregates instead of list lengths", () => {
-    const html = markup(<DashboardPage state={{
+    const dashboard = <DashboardPage state={{
       kind: "success",
       data: {
         summary: {
@@ -231,13 +245,23 @@ describe("DashboardPage", () => {
         tasks: { items: [{ task_id: "task-1" }], page: { page: 1, page_size: 20, total: 888 } },
         decisions: { items: [], page: { page: 1, page_size: 20, total: 0 } }
       }
-    }} />);
+    }} onNavigate={() => undefined} />;
+    const html = markup(dashboard);
+    const { container } = render(dashboard);
+    const readinessDescription = within(container).getByText("以下店铺因缺少必要配置，暂时无法上线。");
 
     expect(html).toContain("47");
     expect(html).toContain("82");
     expect(html).toContain("301");
     expect(html).toContain("暂无可计算数据");
     expect(html).toContain("release-real");
+    expect(html).toContain("未满足上线条件");
+    expect(html).toContain("缺少商品资料的店铺");
+    expect(html).toContain("以下店铺因缺少必要配置，暂时无法上线。");
+    expect(readinessDescription.classList.contains("panelDescription")).toBe(true);
+    expect(readinessDescription.parentElement?.classList.contains("dashboardReadinessSummary")).toBe(true);
+    expect(html).toContain("未满足上线条件包括：缺少商品资料、缺少价格配置、缺少已审核知识、API 未完成接入等情况。");
+    expect(html).not.toContain("上线阻断摘要");
     expect(html).not.toContain("999");
     expect(html).not.toContain("888");
   });
@@ -246,8 +270,11 @@ describe("DashboardPage", () => {
     const html = markup(<DashboardPage state={{ kind: "success", data: {
       summary: { active_organizations: 1, active_stores: 1, decisions_today: 1, auto_reply_rate: 1, handoff_rate: 0, error_rate: 0, readiness_blockers: 0, pending_tasks: 0, critical_alerts: 0, recent_releases: [], recent_releases_status: "unavailable", recent_releases_error: "release_data_unavailable", generated_at: "2026-07-15T00:00:00Z" },
       readiness: { items: [], page: { page: 1, page_size: 5, total: 0 } }, tasks: { items: [], page: { page: 1, page_size: 5, total: 0 } }, decisions: { items: [], page: { page: 1, page_size: 5, total: 0 } }
-    } }} />);
+    } }} onNavigate={() => undefined} />);
     expect(html).toContain("发布数据暂不可用");
+    expect(html).toContain("以下店铺因缺少必要配置，暂时无法上线。");
+    expect(html).toContain("暂无缺少商品资料的店铺");
+    expect(html).toContain("当前摘要中没有缺少商品资料的店铺。");
     expect(html).not.toContain("暂无最近发布");
   });
 });
@@ -432,8 +459,44 @@ describe("operational pages", () => {
     const result = await loadDashboardSupportingData(api, new Date("2026-07-15T12:00:00Z"));
 
     expect(releaseCalled).toBe(false);
-    expect(readinessFilters).toEqual({ status: "blocked", page_size: 5 });
+    expect(readinessFilters).toEqual({ status: "blocked", page_size: 100 });
     expect(result.pages).toHaveLength(3);
+  });
+
+  it("builds the dashboard summary from up to five product-content blockers in a widened candidate window", async () => {
+    let readinessFilters: unknown;
+    const productBlocked = Array.from({ length: 6 }, (_, index) => ({
+      store_id: `product-store-${index + 1}`,
+      status: "blocked",
+      checks: [{ code: "product_content", status: "blocked", message: "缺少商品资料" }],
+      updated_at: "2026-07-15T00:00:00Z"
+    }));
+    const priceOnly = {
+      store_id: "price-only",
+      status: "blocked",
+      checks: [
+        { code: "product_content", status: "pass", message: "商品资料完整" },
+        { code: "price_snapshot", status: "blocked", message: "缺少价格配置" }
+      ],
+      updated_at: "2026-07-15T00:00:00Z"
+    };
+    const emptyPage = { items: [], page: { page: 1, page_size: 5, total: 0 } };
+    const api = {
+      readiness: async (filters: unknown) => {
+        readinessFilters = filters;
+        return { items: [priceOnly, ...productBlocked], page: { page: 1, page_size: 100, total: 7 } };
+      },
+      tasks: async () => emptyPage,
+      traces: async () => emptyPage
+    };
+
+    const result = await loadDashboardSupportingData(api, new Date("2026-07-15T12:00:00Z"));
+
+    expect(readinessFilters).toEqual({ status: "blocked", page_size: 100 });
+    expect(result.pages[0]).toEqual({
+      items: productBlocked.slice(0, 5),
+      page: { page: 1, page_size: 5, total: 6 }
+    });
   });
 
   it("removes the retry control after the task is queued", () => {
@@ -1058,7 +1121,7 @@ describe("async request ownership", () => {
       const page = String(input).includes("page=2") ? 2 : 1;
       return response({ items: [{ task_id: `task-${page}`, status: "queued", retryable: false }], page_info: { page, page_size: 20, total: 25 } });
     }));
-    render(<SystemWorkspace activePage="tasks" setToast={() => undefined} />);
+    render(<SystemWorkspace activePage="tasks" setToast={() => undefined} onNavigate={() => undefined} />);
     await screen.findByText("task-1");
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
     await screen.findByText("task-2");
@@ -1075,7 +1138,7 @@ describe("async request ownership", () => {
       expect(String(input)).toContain("action=newest");
       return Promise.resolve(response({ items: [{ audit_log_id: "new-record" }], page_info: { page: 1, page_size: 20, total: 1 } }));
     }));
-    render(<SystemWorkspace activePage="audit" setToast={() => undefined} />);
+    render(<SystemWorkspace activePage="audit" setToast={() => undefined} onNavigate={() => undefined} />);
     fireEvent.change(screen.getByLabelText("action"), { target: { value: "newest" } });
     fireEvent.click(screen.getByRole("button", { name: "查询" }));
     await screen.findByText("new-record");
