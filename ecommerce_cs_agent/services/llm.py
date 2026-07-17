@@ -77,7 +77,12 @@ class NodeBoundReplyProvider:
             result = provider.classify_service_stage(message=message, conversation=conversation, context=context)
         except Exception:
             self._record("classify_service_stage", locals().get("config", {}), "failed", "llm_call_failed", started)
-            raise
+            baseline = classify_service_stage(message=message, conversation=conversation, context=context)
+            return {
+                **baseline,
+                "_classifier_source": "fallback",
+                "_classifier_error": "llm_call_failed",
+            }  # type: ignore[return-value]
         self._record("classify_service_stage", config, "succeeded", started=started)
         return result
 

@@ -8,6 +8,7 @@ import pytest
 
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.decision import DecisionService
+from ecommerce_cs_agent.services.llm import DeterministicReplyProvider, NodeBoundReplyProvider
 from ecommerce_cs_agent.services.repository import InMemoryDecisionRepository, PostgresDecisionRepository
 from ecommerce_cs_agent.services.service_stage import classify_service_stage
 
@@ -584,6 +585,47 @@ def test_llm_node_failure_enters_safe_handoff_without_switching_provider() -> No
     assert step["status"] == "failed"
     assert step["error"] == {"code": "llm_call_failed"}
     assert step["llm"] == {"llm_id": "llm-a", "model_id": "model-a", "status": "failed", "error_code": "llm_call_failed"}
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_stage", "expected_action"),
+    [
+        ("订单还没发货，我想把收货地址改成公司。", "in_sale", "action_request"),
+        ("我付款成功了但页面看不到订单，是什么情况？", "in_sale", "context_request"),
+        ("怎么处理比较好？", "unknown", "candidate"),
+    ],
+)
+def test_node_bound_classifier_failure_uses_rules_without_bypassing_decision_gates(
+    message: str,
+    expected_stage: str,
+    expected_action: str,
+) -> None:
+    class FailedClassificationProvider(DeterministicReplyProvider):
+        def classify_service_stage(self, **_kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("safe_llm_failure")
+
+    provider = NodeBoundReplyProvider(
+        resolver=lambda _node_id: {"llm_id": "llm-a", "model_id": "model-a"},
+        provider_factory=lambda _config: FailedClassificationProvider(),
+    )
+    service = DecisionService(
+        Settings(environment="test"),
+        repository=InMemoryDecisionRepository(),
+        reply_provider=provider,
+    )
+
+    response = service.create_reply_decision(_request(f"req-fallback-{expected_stage}-{expected_action}", message))
+
+    assert response["service_stage"]["primary_stage"] == expected_stage
+    assert response["action"] == expected_action
+    assert "llm_unavailable" not in response["risk_flags"]
+    assert response["trace"]["service_stage_classifier"]["source"] == "fallback"
+    assert response["trace"]["service_stage_classifier"]["error_code"] == "llm_call_failed"
+    step = next(item for item in response["trace"]["steps"] if item["step_id"] == "classify_service_stage")
+    assert step["status"] == "completed"
+    assert step["error"] is None
+    assert step["llm"]["status"] == "failed"
+    assert step["llm"]["error_code"] == "llm_call_failed"
 
 
 def test_context_refill_resumes_same_thread_and_completes_graph() -> None:

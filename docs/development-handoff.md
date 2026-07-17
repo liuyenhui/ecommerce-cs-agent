@@ -6,6 +6,7 @@
 
 ### 2026-07-17
 
+- Dev 30 条并发模拟回归发现 NodeBound `classify_service_stage` 在真实模型调用失败时会把确定性可识别的售中消息改成 `unknown + handoff`。分类节点现改为本地规则降级：保留规则主/次阶段和 typed context，继续经过风险、上下文、动作与自动回复门禁，同时在分类摘要和节点 LLM trace 保留 `fallback / llm_call_failed`；候选生成失败仍安全转人工，不做静默模型切换。
 - API 决策并发韧性实现：四个 LangGraph 决策入口改由 AnyIO 受限 worker 执行，`DECISION_MAX_CONCURRENCY` 默认 4；`/health` 改为无依赖异步 endpoint，Dev API 调整为两个 replica 并显式配置 startup/readiness/liveness probe。部署排障同时确认 PR #87 API 镜像漏装 cryptography，已加入 Dockerfile 与部署回归测试；凭据加密 Secret 继续 fail closed，值不得进入 Git、日志或聊天。
 - API 决策并发修复设计：同步 LangGraph/LLM 调用必须通过受限 worker 执行，不能阻塞 FastAPI event loop；`/health` 保持无依赖异步响应，Dev 使用两个 API replica 与显式 startup/readiness/liveness 探针。PR #87 所需凭据加密主密钥只允许以独立 Kubernetes Secret 注入，详见 [API 决策并发与韧性设计](superpowers/specs/2026-07-17-api-decision-concurrency-resilience-design.md)。
 - 实施 SACS 多 LLM 与 LangGraph 节点绑定：新增认证加密模型配置、服务端节点注册表、全局原子绑定、运行时 feature flag 与幂等旧配置导入；SACS 页面收敛为“可用 LLM”和“LangGraph 节点使用的 LLM”。

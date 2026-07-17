@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from ecommerce_cs_agent.core.config import Settings
-from ecommerce_cs_agent.services.llm import DeterministicReplyProvider, OpenAICompatibleReplyProvider, reply_provider_for
+from ecommerce_cs_agent.services.llm import (
+    DeterministicReplyProvider,
+    NodeBoundReplyProvider,
+    OpenAICompatibleReplyProvider,
+    reply_provider_for,
+)
 
 
 class _CapturingOpenAIProvider(OpenAICompatibleReplyProvider):
@@ -23,6 +28,11 @@ class _ClassificationOpenAIProvider(OpenAICompatibleReplyProvider):
 
     def _chat_json(self, *, system: str, user: str) -> dict[str, Any]:
         return self.classification
+
+
+class _FailingClassificationProvider(DeterministicReplyProvider):
+    def classify_service_stage(self, **_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("safe_llm_failure")
 
 
 def test_reply_provider_factory_uses_openai_compatible_provider_when_configured() -> None:
@@ -156,3 +166,30 @@ def test_classifier_rejects_unknown_as_a_secondary_stage() -> None:
     assert result["primary_stage"] == "pre_sale"
     assert result["secondary_stages"] == []
     assert result["_classifier_source"] == "fallback"
+
+
+def test_node_bound_classifier_failure_returns_deterministic_result_and_records_failure() -> None:
+    provider = NodeBoundReplyProvider(
+        resolver=lambda _node_id: {"llm_id": "llm-a", "model_id": "model-a"},
+        provider_factory=lambda _config: _FailingClassificationProvider(),
+    )
+
+    result = provider.classify_service_stage(
+        message="订单还没发货，我想把收货地址改成公司。",
+        conversation={},
+        context={},
+    )
+
+    assert result["primary_stage"] == "in_sale"
+    assert result["reason_code"] == "awaiting_fulfillment"
+    assert result["_classifier_source"] == "fallback"
+    assert result["_classifier_error"] == "llm_call_failed"
+    assert provider.last_invocation is not None
+    assert {key: value for key, value in provider.last_invocation.items() if key != "latency_ms"} == {
+        "node_id": "classify_service_stage",
+        "llm_id": "llm-a",
+        "model_id": "model-a",
+        "status": "failed",
+        "error_code": "llm_call_failed",
+    }
+    assert provider.last_invocation["latency_ms"] >= 0
