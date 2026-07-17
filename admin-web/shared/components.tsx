@@ -373,7 +373,7 @@ export function DataTable({ title, rows, fields, onSelect, action, emptyState }:
             <tbody>
               {rows.map((row, index) => (
                 <tr key={String(row.id || row.decision_id || row.task_id || index)} onClick={() => onSelect?.(row)}>
-                  {fields.map((field) => <td key={field} data-label={fieldLabel(field)}>{renderCell(row[field])}</td>)}
+                  {fields.map((field) => <td key={field} data-label={fieldLabel(field)}>{renderCell(row[field], field)}</td>)}
                   {action ? <td data-label="操作" onClick={(event) => event.stopPropagation()}>{action(row)}</td> : null}
                 </tr>
               ))}
