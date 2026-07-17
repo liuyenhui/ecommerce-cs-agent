@@ -25,16 +25,44 @@ function BlockedCheck({ check }: { check: ReadinessCheck }) {
 }
 
 export function ReadinessPage({ state, onPageChange = () => undefined }: { state: RequestState<PageEnvelope<ReadinessRecord>>; onPageChange?: (page: number) => void }) {
+  const [expandedStores, setExpandedStores] = React.useState<Set<string>>(() => new Set());
+
+  function toggleStore(storeId: string) {
+    setExpandedStores((current) => {
+      const next = new Set(current);
+      if (next.has(storeId)) next.delete(storeId);
+      else next.add(storeId);
+      return next;
+    });
+  }
+
   return <RequestStateView state={state}>{(data) => <>
     <SectionHeader label="READINESS" title="配置完成度" />
     <p className="pageTotal">共 {data.page.total} 家店铺</p>
-    <div className="readinessList">
-      {data.items.map((item) => <article className="readinessCard" key={item.store_id}>
-        <header><div><strong>{item.store_id}</strong><span>{item.organization_id || item.tenant_id || "-"}</span></div><em className={item.status}>{item.status}</em></header>
-        {item.checks.some((check) => check.status !== "pass")
-          ? <ul>{item.checks.filter((check) => check.status !== "pass").map((check) => <BlockedCheck key={check.code} check={check} />)}</ul>
-          : <p className="healthyNotice">所有上线检查均已通过。</p>}
-      </article>)}
+    <div className="readinessTableWrap">
+      <table className="readinessTable" aria-label="店铺配置完成度">
+        <thead><tr><th scope="col">检查项</th><th scope="col">店铺 ID</th><th scope="col">租户 ID</th><th scope="col">状态</th><th scope="col">未通过项</th></tr></thead>
+        <tbody>
+          {data.items.map((item) => {
+            const failedChecks = item.checks.filter((check) => check.status !== "pass");
+            const expanded = expandedStores.has(item.store_id);
+            return <React.Fragment key={item.store_id}>
+              <tr className="readinessStoreRow">
+                <td data-label="检查项"><button type="button" className="readinessToggle" aria-expanded={expanded} aria-label={`${expanded ? "收起" : "展开"}店铺 ${item.store_id} 的检查项`} onClick={() => toggleStore(item.store_id)}><span aria-hidden="true">{expanded ? "−" : "+"}</span></button></td>
+                <td data-label="店铺 ID"><strong className="wrapId" title={item.store_id}>{item.store_id}</strong></td>
+                <td data-label="租户 ID"><span className="wrapId" title={item.organization_id || item.tenant_id || "-"}>{item.organization_id || item.tenant_id || "-"}</span></td>
+                <td data-label="状态"><em className={item.status}>{item.status}</em></td>
+                <td data-label="未通过项">{failedChecks.length}</td>
+              </tr>
+              {expanded ? <tr className="readinessDetailRow"><td colSpan={5} data-label="检查明细">
+                {failedChecks.length
+                  ? <ul className="readinessChecks">{failedChecks.map((check) => <BlockedCheck key={check.code} check={check} />)}</ul>
+                  : <p className="healthyNotice">所有上线检查均已通过。</p>}
+              </td></tr> : null}
+            </React.Fragment>;
+          })}
+        </tbody>
+      </table>
     </div>
     <PaginationControls page={data.page} onPageChange={onPageChange} />
   </>}</RequestStateView>;

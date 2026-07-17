@@ -12,6 +12,7 @@ const systemWorkspace = read('admin-web/system-admin/src/SystemWorkspace.tsx');
 const systemApi = read('admin-web/system-admin/src/system-api.ts');
 const systemTraces = read('admin-web/system-admin/src/pages/TracesPage.tsx');
 const systemTenants = read('admin-web/system-admin/src/pages/TenantsPage.tsx');
+const systemReadiness = read('admin-web/system-admin/src/pages/ReadinessPage.tsx');
 const sharedComponents = read('admin-web/shared/components.tsx');
 const sharedData = read('admin-web/shared/data.tsx');
 const sharedTraceReplay = read('admin-web/shared/trace-replay.tsx');
@@ -79,6 +80,7 @@ const checks = [
   ['Product content no longer exposes manual maintenance forms', !productContent.includes('保存商品') && !productContent.includes('登记资产') && !productContent.includes('转换并抽取') && !productContent.includes('保存价格快照')],
   ['DataTable cells expose mobile data labels', sharedComponents.includes('data-label={fieldLabel(field)}') && sharedComponents.includes('data-label="操作"')],
   ['Tenant hierarchy long identifiers shrink and wrap inside the mobile table', systemTenants.includes('tenantStorePrimary') && /\.tenantStoreAction\s*\{[^}]*display:\s*block[^}]*white-space:\s*normal/.test(styles) && /\.tenantStorePrimary span\s*\{[^}]*min-width:\s*0/.test(styles)],
+  ['Readiness uses an accessible expandable store list with responsive detail rows', systemReadiness.includes('aria-label="店铺配置完成度"') && systemReadiness.includes('aria-expanded={expanded}') && systemReadiness.includes('readinessDetailRow') && styles.includes('.readinessDetailRow')],
   ['Field label map avoids organization wording for customer-facing tables', sharedData.includes('organization_id: "客户 ID"') && !allSource.includes('organization_id: "组织 ID"')],
   ['Status badges render localized status text', sharedData.includes('const statusLabel') && sharedData.includes('title={value}>{statusLabel[value] || value}</span>')],
   ['EmptyState accepts title, description, and optional action', sharedComponents.includes('function EmptyState({ title, description, action }: EmptyStateProps)')],
