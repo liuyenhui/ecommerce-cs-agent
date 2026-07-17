@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -8,6 +10,18 @@ from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.decision import DecisionService
 from ecommerce_cs_agent.services.repository import InMemoryDecisionRepository, PostgresDecisionRepository
 from ecommerce_cs_agent.services.service_stage import classify_service_stage
+
+
+SIMULATION_REGRESSION_CASES = json.loads(
+    (Path(__file__).parents[1] / "fixtures" / "service_stage_simulation_regression.json").read_text(
+        encoding="utf-8"
+    )
+)
+SIMULATION_CONTEXT_EXPECTATIONS = json.loads(
+    (Path(__file__).parents[1] / "fixtures" / "service_stage_simulation_context_expectations.json").read_text(
+        encoding="utf-8"
+    )
+)
 
 
 class _CapturingReplyProvider:
@@ -61,6 +75,28 @@ def test_decision_graph_classifies_stage_and_passes_it_to_reply_provider() -> No
         "prompt_version": "service-stage-prompt-v1",
         "error_code": None,
     }
+
+
+@pytest.mark.parametrize("case", SIMULATION_REGRESSION_CASES, ids=lambda case: case["id"])
+def test_decision_graph_simulation_regression(case: dict[str, Any]) -> None:
+    service = DecisionService(Settings(environment="test"))
+    request = _request(f"req-{case['id']}", case["message"])
+    request["source"] = "simulation"
+
+    response = service.create_reply_decision(request)
+
+    assert response["service_stage"]["primary_stage"] == case["expected_primary_stage"]
+    assert response["service_stage"]["secondary_stages"] == case["expected_secondary_stages"]
+    assert response["service_stage"]["reason_code"] == case["expected_reason_code"]
+    assert response["action"] == case["expected_action"]
+    assert response["missing_context"] == SIMULATION_CONTEXT_EXPECTATIONS[case["id"]]
+    assert response["auto_reply"] is None
+    expected_gate_reason = "simulation_only" if response["action"] == "candidate" else "non_candidate_route"
+    assert expected_gate_reason in response["trace"]["auto_reply_gate"]["reasons"]
+
+
+def test_simulation_context_expectations_cover_every_regression_case() -> None:
+    assert set(SIMULATION_CONTEXT_EXPECTATIONS) == {case["id"] for case in SIMULATION_REGRESSION_CASES}
 
 
 def test_product_attribute_stage_requests_products_before_candidate_generation() -> None:

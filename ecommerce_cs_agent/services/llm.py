@@ -92,7 +92,14 @@ class OpenAICompatibleReplyProvider:
             return {**baseline, "_classifier_source": "fallback", "_classifier_error": "invalid_or_unavailable_output"}  # type: ignore[return-value]
         if baseline["primary_stage"] != "unknown":
             normalized["primary_stage"] = baseline["primary_stage"]
-            normalized["reason_code"] = baseline["reason_code"] if not normalized["secondary_stages"] else "mixed_intent"
+            normalized["secondary_stages"] = list(
+                dict.fromkeys(
+                    stage
+                    for stage in [*baseline["secondary_stages"], *normalized["secondary_stages"]]
+                    if stage not in {baseline["primary_stage"], "unknown"}
+                )
+            )
+            normalized["reason_code"] = "mixed_intent" if normalized["secondary_stages"] else baseline["reason_code"]
         normalized["needs_context"] = list(dict.fromkeys([*baseline["needs_context"], *normalized["needs_context"]]))
         normalized["evidence_refs"] = list(dict.fromkeys([*baseline["evidence_refs"], *normalized["evidence_refs"]]))
         return {**normalized, "_classifier_source": "llm_hybrid", "_classifier_error": None}  # type: ignore[return-value]
@@ -185,7 +192,7 @@ def _normalize_classification(value: dict[str, Any]) -> ServiceStageClassificati
     evidence = value.get("evidence_refs")
     if primary not in stages or reason not in reasons or not isinstance(secondary, list):
         return None
-    if any(str(stage) not in stages or str(stage) == primary for stage in secondary):
+    if any(str(stage) not in stages or str(stage) in {primary, "unknown"} for stage in secondary):
         return None
     allowed_context = {"products", "orders", "logistics", "rules"}
     if not isinstance(needs, list) or any(str(item) not in allowed_context for item in needs):
