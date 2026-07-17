@@ -6,6 +6,7 @@
 
 ### 2026-07-17
 
+- ACS 阶段分类回归新增 30 条 Dev 模拟基线与 16 条近似表达：确定性回退现在覆盖现货/出库/派送、签收后无法开机、异味发热投诉、旧客复购升级款及运输/退换/维修叠加购买等语义；OpenAI-compatible Provider 必须保留规则已识别的主次分类，非法或不可用输出继续记录失败码并完整回退。测试同时断言预期 action 与 `simulation` 永不自动发送；实施和 Dev 迭代步骤见 [ACS 阶段分类回归加固计划](superpowers/plans/2026-07-17-service-stage-regression-hardening.md)。
 - Customer Admin 与 System Admin 的用户可见日期时间统一使用 `zh-CN`、`Asia/Shanghai` 和 `YYYY年M月D日 HH:mm:ss`；API/数据库 UTC 契约与原始技术 JSON保持不变，详见 [Admin Web 上海时区中文时间显示设计](superpowers/specs/2026-07-17-admin-shanghai-time-display-design.md)。
 - System Admin“配置完成度”确认改为按店铺分页的可展开列表：主行紧凑展示店铺、租户、状态和未通过项数量，默认收起，展开后显示检查项、原因、影响和下一步；详见 [配置完成度可展开列表设计](superpowers/specs/2026-07-17-system-admin-readiness-expandable-list-design.md)。
 - Dev 发布门禁的真实 quick eval 现在显式使用独立的 30 秒单请求超时，以容纳咨询阶段分类的真实 Provider 调用；健康检查与门禁总执行上限保持独立，模型不可用或超过该有界超时仍会阻断发布。

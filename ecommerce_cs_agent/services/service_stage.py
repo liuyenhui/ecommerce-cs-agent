@@ -29,22 +29,47 @@ class ServiceStageClassification(TypedDict):
 
 PRE_SALE_PRODUCT_TERMS = (
     "重量", "功率", "容量", "材质", "尺寸", "颜色", "规格", "参数", "型号", "版本",
-    "适合", "适配", "包装", "一盒", "几个", "有货", "库存", "优惠", "区别", "推荐", "白色",
+    "适合", "适配", "包装", "一盒", "几个", "有货", "现货", "库存", "优惠", "区别", "推荐",
+    "价格", "多少钱", "售价", "新款", "新版", "升级版", "升级款", "新一代", "大号", "白色", "黑色",
+    "蓝色", "绿色",
     "weight", "power", "capacity", "material", "size", "color", "model", "version", "stock",
 )
-PURCHASE_TERMS = ("想买", "要买", "购买", "下单", "再买", "换个新", "推荐", "buy", "purchase")
-REPURCHASE_TERMS = ("上次买", "之前用", "以前买", "再买", "复购", "给家人", "换新型号")
+PURCHASE_TERMS = (
+    "想买", "要买", "购买", "下单", "再买", "再订", "加购", "复购", "改买", "换个新", "换一个新",
+    "推荐", "buy", "purchase",
+)
+REPURCHASE_TERMS = (
+    "上次买", "之前买", "之前用", "以前买", "旧款", "旧版", "老款", "再买", "再订", "复购",
+    "给家人", "换新型号",
+)
 IN_SALE_TERMS = (
     "订单", "支付", "付款", "发货", "物流", "快递", "送到", "收到", "未收到", "没收到",
-    "取消订单", "改地址", "加个备注", "订单加", "拒收", "自提", "包裹", "只发", "shipment", "delivery",
+    "这单", "这笔订单", "出库", "出仓", "运输中", "正在运输", "派送", "取消订单", "改地址",
+    "加个备注", "加备注", "备注", "订单加", "拒收", "自提", "包裹", "只发", "shipment", "delivery",
+)
+ORDER_REFERENCE_TERMS = (
+    "订单", "这单", "这笔订单", "已经付款", "付款成功", "支付成功", "快递", "物流", "包裹",
 )
 AFTER_USAGE_TERMS = ("安装", "怎么使用", "怎么用", "清洗", "发票", "补开")
-AFTER_QUALITY_TERMS = ("坏了", "坏的", "不通电", "少了", "缺少", "型号不对", "有问题", "瑕疵", "破损")
-RETURN_TERMS = ("退货", "退款", "换个颜色", "退换")
+AFTER_QUALITY_TERMS = (
+    "坏了", "坏的", "故障", "不通电", "无法开机", "开不了机", "没有反应", "异味", "烧焦味",
+    "发烫", "发热", "少了", "缺少", "型号不对", "有问题", "瑕疵", "破损",
+)
+RETURN_TERMS = ("退货", "退款", "退掉", "换个颜色", "退换")
 REPAIR_TERMS = ("保修", "维修", "维修配件")
-DELIVERED_TERMS = ("收到后", "已经收到了", "签收后", "收到就是", "货收到了", "已经签收", "收到的", "签收时", "订单完成")
-SHIPPING_TERMS = ("发货", "物流", "快递", "送到", "没收到", "未收到", "在路上", "路上", "自提", "包裹", "只发")
-TRANSIT_TERMS = ("物流", "快递", "送到", "没收到", "未收到", "在路上", "路上", "自提", "包裹", "只发")
+DELIVERED_TERMS = (
+    "收到后", "收货后", "已经收到了", "已经收到货", "签收后", "刚签收", "收到就是", "货收到了",
+    "货到了", "货到后", "已经签收", "收到的", "签收时", "订单完成",
+)
+OWNED_PRODUCT_TERMS = ("上次买", "之前买", "以前买", "旧机器", "旧设备", "旧机", "旧款", "旧版", "老款", "用了")
+SHIPPING_TERMS = (
+    "发货", "物流", "快递", "送到", "没收到", "未收到", "运输", "派送", "出库", "出仓", "在路上",
+    "路上", "自提", "包裹", "只发",
+)
+TRANSIT_TERMS = (
+    "物流", "快递", "送到", "没收到", "未收到", "运输中", "正在运输", "还在派送", "在路上", "路上",
+    "自提", "包裹", "只发",
+)
 
 PRE_DELIVERY_STATUSES = {
     "pending_payment", "paid", "processing", "unshipped", "shipped", "in_transit", "out_for_delivery",
@@ -87,12 +112,15 @@ def classify_service_stage(
     returns = _contains(lowered, RETURN_TERMS)
     repair = _contains(lowered, REPAIR_TERMS)
     explicit_delivered = _contains(lowered, DELIVERED_TERMS)
+    owned_product = _contains(lowered, OWNED_PRODUCT_TERMS)
     after = after_usage or after_quality or returns or repair
     in_sale = _contains(lowered, IN_SALE_TERMS) and not explicit_delivered
+    if pre_product and not orders and not _contains(lowered, ORDER_REFERENCE_TERMS):
+        in_sale = False
     vague_order = "订单有问题" in lowered or "订单怎么售后" in lowered
     vague_package = "包裹有点问题" in lowered
     delivery_ambiguous = "不知道有没有签收" in lowered
-    if (delivered or explicit_delivered) and after:
+    if (delivered or explicit_delivered) and after and not purchase:
         pre_product = False
     if repair and "维修配件" in lowered and not _contains(lowered, ("推荐", "新的", "再买")):
         purchase = False
@@ -105,7 +133,7 @@ def classify_service_stage(
         stages.append("pre_sale")
     if in_sale and (before_delivery or not delivered):
         stages.append("in_sale")
-    if after and (delivered or explicit_delivered or repair or returns):
+    if after and (delivered or explicit_delivered or owned_product or repair or (returns and not in_sale)):
         stages.append("after_sale")
     stages = list(dict.fromkeys(stages))
 
@@ -217,14 +245,14 @@ def _needed_context(
     if ("in_sale" in stages or vague_order or vague_package) and not orders:
         needs.append("orders")
     shipping = _contains(content, SHIPPING_TERMS)
-    action_only = _contains(content, ("改地址", "加个备注", "订单加", "取消订单"))
-    if (shipping and not logistics and not action_only) or (orders and not any(statuses) and "售后" in content) or delivery_ambiguous:
+    action_only = _contains(content, ("改地址", "加个备注", "加备注", "备注", "订单加", "取消订单"))
+    if (shipping and ("in_sale" in stages or vague_package) and not logistics and not action_only) or (orders and not any(statuses) and "售后" in content) or delivery_ambiguous:
         needs.append("logistics")
     usage_needs_product = after_usage and not _contains(content, ("发票", "补开"))
-    purchase_needs_product = primary == "pre_sale" and _contains(content, ("型号", "推荐", "哪款"))
-    if ((pre_product and primary == "pre_sale") or purchase_needs_product or usage_needs_product or old_product) and not products:
+    purchase_needs_product = "pre_sale" in stages and _contains(content, ("型号", "推荐", "哪款"))
+    if ((pre_product and "pre_sale" in stages) or purchase_needs_product or usage_needs_product or old_product) and not products:
         needs.append("products")
-    if (returns or repair or "怎么售后" in content or "怎么退" in content) and not rules:
+    if ((returns and "after_sale" in stages) or repair or "怎么售后" in content or "怎么退" in content) and not rules:
         needs.append("rules")
     return list(dict.fromkeys(needs))
 
