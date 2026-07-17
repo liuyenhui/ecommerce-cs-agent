@@ -9,7 +9,7 @@ function rate(value: number | null) {
   return value === null ? "暂无可计算数据" : `${(value * 100).toFixed(1)}%`;
 }
 
-export function DashboardPage({ state }: { state: RequestState<DashboardData> }) {
+export function DashboardPage({ state, onNavigate }: { state: RequestState<DashboardData>; onNavigate: (page: "readiness") => void }) {
   return <RequestStateView state={state}>{(data) => {
     const { summary } = data;
     return <>
@@ -46,6 +46,7 @@ export function DashboardPage({ state }: { state: RequestState<DashboardData> })
           {data.readiness.items.length
             ? <DataTable title="缺少商品资料的店铺" rows={data.readiness.items} fields={["organization_id", "store_id", "status", "updated_at"]} />
             : <section className="tablePanel"><h3>缺少商品资料的店铺</h3><EmptyState title="暂无缺少商品资料的店铺" description="当前摘要中没有缺少商品资料的店铺。" /></section>}
+          <div className="panelFooterAction"><button type="button" onClick={() => onNavigate("readiness")}>查看全部未满足上线条件的店铺</button></div>
         </div>
       </div>
       <p className="dataTimestamp">聚合生成时间：{summary.generated_at}</p>
