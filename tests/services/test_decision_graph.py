@@ -566,6 +566,26 @@ def test_decision_graph_trace_graph_marks_context_request_branch() -> None:
     assert generate_candidate["status"] == "skipped"
 
 
+def test_llm_node_failure_enters_safe_handoff_without_switching_provider() -> None:
+    class FailedProvider(_CapturingReplyProvider):
+        model_version = "failed-bound-model"
+        last_invocation = {"node_id": "classify_service_stage", "llm_id": "llm-a", "model_id": "model-a", "status": "failed", "error_code": "llm_call_failed"}
+
+        def classify_service_stage(self, **_kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("safe_llm_failure")
+
+    service = DecisionService(Settings(environment="test"), repository=InMemoryDecisionRepository(), reply_provider=FailedProvider())
+
+    response = service.create_reply_decision(_request("req-llm-failure", "我想买这款商品"))
+
+    assert response["action"] == "handoff"
+    assert "llm_unavailable" in response["risk_flags"]
+    step = next(item for item in response["trace"]["steps"] if item["step_id"] == "classify_service_stage")
+    assert step["status"] == "failed"
+    assert step["error"] == {"code": "llm_call_failed"}
+    assert step["llm"] == {"llm_id": "llm-a", "model_id": "model-a", "status": "failed", "error_code": "llm_call_failed"}
+
+
 def test_context_refill_resumes_same_thread_and_completes_graph() -> None:
     repository = InMemoryDecisionRepository()
     service = DecisionService(Settings(environment="test"), repository=repository)

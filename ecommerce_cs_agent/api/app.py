@@ -25,6 +25,7 @@ from ecommerce_cs_agent.api.error_codes import (
 )
 from ecommerce_cs_agent.api.errors import api_error
 from ecommerce_cs_agent.api.system_admin_llm import register_system_admin_llm_routes
+from ecommerce_cs_agent.api.system_admin_llm_nodes import register_system_admin_llm_node_routes
 from ecommerce_cs_agent.core.config import Settings, load_settings
 from ecommerce_cs_agent.core.passwords import password_matches
 from ecommerce_cs_agent.services import oidc as oidc_service
@@ -44,6 +45,13 @@ from ecommerce_cs_agent.services.llm_governance_adapters import (
     KubernetesSecretProviderConnectionTester,
     PostgresEvaluationReleaseGateChecker,
 )
+from ecommerce_cs_agent.services.llm_node_configuration import (
+    ApiKeyCipher,
+    InMemoryLlmNodeConfigurationRepository,
+    PostgresLlmNodeConfigurationRepository,
+    test_openai_compatible_connection,
+)
+from ecommerce_cs_agent.services.llm import NodeBoundReplyProvider
 
 
 def create_app(
@@ -55,6 +63,7 @@ def create_app(
     llm_governance_repository: LlmGovernanceRepository | None = None,
     llm_connection_tester: Callable[[dict[str, Any], dict[str, int]], dict[str, Any]] | None = None,
     llm_release_gate_checker: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
+    llm_node_configuration_repository: Any | None = None,
 ) -> FastAPI:
     settings = settings or load_settings()
     app = FastAPI(title="ecommerce-cs-agent", version="0.1.0")
@@ -117,6 +126,26 @@ def create_app(
             release_gate_checker=release_gate_checker,
         )
     open_erp = OpenErpIntegrationService(settings)
+    if llm_node_configuration_repository is not None and settings.environment.lower() != "test":
+        raise RuntimeError("LLM node configuration repository injection is test-only")
+    llm_node_configuration = llm_node_configuration_repository
+    if llm_node_configuration is None and settings.environment.lower() == "test":
+        llm_node_configuration = InMemoryLlmNodeConfigurationRepository(
+            ApiKeyCipher.from_base64("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+        )
+    if llm_node_configuration is None and settings.database_url and settings.llm_credential_encryption_key:
+        llm_node_configuration = PostgresLlmNodeConfigurationRepository(
+            settings.database_url,
+            ApiKeyCipher.from_base64(settings.llm_credential_encryption_key),
+            connection_tester=test_openai_compatible_connection,
+        )
+    if settings.llm_node_binding_enabled:
+        if llm_node_configuration is None:
+            raise RuntimeError("LLM node binding requires DATABASE_URL and LLM_CREDENTIAL_ENCRYPTION_KEY")
+        decisions = DecisionService(
+            settings,
+            reply_provider=NodeBoundReplyProvider(resolver=llm_node_configuration.resolve_node),
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -735,6 +764,8 @@ def create_app(
         return system_admin_data.list_audit_logs(session, _query_filters(request))
 
     register_system_admin_llm_routes(app, llm_governance, system_session)
+    if llm_node_configuration is not None:
+        register_system_admin_llm_node_routes(app, llm_node_configuration, system_session)
 
     for method, path in [
         ("POST", "/v1/events/messages"),

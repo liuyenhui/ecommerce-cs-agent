@@ -9,7 +9,7 @@ const pageTitles: Record<SystemPage, { title: string; subtitle: string }> = {
   dashboard: { title: "系统总览", subtitle: "平台聚合指标与优先运营工作" },
   tenants: { title: "租户与店铺", subtitle: "跨租户开通状态与店铺运行边界" },
   readiness: { title: "配置完成度", subtitle: "逐店铺上线检查与阻断处理" },
-  llm: { title: "LLM 治理", subtitle: "Provider、路由、成本与配置版本" },
+  llm: { title: "LLM 配置", subtitle: "可用模型与 LangGraph 节点绑定" },
   releases: { title: "评测与发布", subtitle: "评测门禁、审批、发布与回滚" },
   traces: { title: "决策追踪", subtitle: "按明确范围定位并回放单条决策" },
   tasks: { title: "任务中心", subtitle: "后台任务状态与安全重试" },

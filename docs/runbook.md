@@ -1,5 +1,14 @@
 # 运行排障手册
 
+## SACS LLM 节点配置
+
+- 切换前确认 migration 013 已应用、主密钥 Secret 存在且所有 API Pod 引用一致；不要打印 Secret、Cookie、Authorization 或 Key。
+- 在受控 Pod 内运行 `python -m ecommerce_cs_agent.db.import_legacy_llm`。重复运行不得增加默认模型、覆盖换新的 Key 或修改非空绑定。
+- `GET /v1/system-admin/llms` 只能出现 `has_api_key` / `api_key_masked`；bindings 接口必须返回服务端九节点注册表和两个必需绑定。
+- 分别为两个 LLM 节点绑定可区分模型并提交真实新请求；trace 只核对 `llm_id/model_id/status/error_code`，不得包含 Key 或上游正文。
+- 以已知测试 Key 的精确值检查 PostgreSQL 文本投影、API 响应、Pod 日志、审计 diff、trace、浏览器 storage 与错误报告，结果必须为零。
+- 回滚时设置 `LLM_NODE_BINDING_ENABLED=false`；一个发布周期内保留旧环境变量和旧治理历史表，模型错误不得静默降级。
+
 本文面向 dev 环境的日常排障。它不替代架构设计或部署契约，只给出从症状到下一步检查的操作顺序。
 
 相关文档：

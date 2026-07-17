@@ -61,11 +61,11 @@ test("mobile tables expose field labels and prevent viewport overflow", () => {
   assert.match(cssSource, /\.tableWrap\s*\{[\s\S]*overflow:\s*auto;/);
 });
 
-test("LLM tabs, release dialog, and form inputs keep accessible relationships", () => {
-  assert.match(llmSource, /role="tablist" aria-label="LLM 治理功能"/);
-  assert.match(llmSource, /role="tab" aria-selected=\{tab === key\}/);
-  assert.match(llmSource, /aria-controls=\{`llm-panel-\$\{key\}`\}/);
-  assert.match(llmSource, /role="tabpanel"[\s\S]*aria-labelledby="llm-tab-config"/);
+test("LLM configuration sections, release dialog, and form inputs keep accessible relationships", () => {
+  assert.match(llmSource, /aria-labelledby="available-llms-title"/);
+  assert.match(llmSource, /aria-labelledby="node-bindings-title"/);
+  assert.match(llmSource, /role="group" aria-label=\{editing \? "编辑 LLM 表单" : "添加 LLM 表单"\}/);
+  assert.match(llmSource, /type="password" autoComplete="new-password"/);
   assert.match(releasesSource, /role="dialog" aria-modal="true" aria-labelledby="release-title"/);
   assert.match(releasesSource, /if \(event\.key === "Escape"\)[\s\S]*setSelected\(null\)/);
   assert.match(releasesSource, /restoreFocus\.current\?\.focus\(\)/);
@@ -82,31 +82,11 @@ test("every custom LLM table cell keeps its field name when mobile headers are h
   assert.equal(mobileLabels.length, cells.length);
   for (const label of [
     "名称",
-    "类型 / Base URL",
-    "Secret 引用",
+    "厂商 / 模型",
+    "Base URL",
+    "API Key",
     "状态",
-    "操作",
-    "模型",
-    "调用",
-    "Token",
-    "估算成本",
-    "调用 / 时间",
-    "Provider",
-    "组织 / 店铺",
-    "模型 / 场景",
-    "路由 / 延迟",
-    "Token / 成本",
-    "状态 / 失败原因",
-    "版本",
-    "状态 / revision",
-    "创建者 / 时间",
-    "发布者 / 时间",
-    "评测",
-    "操作者",
-    "动作",
-    "原因",
-    "结果",
-    "时间"
+    "操作"
   ]) {
     assert.match(llmSource, new RegExp(`data-label="${label.replace("/", "\\/")}"`));
   }

@@ -316,6 +316,8 @@ Agent: 生成最终回复“已帮您备注‘要红色’。”
 
 LangGraph 作为内部 `Decision Orchestrator`，不改变对外 HTTP API。外部系统仍只看到 `POST /v1/reply-decisions`、`context_requests[]`、typed context refill、`action_request`、`actions/results` 和 `message-traces`。
 
+需要 LLM 的节点由服务端注册表声明。第一版 `classify_service_stage` 与 `generate_candidate` 分别从 PostgreSQL 全局绑定解析一个已启用且连接测试通过的模型；绑定提交后新请求立即读取，禁止租户/店铺覆盖和静默降级。模型、绑定或解密失败进入 `llm_unavailable` 安全转人工路径，trace 只记录脱敏模型标识、状态、耗时和安全错误码。
+
 推荐 graph state：
 
 ```text

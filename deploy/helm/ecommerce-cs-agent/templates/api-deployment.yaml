@@ -56,6 +56,13 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.api.cursorSigningSecretRef.name }}
                   key: {{ .Values.api.cursorSigningSecretRef.key }}
+            - name: LLM_CREDENTIAL_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.credentialEncryptionSecretRef.name }}
+                  key: {{ .Values.api.credentialEncryptionSecretRef.key }}
+            - name: LLM_NODE_BINDING_ENABLED
+              value: {{ .Values.api.llmNodeBindingEnabled | quote }}
             {{- if .Values.proxy.enabled }}
             - name: HTTP_PROXY
               value: {{ .Values.proxy.httpProxy | quote }}

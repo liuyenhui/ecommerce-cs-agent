@@ -259,3 +259,23 @@
   .tenantStoreEmptyRow td { padding-left: 20px; }
   .tenantStoreEmptyRow td { grid-template-columns: minmax(86px, 34%) minmax(0, 1fr); }
 }
+
+.llmConfigSection { margin-bottom: 20px; }
+.llmConfigSection .sectionHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.llmConfigSection .sectionHeader h2 { margin: 0 0 4px; }
+.llmConfigSection .sectionHeader p { margin: 0; color: #525252; }
+.nodeBindingList { border-top: 1px solid #e0e0e0; }
+.nodeBindingRow { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(220px, 360px); align-items: center; gap: 24px; padding: 16px 0; border-bottom: 1px solid #e0e0e0; }
+.nodeBindingRow > div { display: grid; grid-template-columns: minmax(190px, max-content) 1fr; gap: 4px 12px; min-width: 0; }
+.nodeBindingRow strong { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.nodeBindingRow small { grid-column: 1 / -1; color: #525252; }
+.nodeBindingRow select { width: 100%; min-width: 0; }
+
+@media (max-width: 640px) {
+  .llmConfigSection .sectionHeader { align-items: stretch; flex-direction: column; }
+  .llmConfigSection .sectionHeader button { width: 100%; min-height: 44px; }
+  .nodeBindingRow { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .nodeBindingRow > div { grid-template-columns: minmax(0, 1fr); }
+  .nodeBindingRow small { grid-column: auto; }
+  .nodeBindingRow select { min-height: 44px; }
+}

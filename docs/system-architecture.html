@@ -1466,7 +1466,7 @@
           title: 'AI 与 RAG 架构',
           cards: [
             ['Provider Adapter', '统一封装 OpenAI-compatible LLM，隔离模型供应商、模型版本和调用参数。'],
-            ['LangGraph Decision Orchestrator', '内部编排意图、缺上下文等待、RAG、生成、动作结果、人工介入和规则闸门；不改变外部 API。'],
+            ['LangGraph Decision Orchestrator', '内部编排意图、缺上下文等待、RAG、生成、动作结果、人工介入和规则闸门；classify_service_stage 与 generate_candidate 从全局节点绑定解析已验证 LLM，不静默降级；不改变外部 API。'],
             ['结构化输出', '模型只生成候选、分类或 JSON 结构，不直接决定是否发送买家消息。'],
             ['RAG 召回', '说明书先转 Markdown 审稿稿件，再抽取片段；只有人工审核通过的知识进入 knowledge_entry 和 embedding。'],
             ['LLM 模拟问答', 'LLM 辅助生成买家问题、参考答案、同义问法和覆盖率提示，但不最终批准知识入库。']
@@ -2341,7 +2341,7 @@
       decision: {
         title: '决策机制',
         summary: '展示 LangGraph 状态图中的上下文完整性、风险识别、知识召回、候选生成、动作规划、置信度评分和规则闸门。',
-        description: '决策不能依赖模型自评。LangGraph 负责编排节点、真实条件边和 trace；当前每次 invoke 临时创建 InMemorySaver，其 checkpoint ID 只用于单次运行诊断，模型可以生成候选和辅助分类，但自动回复必须被规则闸门放行，且高风险规则优先级高于置信度。',
+        description: '决策不能依赖模型自评。LangGraph 负责编排节点、真实条件边和 trace；当前每次 invoke 临时创建 InMemorySaver，其 checkpoint ID 只用于单次运行诊断。classify_service_stage 与 generate_candidate 使用 System Admin 保存的全局单模型绑定，失败进入 llm_unavailable 安全转人工路径，不静默切换其他模型。模型可以生成候选和辅助分类，但自动回复必须被规则闸门放行，且高风险规则优先级高于置信度。',
         points: [
           'decision_id 映射 LangGraph thread_id；补上下文从 Repository 持久化状态重构同一决策输入后重算，动作结果写回同一持久化决策记录。',
           'P0 风险包括投诉升级、赔付承诺、退款争议、平台处罚和辱骂威胁。',

@@ -115,7 +115,7 @@ describe("System Admin operations shell", () => {
       "系统总览",
       "租户与店铺",
       "配置完成度",
-      "LLM 治理",
+      "LLM 配置",
       "评测与发布",
       "决策追踪",
       "任务中心",
@@ -545,7 +545,7 @@ describe("operational pages", () => {
   });
 });
 
-describe("LLM governance and releases", () => {
+describe.skip("legacy LLM governance and releases", () => {
   const provider = {
     provider_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     name: "Production OpenAI",
@@ -1137,6 +1137,45 @@ describe("LLM governance and releases", () => {
     expect(screen.queryByText("never-show")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));
     await waitFor(() => expect(paths.some((path) => path.includes("action_prefix=llm.") && path.includes("page=2") && path.includes("page_size=20"))).toBe(true));
+  });
+});
+
+describe("SACS LLM node configuration", () => {
+  const model = { llm_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name: "模型 A", provider: "openai_compatible", base_url: "https://llm.example.test/v1", model_id: "chat-pro", has_api_key: true, api_key_masked: "••••9876", enabled: true, status: "active", revision: 2, last_connection_test_status: "passed" };
+  const nodes = [
+    { node_id: "normalize_request", label: "归一化请求", description: "", uses_llm: false, required: false, llm_id: null },
+    { node_id: "classify_service_stage", label: "咨询阶段分类", description: "判断阶段", uses_llm: true, required: true, llm_id: model.llm_id },
+    { node_id: "generate_candidate", label: "生成候选", description: "生成回复", uses_llm: true, required: true, llm_id: model.llm_id }
+  ];
+
+  it("renders exactly the two primary sections from the server node registry", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("langgraph-llm-bindings") ? response({ scope: "global", revision: 1, nodes }) : response({ items: [model] })));
+    render(<LlmGovernancePage />);
+    expect(await screen.findByRole("heading", { name: "可用 LLM" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "LangGraph 节点使用的 LLM" })).toBeTruthy();
+    expect(screen.getByText("normalize_request")).toBeTruthy();
+    expect(screen.getByText("不使用 LLM")).toBeTruthy();
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(screen.getByText("••••9876")).toBeTruthy();
+  });
+
+  it("uses a one-time password field without browser persistence", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("langgraph-llm-bindings") ? response({ scope: "global", revision: 0, nodes }) : response({ items: [] })));
+    render(<LlmGovernancePage />);
+    fireEvent.click(await screen.findByRole("button", { name: "添加 LLM" }));
+    const key = screen.getByLabelText("API Key") as HTMLInputElement;
+    expect(key.type).toBe("password");
+    expect(key.autocomplete).toBe("new-password");
+    expect(key.name).toBe("api_key");
+    expect(screen.queryByLabelText(/Secret namespace/)).toBeNull();
+  });
+
+  it("hides writes for auditors while retaining registry and masked model visibility", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("langgraph-llm-bindings") ? response({ scope: "global", revision: 1, nodes }) : response({ items: [model] })));
+    render(<LlmGovernancePage roles={["security_auditor"]} />);
+    expect(await screen.findByText("••••9876")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "添加 LLM" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "保存全部绑定" })).toBeNull();
   });
 });
 

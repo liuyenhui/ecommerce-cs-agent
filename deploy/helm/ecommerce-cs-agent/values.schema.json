@@ -43,6 +43,16 @@
             }
           }
         },
+        "credentialEncryptionSecretRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "key"],
+          "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "key": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"}
+          }
+        },
+        "llmNodeBindingEnabled": {"type": "boolean"},
         "secretAccess": {
           "type": "object",
           "properties": {
@@ -87,7 +97,7 @@
           }
         }
       },
-      "required": ["cursorSigningSecretRef", "runtimeLlmSecretRef", "secretAccess"]
+      "required": ["cursorSigningSecretRef", "runtimeLlmSecretRef", "credentialEncryptionSecretRef", "llmNodeBindingEnabled", "secretAccess"]
     }
   },
   "required": ["api"]

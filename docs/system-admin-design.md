@@ -1,5 +1,15 @@
 # 系统后台设计
 
+## SACS LLM 配置与 LangGraph 节点绑定
+
+SACS 的一级入口为“LLM 配置”，主页面只有“可用 LLM”和“LangGraph 节点使用的 LLM”两个区块。配置是全系统范围，不按组织、租户或店铺拆分。旧 Provider、场景路由、草稿发布和版本历史在首个回滚周期内只保留后端历史数据与旧接口，不再作为该页面的操作模型。
+
+- 可用 LLM 表单包含名称、厂商、Base URL、模型 ID 和一次性 API Key。Key 经 HTTPS 提交后由 `LLM_CREDENTIAL_ENCRYPTION_KEY` 使用 AES-256-GCM 认证加密；数据库只保存密文、随机 nonce、版本和末四位，查询只返回掩码。
+- 节点清单来自服务端注册表。第一版只有 `classify_service_stage` 和 `generate_candidate` 使用 LLM 且为必需绑定；其他节点显示“不使用 LLM”。
+- 只有启用且最近连接测试通过的 LLM 可绑定。一次提交完整绑定集合，服务端以 revision 校验并在单事务内替换；提交后新请求立即读取新配置。
+- `super_admin`、`release_admin` 可新增、换 Key、停用和保存绑定；`technical_support` 可读和测试连接；`security_auditor` 只读。
+- trace 只允许记录 `node_id`、`llm_id`、`model_id`、状态、耗时和安全错误码；Key、Authorization、完整请求/响应、上游错误正文不得进入 trace、日志或审计 diff。
+
 本文定义客服 Agent 的系统管理后台。它面向平台运营、技术支持、系统管理员和安全审计人员，用于开通租户、治理全局配置、排查决策链路、监控系统健康和管理发布质量。
 
 相关文档：

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Protocol
+import time
+from typing import Any, Callable, Protocol
 from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
 
@@ -54,14 +55,84 @@ class DeterministicReplyProvider:
         return "我先帮您核对信息，请以订单和商品详情页的最新状态为准。"
 
 
+class NodeBoundReplyProvider:
+    model_version = "langgraph-node-bound-v1"
+
+    def __init__(
+        self,
+        *,
+        resolver: Callable[[str], dict[str, Any]],
+        provider_factory: Callable[[dict[str, Any]], ReplyProvider] | None = None,
+    ) -> None:
+        self.resolver = resolver
+        self.provider_factory = provider_factory or self._provider_for
+        self.last_invocation: dict[str, Any] | None = None
+
+    def classify_service_stage(
+        self, *, message: str, conversation: dict[str, Any], context: dict[str, Any]
+    ) -> ServiceStageClassification:
+        started = time.monotonic()
+        try:
+            config, provider = self._resolve("classify_service_stage")
+            result = provider.classify_service_stage(message=message, conversation=conversation, context=context)
+        except Exception:
+            self._record("classify_service_stage", locals().get("config", {}), "failed", "llm_call_failed", started)
+            raise
+        self._record("classify_service_stage", config, "succeeded", started=started)
+        return result
+
+    def generate_candidate(
+        self,
+        *,
+        message: str,
+        knowledge: list[dict[str, Any]],
+        service_stage: ServiceStageClassification,
+        context: dict[str, Any],
+    ) -> str:
+        started = time.monotonic()
+        try:
+            config, provider = self._resolve("generate_candidate")
+            result = provider.generate_candidate(message=message, knowledge=knowledge, service_stage=service_stage, context=context)
+        except Exception:
+            self._record("generate_candidate", locals().get("config", {}), "failed", "llm_call_failed", started)
+            raise
+        self._record("generate_candidate", config, "succeeded", started=started)
+        return result
+
+    def _resolve(self, node_id: str) -> tuple[dict[str, Any], ReplyProvider]:
+        config = self.resolver(node_id)
+        return config, self.provider_factory(config)
+
+    @staticmethod
+    def _provider_for(config: dict[str, Any]) -> ReplyProvider:
+        from ecommerce_cs_agent.services.llm_node_configuration import validate_resolved_public_https_url
+        return OpenAICompatibleReplyProvider(
+            base_url=validate_resolved_public_https_url(str(config["base_url"])),
+            api_key=str(config["api_key"]),
+            model=str(config["model_id"]),
+            strict_failure=True,
+        )
+
+    def _record(self, node_id: str, config: dict[str, Any], status: str, error_code: str | None = None, started: float | None = None) -> None:
+        self.last_invocation = {
+            "node_id": node_id,
+            "llm_id": config.get("llm_id"),
+            "model_id": config.get("model_id"),
+            "status": status,
+            "error_code": error_code,
+            "latency_ms": max(0, int((time.monotonic() - started) * 1000)) if started is not None else 0,
+        }
+
+
 class OpenAICompatibleReplyProvider:
     model_version = "openai-compatible-reply-v1"
 
-    def __init__(self, *, base_url: str, api_key: str, model: str, fallback: ReplyProvider | None = None) -> None:
+    def __init__(self, *, base_url: str, api_key: str, model: str, fallback: ReplyProvider | None = None, strict_failure: bool = False) -> None:
         self.base_url = validate_public_https_url(base_url, field="LLM base URL")
         self.api_key = api_key
         self.model = model
         self.fallback = fallback or DeterministicReplyProvider()
+        self.strict_failure = strict_failure
 
     def classify_service_stage(
         self, *, message: str, conversation: dict[str, Any], context: dict[str, Any]
@@ -89,6 +160,8 @@ class OpenAICompatibleReplyProvider:
         )
         normalized = _normalize_classification(parsed)
         if normalized is None:
+            if self.strict_failure:
+                raise RuntimeError("safe_llm_failure")
             return {**baseline, "_classifier_source": "fallback", "_classifier_error": "invalid_or_unavailable_output"}  # type: ignore[return-value]
         if baseline["primary_stage"] != "unknown":
             normalized["primary_stage"] = baseline["primary_stage"]
@@ -133,6 +206,8 @@ class OpenAICompatibleReplyProvider:
         reply_text = str(parsed.get("reply_text") or "").strip() if isinstance(parsed, dict) else ""
         if reply_text:
             return reply_text
+        if self.strict_failure:
+            raise RuntimeError("safe_llm_failure")
         return self.fallback.generate_candidate(
             message=message,
             knowledge=knowledge,

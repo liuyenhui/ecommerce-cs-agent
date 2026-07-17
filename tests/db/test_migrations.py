@@ -602,3 +602,19 @@ def test_psycopg_connection_retries_transient_connect_failures(monkeypatch: pyte
 
     assert connection._connect_with_retry() is not None
     assert connection._connect_attempts == 3
+
+
+def test_llm_node_configuration_migration_stores_only_encrypted_credentials_and_global_bindings() -> None:
+    sql = Path("migrations/013_sacs_llm_node_configuration.sql").read_text(encoding="utf-8").lower()
+
+    assert "create table if not exists llm_model_config" in sql
+    assert "api_key_ciphertext bytea not null" in sql
+    assert "api_key_nonce bytea not null" in sql
+    assert "encryption_version" in sql
+    assert "api_key_last_four" in sql
+    assert "api_key_plaintext" not in sql
+    assert "create table if not exists langgraph_node_llm_binding" in sql
+    assert "node_id text primary key" in sql
+    assert "organization_id" not in sql
+    assert "store_id" not in sql
+    assert "create table if not exists llm_node_binding_revision" in sql

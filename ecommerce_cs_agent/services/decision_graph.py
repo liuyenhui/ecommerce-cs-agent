@@ -155,6 +155,7 @@ class ReplyDecisionGraphState(TypedDict, total=False):
     missing_context: list[str]
     service_stage: ServiceStageClassification
     service_stage_classifier: dict[str, Any]
+    llm_failure: bool
     action: str
     decision_status: str
     confidence: float
@@ -306,7 +307,7 @@ class ReplyDecisionGraph:
     def _classify_intent(self, state: ReplyDecisionGraphState) -> ReplyDecisionGraphState:
         content = state["content"]
         lowered = state["lowered"]
-        risk_flags: list[str] = []
+        risk_flags: list[str] = ["llm_unavailable"] if state.get("llm_failure") else []
         if any(word in lowered or word in content for word in HIGH_RISK_KEYWORDS):
             risk_flags.append("refund_or_complaint")
         if any(word in lowered or word in content for word in TENANT_SECURITY_KEYWORDS) and (
@@ -332,11 +333,18 @@ class ReplyDecisionGraph:
 
     def _classify_service_stage(self, state: ReplyDecisionGraphState) -> ReplyDecisionGraphState:
         payload = state["payload"]
-        raw_classification = self.reply_provider.classify_service_stage(
-            message=state["content"],
-            conversation=payload.get("conversation") if isinstance(payload.get("conversation"), dict) else {},
-            context=payload.get("context") if isinstance(payload.get("context"), dict) else {},
-        )
+        try:
+            raw_classification = self.reply_provider.classify_service_stage(
+                message=state["content"],
+                conversation=payload.get("conversation") if isinstance(payload.get("conversation"), dict) else {},
+                context=payload.get("context") if isinstance(payload.get("context"), dict) else {},
+            )
+        except Exception:
+            raw_classification = {
+                "primary_stage": "unknown", "secondary_stages": [], "confidence": 0.0,
+                "reason_code": "insufficient_context", "evidence_refs": [], "needs_context": [],
+                "_classifier_source": "llm_failed", "_classifier_error": "llm_call_failed",
+            }
         classification: ServiceStageClassification = {
             "primary_stage": raw_classification["primary_stage"],
             "secondary_stages": raw_classification["secondary_stages"],
@@ -361,11 +369,15 @@ class ReplyDecisionGraph:
             **classification,
             "needs_context": [item for item in classification["needs_context"] if item not in satisfied],
         }
+        llm_failed = classifier["source"] == "llm_failed"
         return _with_step(
-            {**state, "service_stage": classification, "service_stage_classifier": classifier},
+            {**state, "service_stage": classification, "service_stage_classifier": classifier, "llm_failure": llm_failed},
             "classify_service_stage",
             inputs_ref=["normalized_request", "context_candidates"],
             outputs_ref=[f"service_stage:{classification['primary_stage']}", *[f"needs_context:{item}" for item in classification["needs_context"]]],
+            llm=_safe_llm_trace(self.reply_provider, "classify_service_stage"),
+            status="failed" if llm_failed else "completed",
+            error={"code": "llm_call_failed"} if llm_failed else None,
         )
 
     def _context_gate(self, state: ReplyDecisionGraphState) -> ReplyDecisionGraphState:
@@ -398,18 +410,26 @@ class ReplyDecisionGraph:
         if state.get("route") != "candidate":
             return _with_step(state, "generate_candidate", inputs_ref=["action_gate"], outputs_ref=[state.get("route", "skipped")])
         evidence = [_knowledge_evidence(item) for item in state.get("matched_knowledge", [])]
-        candidate = {
-            "suggestion_id": f"suggestion-{state['decision_id'][-8:]}",
-            "reply_text": self.reply_provider.generate_candidate(
+        try:
+            reply_text = self.reply_provider.generate_candidate(
                 message=state["content"],
                 knowledge=state.get("matched_knowledge", []),
                 service_stage=state["service_stage"],
                 context=state["payload"].get("context") if isinstance(state["payload"].get("context"), dict) else {},
-            ),
+            )
+        except Exception:
+            return _with_step(
+                {**state, "route": "handoff", "risk_flags": [*state.get("risk_flags", []), "llm_unavailable"]},
+                "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=["handoff:llm_unavailable"],
+                llm=_safe_llm_trace(self.reply_provider, "generate_candidate"), status="failed", error={"code": "llm_call_failed"},
+            )
+        candidate = {
+            "suggestion_id": f"suggestion-{state['decision_id'][-8:]}",
+            "reply_text": reply_text,
             "evidence": evidence,
             "confidence": _evidence_confidence(state.get("knowledge_relevance", [])) if evidence else 0.68,
         }
-        return _with_step({**state, "candidates": [candidate]}, "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=[f"candidate:{candidate['suggestion_id']}"])
+        return _with_step({**state, "candidates": [candidate]}, "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=[f"candidate:{candidate['suggestion_id']}"], llm=_safe_llm_trace(self.reply_provider, "generate_candidate"))
 
     def _policy_gate(self, state: ReplyDecisionGraphState) -> ReplyDecisionGraphState:
         route = state.get("route")
@@ -424,7 +444,7 @@ class ReplyDecisionGraph:
             status = "handoff"
             confidence = 0.34
             risk_level = "high"
-            handoff_reason = "cross_tenant_data_access" if "cross_tenant_data_access" in risk_flags else "high_risk_request"
+            handoff_reason = "llm_unavailable" if "llm_unavailable" in risk_flags else ("cross_tenant_data_access" if "cross_tenant_data_access" in risk_flags else "high_risk_request")
         elif route == "context_request":
             action = "context_request"
             status = "waiting_context"
@@ -525,19 +545,35 @@ def _with_step(
     *,
     inputs_ref: list[str],
     outputs_ref: list[str],
+    llm: dict[str, Any] | None = None,
+    status: str = "completed",
+    error: dict[str, Any] | None = None,
 ) -> ReplyDecisionGraphState:
     now = _now()
     step = {
         "step_id": node_id,
         "name": node_id,
-        "status": "completed",
+        "status": status,
         "started_at": now,
         "ended_at": now,
         "inputs_ref": inputs_ref,
         "outputs_ref": outputs_ref,
-        "error": None,
+        "error": error,
     }
+    if llm:
+        step["llm"] = llm
     return {**state, "steps": [*state.get("steps", []), step]}
+
+
+def _safe_llm_trace(reply_provider: ReplyProvider, node_id: str) -> dict[str, Any] | None:
+    invocation = getattr(reply_provider, "last_invocation", None)
+    if not isinstance(invocation, dict) or invocation.get("node_id") != node_id:
+        return None
+    return {
+        key: invocation.get(key)
+        for key in ("llm_id", "model_id", "status", "latency_ms", "error_code")
+        if invocation.get(key) is not None
+    }
 
 
 def _take(state: ReplyDecisionGraphState, condition: str) -> ReplyDecisionGraphState:

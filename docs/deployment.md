@@ -1,5 +1,13 @@
 # Deployment
 
+## SACS 多 LLM 切换
+
+1. 在独立 Kubernetes Secret `ecommerce-cs-agent-llm-credential-encryption` 的 `master-key` 中配置 base64 编码的 32 字节主密钥；所有 API replica 必须使用同一值。
+2. 先部署 migration `013_sacs_llm_node_configuration.sql`，保持 `api.llmNodeBindingEnabled=false`。
+3. 使用只读取得的现有 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL` 和主密钥运行 `python -m ecommerce_cs_agent.db.import_legacy_llm`。命令幂等，不覆盖已导入模型或人工绑定，输出仅含固定资源 ID。
+4. 在 SACS 验证掩码、连接测试与两个必需节点绑定后，把 `api.llmNodeBindingEnabled` 改为 `true`。旧 `LLM_*` 运行变量保留一个回滚周期。
+5. 稳定后停止向业务 Pod 注入旧 `LLM_API_KEY`；主密钥轮换必须通过显式重加密任务，不能直接替换 Secret。
+
 本文记录 `ecommerce-cs-agent` 当前 dev 环境底座、应用部署状态、镜像发布链路和评测连接方式。本文作为 Deploy 项目和应用项目之间的环境契约，敏感值只记录 Secret key，不记录明文。
 
 ## 当前环境
