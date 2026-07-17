@@ -805,6 +805,22 @@ pre {
   gap: 12px;
 }
 
+.dashboardReadinessSummary {
+  min-width: 0;
+}
+
+.dashboardReadinessSummary .panelDescription {
+  margin: -2px 0 12px;
+  color: #667489;
+  font-size: 13px;
+}
+
+.dashboardReadinessSummary .panelFooterAction {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
 .formGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
