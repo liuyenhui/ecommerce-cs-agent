@@ -187,6 +187,7 @@ def test_reply_decision_trace_contains_replayable_graph_steps():
     assert names == [
         "normalize_request",
         "retrieve_context",
+        "classify_service_stage",
         "classify_intent",
         "context_gate",
         "policy_gate",
@@ -198,6 +199,7 @@ def test_reply_decision_trace_contains_replayable_graph_steps():
     assert [node["id"] for node in graph["nodes"]] == [
         "normalize_request",
         "retrieve_context",
+        "classify_service_stage",
         "classify_intent",
         "context_gate",
         "action_gate",
@@ -750,6 +752,7 @@ def test_customer_admin_message_traces_are_scoped_to_session_store():
     assert [item["decision_id"] for item in body["items"]] == [visible["decision_id"]]
     assert body["items"][0]["store_id"] == "store-001"
     assert body["items"][0]["customer_message"] == "这个商品有什么材质？"
+    assert body["items"][0]["service_stage"]["primary_stage"] == "pre_sale"
     assert body["items"][0]["trace"]["graph"]["nodes"]
 
 

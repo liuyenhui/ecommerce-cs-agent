@@ -55,6 +55,7 @@ class ExpectedBehavior(BaseModel):
     require_decision_id: bool = True
     require_trace: bool = True
     min_judge_score: float | None = None
+    expected_primary_stage: Literal["pre_sale", "in_sale", "after_sale", "unknown"] | None = None
 
 
 class TestCase(BaseModel):
@@ -107,6 +108,7 @@ class AgentResponse(BaseModel):
     action_request: dict[str, Any] | None = None
     action_requests: list[dict[str, Any]] = Field(default_factory=list)
     trace: dict[str, Any] | None = None
+    service_stage: dict[str, Any] | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod

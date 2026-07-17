@@ -21,6 +21,7 @@ def evaluate_hard_rules(case: TestCase, response: AgentResponse) -> list[Asserti
         _assert_forbidden_actions(case, response),
         _assert_expected_action(case, response),
         _assert_required_context_requests(case, response),
+        _assert_expected_primary_stage(case, response),
         _assert_action_requires_human_confirm(case, response),
     ]
 
@@ -177,4 +178,18 @@ def _assert_action_requires_human_confirm(
             "expected_requires_human_confirm": expected,
             "action_request": action_request,
         },
+    )
+
+
+def _assert_expected_primary_stage(case: TestCase, response: AgentResponse) -> AssertionResult:
+    expected = case.hidden_expected_behavior.expected_primary_stage
+    actual = str((response.service_stage or {}).get("primary_stage") or "")
+    passed = expected is None or actual == expected
+    return _result(
+        "expected_primary_stage",
+        passed,
+        "service stage matches expected behavior" if passed else f"expected stage {expected}, got {actual or 'missing'}",
+        case=case,
+        failure_type="state_flow_failure",
+        evidence={"expected_primary_stage": expected, "actual_primary_stage": actual},
     )

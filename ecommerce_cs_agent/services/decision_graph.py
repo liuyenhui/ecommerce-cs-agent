@@ -11,12 +11,16 @@ from langgraph.graph.state import StateGraph
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.llm import ReplyProvider
 from ecommerce_cs_agent.services.repository import DecisionRepository
+from ecommerce_cs_agent.services.service_stage import ServiceStageClassification
 
 
 HIGH_RISK_KEYWORDS = ("退款", "赔偿", "投诉", "平台介入", "处罚", "refund", "complaint")
 TENANT_SECURITY_KEYWORDS = ("隔壁店", "别的店", "其他店", "别人店", "其它店", "跨店", "其他租户", "别的租户")
 SHIPPING_KEYWORDS = ("发货", "物流", "快递", "什么时候到", "ship", "shipping", "delivery")
-PRODUCT_KEYWORDS = ("商品", "产品", "材质", "尺寸", "颜色", "规格", "参数", "material", "size")
+PRODUCT_KEYWORDS = (
+    "商品", "产品", "材质", "尺寸", "颜色", "规格", "参数", "重量", "功率", "容量", "型号", "版本",
+    "适配", "包装", "数量", "material", "size", "weight", "power", "capacity", "model", "version",
+)
 ACTION_KEYWORDS = ("改备注", "备注", "改地址", "修改地址", "收货地址", "update note", "change address")
 RELEVANCE_ANCHORS = (
     "材质",
@@ -100,6 +104,7 @@ RULE_KEYWORDS = ("规则", "退换货", "退货政策", "平台政策", "rule", 
 GRAPH_NODE_IDS = [
     "normalize_request",
     "retrieve_context",
+    "classify_service_stage",
     "classify_intent",
     "context_gate",
     "action_gate",
@@ -111,6 +116,7 @@ GRAPH_NODE_IDS = [
 NODE_LABELS = {
     "normalize_request": "归一化请求",
     "retrieve_context": "检索上下文",
+    "classify_service_stage": "咨询阶段分类",
     "classify_intent": "识别意图",
     "context_gate": "上下文闸门",
     "action_gate": "动作闸门",
@@ -121,7 +127,8 @@ NODE_LABELS = {
 
 GRAPH_EDGE_DEFINITIONS = [
     ("normalize_request", "retrieve_context", "归一化完成", "normalized"),
-    ("retrieve_context", "classify_intent", "上下文就绪", "context_loaded"),
+    ("retrieve_context", "classify_service_stage", "上下文就绪", "context_loaded"),
+    ("classify_service_stage", "classify_intent", "阶段已分类", "stage_classified"),
     ("classify_intent", "context_gate", "意图已识别", "intent_classified"),
     ("context_gate", "policy_gate", "转人工", "handoff"),
     ("context_gate", "policy_gate", "等待上下文", "context_request"),
@@ -146,6 +153,8 @@ class ReplyDecisionGraphState(TypedDict, total=False):
     knowledge_query: str
     risk_flags: list[str]
     missing_context: list[str]
+    service_stage: ServiceStageClassification
+    service_stage_classifier: dict[str, Any]
     action: str
     decision_status: str
     confidence: float
@@ -215,6 +224,7 @@ class ReplyDecisionGraph:
         graph = StateGraph(ReplyDecisionGraphState)
         graph.add_node("normalize_request", self._normalize_request)
         graph.add_node("retrieve_context", self._retrieve_context)
+        graph.add_node("classify_service_stage", self._classify_service_stage)
         graph.add_node("classify_intent", self._classify_intent)
         graph.add_node("context_gate", self._context_gate)
         graph.add_node("action_gate", self._action_gate)
@@ -223,7 +233,8 @@ class ReplyDecisionGraph:
         graph.add_node("persist_trace", self._persist_trace)
         graph.add_edge(START, "normalize_request")
         graph.add_edge("normalize_request", "retrieve_context")
-        graph.add_edge("retrieve_context", "classify_intent")
+        graph.add_edge("retrieve_context", "classify_service_stage")
+        graph.add_edge("classify_service_stage", "classify_intent")
         graph.add_edge("classify_intent", "context_gate")
         graph.add_conditional_edges(
             "context_gate",
@@ -308,12 +319,53 @@ class ReplyDecisionGraph:
             content,
             has_product_knowledge=bool(state.get("matched_knowledge")),
         )
+        if any(word in lowered or word in content for word in ACTION_KEYWORDS):
+            missing_context = []
+        missing_context = list(dict.fromkeys([*state["service_stage"]["needs_context"], *missing_context]))
         outputs = ["intent", *[f"risk:{flag}" for flag in risk_flags], *[f"missing_context:{item}" for item in missing_context]]
         return _with_step(
             {**state, "risk_flags": risk_flags, "missing_context": missing_context},
             "classify_intent",
             inputs_ref=["normalized_request", "context_candidates"],
             outputs_ref=outputs,
+        )
+
+    def _classify_service_stage(self, state: ReplyDecisionGraphState) -> ReplyDecisionGraphState:
+        payload = state["payload"]
+        raw_classification = self.reply_provider.classify_service_stage(
+            message=state["content"],
+            conversation=payload.get("conversation") if isinstance(payload.get("conversation"), dict) else {},
+            context=payload.get("context") if isinstance(payload.get("context"), dict) else {},
+        )
+        classification: ServiceStageClassification = {
+            "primary_stage": raw_classification["primary_stage"],
+            "secondary_stages": raw_classification["secondary_stages"],
+            "confidence": raw_classification["confidence"],
+            "reason_code": raw_classification["reason_code"],
+            "evidence_refs": raw_classification["evidence_refs"],
+            "needs_context": raw_classification["needs_context"],
+        }
+        classifier = {
+            "source": str(raw_classification.get("_classifier_source") or "rules"),
+            "rule_version": "service-stage-rules-v1",
+            "model_version": self.reply_provider.model_version,
+            "prompt_version": "service-stage-prompt-v1",
+            "error_code": raw_classification.get("_classifier_error"),
+        }
+        satisfied = set()
+        if state.get("matched_knowledge"):
+            satisfied.add("products")
+        if any(word in state["lowered"] or word in state["content"] for word in ACTION_KEYWORDS):
+            satisfied.update({"orders", "products", "logistics"})
+        classification = {
+            **classification,
+            "needs_context": [item for item in classification["needs_context"] if item not in satisfied],
+        }
+        return _with_step(
+            {**state, "service_stage": classification, "service_stage_classifier": classifier},
+            "classify_service_stage",
+            inputs_ref=["normalized_request", "context_candidates"],
+            outputs_ref=[f"service_stage:{classification['primary_stage']}", *[f"needs_context:{item}" for item in classification["needs_context"]]],
         )
 
     def _context_gate(self, state: ReplyDecisionGraphState) -> ReplyDecisionGraphState:
@@ -351,6 +403,8 @@ class ReplyDecisionGraph:
             "reply_text": self.reply_provider.generate_candidate(
                 message=state["content"],
                 knowledge=state.get("matched_knowledge", []),
+                service_stage=state["service_stage"],
+                context=state["payload"].get("context") if isinstance(state["payload"].get("context"), dict) else {},
             ),
             "evidence": evidence,
             "confidence": _evidence_confidence(state.get("knowledge_relevance", [])) if evidence else 0.68,
@@ -458,6 +512,7 @@ class ReplyDecisionGraph:
             "risk_level": state["risk_level"],
             "risk_flags": state.get("risk_flags", []),
             "missing_context": state.get("missing_context", []),
+            "service_stage": state["service_stage"],
             "handoff_reason": state.get("handoff_reason"),
             "trace": trace,
         }
@@ -494,6 +549,8 @@ def _trace_payload(*, settings: Settings, reply_provider: ReplyProvider, state: 
     return {
         "matched_knowledge_ids": [str(item.get("knowledge_entry_id")) for item in matched],
         "knowledge_relevance": state.get("knowledge_relevance", []),
+        "service_stage": state.get("service_stage"),
+        "service_stage_classifier": state.get("service_stage_classifier"),
         "auto_reply_gate": state.get("auto_reply_gate", {"eligible": False, "reasons": ["not_assessed"]}),
         "rule_hits": state.get("risk_flags", []),
         "graph_version": settings.graph_version,
@@ -530,7 +587,7 @@ def _trace_graph(state: ReplyDecisionGraphState) -> dict[str, Any]:
             "target": target,
             "label": label,
             "condition": condition,
-            "taken": condition in taken or condition in {"normalized", "context_loaded", "intent_classified"},
+            "taken": condition in taken or condition in {"normalized", "context_loaded", "stage_classified", "intent_classified"},
         }
         for source, target, label, condition in GRAPH_EDGE_DEFINITIONS
     ]

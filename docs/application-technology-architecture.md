@@ -155,6 +155,7 @@ LangGraph 是内部编排层，不改变外部系统接入协议。`POST /v1/rep
 ```text
 normalize_request
 -> retrieve_context
+-> classify_service_stage
 -> classify_intent
 -> context_gate
 -> action_gate
@@ -166,6 +167,7 @@ normalize_request
 设计约束：
 
 - graph state 只保存引用、状态和结构化中间结果，不保存不必要的完整原始 payload。
+- `classify_service_stage` 先以订单/物流事实固定签收边界，再用结构化 LLM 辅助识别售前、售中、售后、复购和混合诉求；结果必须传给 Reply Generator，模型不得覆盖事实校验。
 - 当前 Repository DecisionState 必须写入 PostgreSQL 或等价外部存储，不能依赖单容器内存；InMemorySaver 每次 invoke 临时创建并销毁，不承担跨请求状态。
 - 外部持久化 LangGraph checkpointer 与 native interrupt/resume 是目标架构，落地前不得把临时 checkpoint ID 描述为跨 Pod 恢复依据。
 - 每个 LangGraph 节点要映射到 `decision_record.trace.steps[]`，便于客服解释和技术排障。

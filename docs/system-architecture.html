@@ -1559,7 +1559,7 @@
         businessFlow: [
           ['1. 接收买家消息', '外部客服系统负责接收平台买家消息、维护会话归属、展示客服工作台和执行真实发送动作。接入客服 Agent(客服智能体) 前，外部系统只需准备 platform(电商平台)、external_store_id(外部店铺)、platform_account_ref(平台账号引用)、可选 listing_ref(销售实例)、message(消息)、conversation(最小会话) 和 mode(模式)。'],
           ['2. 调用决策接口', '外部系统使用 Authorization(授权凭证) 和 Idempotency-Key(幂等键) 调用 POST(提交) /v1/reply-decisions(创建回复决策)。如果使用 Connector Token(连接器令牌)，还必须提交 billing_lease(计费租约)，由外部计费权威签发并绑定 connector、reservation、request、store 和 feature。'],
-          ['3. 读取返回动作', '客服 Agent(客服智能体) 返回 decision_id(决策编号)、decision_status(决策状态)、action(处理动作)、confidence(置信度)、reply_text(回复文本)、context_requests(补上下文请求列表)、action_request(动作执行请求) 和 trace_summary(追踪摘要)。外部系统只根据 action(处理动作) 处理结果，不依赖客服 Agent(客服智能体) 的实现细节。'],
+          ['3. 读取返回动作', '客服 Agent(客服智能体) 返回 decision_id(决策编号)、decision_status(决策状态)、service_stage(售前/售中/售后/待判定分类)、action(处理动作)、confidence(置信度)、reply_text(回复文本)、context_requests(补上下文请求列表)、action_request(动作执行请求) 和 trace_summary(追踪摘要)。外部系统只根据 action(处理动作) 处理结果，不依赖客服 Agent(客服智能体) 的实现细节。'],
           ['4. 展示、发送或转人工', '当 action(处理动作) 是 auto_reply(自动回复) 时，外部系统决定是否自动发送；当 action(处理动作) 是 candidate(候选回复) 时，外部系统展示给客服确认或编辑；当 action(处理动作) 是 handoff(转人工) 时，外部系统转人工并展示原因。'],
           ['5. 补上下文或执行动作', '当 action(处理动作) 是 context_request(补上下文请求) 时，外部系统按 context_requests[] 中的 type 并行调用 products、orders、logistics、rules 回填接口。当 action(处理动作) 是 action_request(动作执行请求) 时，外部系统执行自己的业务 API(应用接口)，再调用 actions/results 回传执行结果。'],
           ['6. 反馈与追踪', '客服最终发送、修改、拒绝或升级后，外部系统调用 POST(提交) /v1/feedback/human-replies(提交人工回复反馈) 回传处理结果。需要解释或排障时，外部系统调用 GET(查询) /v1/message-traces/{decision_id}(查询消息追踪) 查询对外可见的追踪摘要。'],
@@ -1746,6 +1746,7 @@
             ['decision_status', 'enum', '必返，received / waiting_context / partial_context / ready_to_decide / answer_ready / candidate / action_request / handoff / failed。'],
             ['action', 'enum', '必返，auto_reply / candidate / handoff / context_request / action_request。'],
             ['confidence', 'number', '必返，综合置信度，取值范围 0.00-1.00，无单位；示例 0.78 表示中高置信度，但仍不覆盖 high / p0 风险规则。'],
+            ['service_stage', 'object', '必返，当前客户消息的阶段分类；包含 primary_stage(pre_sale / in_sale / after_sale / unknown)、secondary_stages[]、confidence、reason_code、evidence_refs[] 和 needs_context[]。'],
             ['reply_text', 'string', '条件返回，action 为 auto_reply 或 candidate 时返回。'],
             ['handoff_reason', 'string', '条件返回，action 为 handoff 时返回。'],
             ['context_requests[]', 'array', '条件返回，action 为 context_request 时返回；一次返回所有当前可判断出的缺口，客户端可并行处理。', [
@@ -2743,6 +2744,7 @@
         nodes: [
           { key: 'context', text: '标准化上下文', sub: '消息 + 商品 + 订单 + 规则', kind: 'service' },
           { key: 'stateGraph', text: 'LangGraph StateGraph', sub: 'thread_id / conditional edges / in-memory checkpoint ID', kind: 'service' },
+          { key: 'stageClassify', text: '咨询阶段分类', sub: '售前 / 售中 / 售后 / 待判定', kind: 'service' },
           { key: 'contextGate', text: '上下文闸门', sub: '缺口判断 / context_requests / re-invoke', kind: 'risk' },
           { key: 'riskGate', text: '风险闸门', sub: 'P0 / 高风险 / 店铺规则', kind: 'risk' },
           { key: 'knowledgeGen', text: '知识与生成', sub: '召回 / LLM / evidence refs', kind: 'service' },
@@ -2753,7 +2755,8 @@
         ],
         links: [
           ['context', 'stateGraph', 'state input', { routeStyle: 'straight' }],
-          ['stateGraph', 'contextGate', 'conditional edge', { routeStyle: 'straight' }],
+          ['stateGraph', 'stageClassify', 'message + facts', { routeStyle: 'straight' }],
+          ['stageClassify', 'contextGate', 'service_stage', { routeStyle: 'straight' }],
           ['contextGate', 'decisionAction', 'missing/handoff', { routeStyle: 'orthogonal' }],
           ['contextGate', 'riskGate', 'context enough', { routeStyle: 'straight' }],
           ['riskGate', 'decisionAction', 'P0/high risk', { offsetX: -248, freeLabelPosition: true, routeStyle: 'orthogonal' }],

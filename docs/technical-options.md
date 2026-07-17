@@ -131,6 +131,8 @@ LangGraph 不作为对外 API 边界。外部系统仍只接入 `POST /v1/reply-
 
 推荐用 LangGraph 承载：
 
+- 每条消息的客户阶段分类：规则和订单/物流事实优先，结构化 LLM 辅助语义分类；阶段结果作为 Reply Generator 明确输入，不允许模型自行改写签收边界或复购规则。
+
 - `decision_id` 到 graph `thread_id` 的状态恢复。
 - 当前实现：每次 LangGraph invoke 临时创建 `InMemorySaver` 生成单次运行诊断 checkpoint ID；context refill 从 Repository latest `DecisionState` 重构输入后以同一 thread_id 重算。
 - 目标架构：`context_requests[]` 等待和 `/contexts/*` 回填后的 native resume。

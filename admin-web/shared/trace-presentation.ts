@@ -16,6 +16,12 @@ export type TracePresentation = {
 
 export type DecisionBadgeTone = "info" | "success" | "warning" | "danger" | "neutral";
 
+export type ServiceStagePresentation = {
+  label: string;
+  raw: string;
+  tone: DecisionBadgeTone;
+};
+
 export type DecisionBadge = {
   key: "action" | "risk" | "status";
   label: string;
@@ -136,6 +142,21 @@ const contextLabels: Record<string, string> = {
   rule: "规则资料",
   rules: "规则资料"
 };
+
+const serviceStageLabels: Record<string, Omit<ServiceStagePresentation, "raw">> = {
+  pre_sale: { label: "售前", tone: "info" },
+  in_sale: { label: "售中", tone: "warning" },
+  after_sale: { label: "售后", tone: "danger" },
+  unknown: { label: "待判定", tone: "neutral" }
+};
+
+export function presentServiceStage(value: unknown): ServiceStagePresentation {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const raw = rawString(record.primary_stage);
+  if (!raw.trim()) return { label: "未分类", raw: "", tone: "neutral" };
+  const presentation = serviceStageLabels[raw.trim().toLowerCase()];
+  return presentation ? { ...presentation, raw } : { label: "未知阶段", raw, tone: "neutral" };
+}
 
 export function presentDecisionBadges(input: TracePresentationInput): DecisionBadge[] {
   const action = rawString(input.action);

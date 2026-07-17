@@ -346,6 +346,7 @@ trace_steps[]
 | --- | --- | --- |
 | `normalize_request` | 归一化外部请求、绑定 `decision_id/thread_id`、记录消息引用 | 否 |
 | `retrieve_context` | 召回审核通过知识、商品知识、规则和历史人工回复引用 | 否 |
+| `classify_service_stage` | 按每条客户消息分类 `pre_sale / in_sale / after_sale / unknown`；签收为售中/售后边界，复购仍归售前，混合诉求保留主次分类 | 缺订单、物流、商品或规则事实时生成 typed `context_requests[]` |
 | `classify_intent` | 规则优先识别意图、风险和缺失上下文，LLM 只做辅助分类 | 高风险可进入 `handoff` |
 | `context_gate` | 判断是否需要 `context_requests[]`，并标记本次运行走过的条件边 | 缺上下文时返回 `context_requests[]` |
 | `action_gate` | 把“改备注”“改地址”等诉求转成 `action_request` | 等待外部 `actions/results` |
@@ -356,6 +357,7 @@ trace_steps[]
 落地规则：
 
 - LangGraph state 只保存引用、状态和结构化中间结果；原始消息、商品、订单、物流、规则和知识正文仍落业务表或对象存储。
+- `service_stage` 随决策响应和 trace JSONB 持久化并传入回复 LLM；历史记录缺字段时 Admin 显示“未分类”，不得反推或改写历史。
 - 每个 graph 节点必须输出可映射到 `decision_record.trace.steps[]` 的 step 记录。
 - `decision_record.trace.graph.nodes[]` / `edges[]` 是 Admin 单条消息运行回放的数据源；Customer Admin 只显示本店铺脱敏回放，System Admin 详情继续按 raw payload 权限和原因审计控制。
 - `decision_id` 是外部 API 主键，也是 graph `thread_id`；补上下文从 Repository 状态重构输入后重新 invoke，不新建决策。

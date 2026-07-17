@@ -3680,7 +3680,7 @@ components:
 
     ReplyDecisionResponse:
       type: object
-      required: [decision_id, decision_status, action, candidates, context_requests, action_requests, confidence, risk_level, risk_flags, missing_context, trace]
+      required: [decision_id, decision_status, action, candidates, context_requests, action_requests, confidence, risk_level, risk_flags, missing_context, service_stage, trace]
       properties:
         decision_id:
           type: string
@@ -3719,6 +3719,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ContextType"
+        service_stage:
+          $ref: "#/components/schemas/ServiceStageClassification"
         handoff_reason:
           type:
             - string
@@ -5081,6 +5083,11 @@ components:
         confidence:
           type: number
           format: double
+        service_stage:
+          anyOf:
+            - $ref: "#/components/schemas/ServiceStageClassification"
+            - type: "null"
+          description: 历史决策可能没有阶段分类，客户端应显示“未分类”。
         trace:
           $ref: "#/components/schemas/DecisionTrace"
 
@@ -5816,6 +5823,8 @@ components:
           description: 内部 LangGraph thread ID；必须与 `decision_id` 一致。
         model_version:
           type: string
+        service_stage:
+          $ref: "#/components/schemas/ServiceStageClassification"
         selected_snapshot_refs:
           $ref: "#/components/schemas/Metadata"
         steps:
@@ -5824,6 +5833,37 @@ components:
             $ref: "#/components/schemas/TraceStep"
         graph:
           $ref: "#/components/schemas/DecisionTraceGraph"
+
+    ServiceStageClassification:
+      type: object
+      required: [primary_stage, secondary_stages, confidence, reason_code, evidence_refs, needs_context]
+      properties:
+        primary_stage:
+          type: string
+          enum: [pre_sale, in_sale, after_sale, unknown]
+        secondary_stages:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum: [pre_sale, in_sale, after_sale]
+        confidence:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        reason_code:
+          type: string
+          enum: [purchase_intent, repurchase_intent, awaiting_fulfillment, in_transit_unreceived, delivered_usage, delivered_quality, return_refund, repair_warranty, mixed_intent, insufficient_context]
+        evidence_refs:
+          type: array
+          items:
+            type: string
+        needs_context:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/ContextType"
 
     DecisionTraceGraph:
       type: object

@@ -7,6 +7,72 @@ import pytest
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.decision import DecisionService
 from ecommerce_cs_agent.services.repository import InMemoryDecisionRepository, PostgresDecisionRepository
+from ecommerce_cs_agent.services.service_stage import classify_service_stage
+
+
+class _CapturingReplyProvider:
+    model_version = "capturing-reply-v1"
+
+    def __init__(self) -> None:
+        self.generated_with: dict[str, Any] | None = None
+
+    def classify_service_stage(self, *, message: str, conversation: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        return classify_service_stage(message=message, conversation=conversation, context=context)
+
+    def generate_candidate(
+        self,
+        *,
+        message: str,
+        knowledge: list[dict[str, Any]],
+        service_stage: dict[str, Any],
+        context: dict[str, Any],
+    ) -> str:
+        self.generated_with = {
+            "message": message,
+            "knowledge": knowledge,
+            "service_stage": service_stage,
+            "context": context,
+        }
+        return "阶段感知回复"
+
+
+def test_decision_graph_classifies_stage_and_passes_it_to_reply_provider() -> None:
+    provider = _CapturingReplyProvider()
+    service = DecisionService(Settings(environment="test"), reply_provider=provider)
+    request = _request("req-stage-provider", "已经收到了，怎么安装")
+    request["context"] = {
+        "orders": [{"external_order_id": "order-stage", "status": "delivered"}],
+        "products": [{"external_product_id": "product-001"}],
+    }
+
+    response = service.create_reply_decision(request)
+
+    assert response["service_stage"]["primary_stage"] == "after_sale"
+    assert provider.generated_with is not None
+    assert provider.generated_with["service_stage"] == response["service_stage"]
+    assert provider.generated_with["context"] == request["context"]
+    graph = response["trace"]["graph"]
+    assert next(node for node in graph["nodes"] if node["id"] == "classify_service_stage")["status"] == "completed"
+    assert response["trace"]["service_stage"] == response["service_stage"]
+    assert response["trace"]["service_stage_classifier"] == {
+        "source": "rules",
+        "rule_version": "service-stage-rules-v1",
+        "model_version": "capturing-reply-v1",
+        "prompt_version": "service-stage-prompt-v1",
+        "error_code": None,
+    }
+
+
+def test_product_attribute_stage_requests_products_before_candidate_generation() -> None:
+    service = DecisionService(Settings(environment="test"))
+
+    response = service.create_reply_decision(_request("req-stage-weight", "这个重量是多少"))
+
+    assert response["service_stage"]["primary_stage"] == "pre_sale"
+    assert response["missing_context"] == ["products"]
+    assert [request["type"] for request in response["context_requests"]] == ["products"]
+    assert response["action"] == "context_request"
+    assert response["candidates"] == []
 
 
 def test_decision_graph_uses_approved_knowledge_for_safe_auto_reply() -> None:
@@ -417,6 +483,7 @@ def test_decision_graph_action_request_and_trace_match_contract() -> None:
     assert [node["id"] for node in graph["nodes"]] == [
         "normalize_request",
         "retrieve_context",
+        "classify_service_stage",
         "classify_intent",
         "context_gate",
         "action_gate",
@@ -447,6 +514,7 @@ def test_decision_graph_trace_graph_marks_context_request_branch() -> None:
     assert [step["step_id"] for step in response["trace"]["steps"]] == [
         "normalize_request",
         "retrieve_context",
+        "classify_service_stage",
         "classify_intent",
         "context_gate",
         "policy_gate",

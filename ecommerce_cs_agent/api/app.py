@@ -874,6 +874,7 @@ def _customer_trace_summary(trace: dict[str, Any]) -> dict[str, Any]:
         "status": trace.get("decision_status"),
         "risk_level": trace.get("risk_level"),
         "confidence": trace.get("confidence"),
+        "service_stage": trace.get("service_stage"),
         "trace": trace.get("trace"),
     }
 

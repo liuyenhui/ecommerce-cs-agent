@@ -34,7 +34,7 @@ import {
 } from "../../shared/components";
 import { arrayFrom, firstId, readRecord } from "../../shared/data";
 import { DecisionTraceReplay } from "../../shared/trace-replay";
-import { presentDecisionBadges, presentDecisionTrace } from "../../shared/trace-presentation";
+import { presentDecisionBadges, presentDecisionTrace, presentServiceStage } from "../../shared/trace-presentation";
 import type { JsonRecord, NavItem, Page, ToastState } from "../../shared/types";
 import { SimulationComposer } from "./SimulationComposer";
 import { scrollBehaviorForReducedMotion } from "./landing-motion";
@@ -71,6 +71,7 @@ type CustomerTrace = JsonRecord & {
   status?: string;
   risk_level?: string;
   missing_context?: unknown;
+  service_stage?: JsonRecord;
   source?: string;
   trace?: JsonRecord;
 };
@@ -893,8 +894,10 @@ function decisionBadges(trace: CustomerTrace) {
     status: trace.status,
     risk: trace.risk_level
   });
+  const stage = presentServiceStage(trace.service_stage);
   return (
     <span className="decisionBadges" aria-label="本次 AI 决策摘要">
+      <span className={`decisionBadge ${stage.tone}`} title={stage.raw || "legacy-unclassified"}>{stage.label}</span>
       {badges.map((badge) => (
         <span key={badge.key} className={`decisionBadge ${badge.tone}`} title={badge.raw}>{badge.label}</span>
       ))}
@@ -909,6 +912,11 @@ function MessageTraceDrawer({ trace, onClose, onRaw }: { trace: CustomerTrace; o
     risk: trace.risk_level,
     missingContext: trace.missing_context
   });
+  const stage = presentServiceStage(trace.service_stage);
+  const stageRecord = readRecord(trace, "service_stage");
+  const secondaryStages = Array.isArray(stageRecord.secondary_stages)
+    ? stageRecord.secondary_stages.map((value) => presentServiceStage({ primary_stage: value }).label)
+    : [];
   return (
     <aside className="drawer messageTraceDrawer">
       <div className="drawerHeader">
@@ -916,10 +924,18 @@ function MessageTraceDrawer({ trace, onClose, onRaw }: { trace: CustomerTrace; o
         <button onClick={onClose}>关闭</button>
       </div>
       <div className="traceSummary">
+        <Metric label="咨询阶段" value={stage.label} tone="info" title={stage.raw || "legacy-unclassified"} />
         <Metric label="动作" value={presentation.actionLabel} tone="info" title={String(trace.action || "-")} />
         <Metric label="状态" value={presentation.statusLabel} tone="ok" title={String(trace.status || "-")} />
         <Metric label="风险" value={presentation.riskLabel} tone="warn" title={String(trace.risk_level || "-")} />
       </div>
+      <section className="traceTextBlock" aria-label="咨询阶段分类详情">
+        <h3>阶段分类依据</h3>
+        <p>主分类：{stage.label}；次分类：{secondaryStages.join("、") || "无"}</p>
+        <p>置信度：{typeof stageRecord.confidence === "number" ? stageRecord.confidence.toFixed(2) : "-"}；理由码：{String(stageRecord.reason_code || "-")}</p>
+        <p>所需资料：{Array.isArray(stageRecord.needs_context) ? stageRecord.needs_context.join("、") || "无" : "无"}</p>
+        <p>证据引用：{Array.isArray(stageRecord.evidence_refs) ? stageRecord.evidence_refs.join("、") || "无" : "无"}</p>
+      </section>
       <section className="traceTextBlock">
         <h3>客户消息</h3>
         <p>{String(trace.customer_message || "-")}</p>
