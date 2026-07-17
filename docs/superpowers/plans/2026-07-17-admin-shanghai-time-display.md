@@ -156,4 +156,3 @@ Expected: 无格式错误、无密钥、无范围外修改。
 - [ ] **Step 5: Verify live Admin hosts**
 
 验证 API、Customer Admin、System Admin health；在 System Admin 租户列表和至少一个其他时间页面确认中文上海时间、不再出现 `T`/`Z` ISO 展示，并确认两个站点仍只调用各自的 `/auth/me`。
-

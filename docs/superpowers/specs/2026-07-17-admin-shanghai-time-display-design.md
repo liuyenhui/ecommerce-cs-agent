@@ -41,4 +41,3 @@
 - 所有直接 `toLocaleString()` 的 Admin 时间渲染点被静态回归门禁禁止，只有共享格式化函数可以使用 `Intl.DateTimeFormat`。
 - Customer Admin 与 System Admin 的完整测试、移动端回归和生产构建通过。
 - Dev 上线后租户创建时间、审计时间和 System Admin 聚合时间均显示中文上海时间，三路健康检查通过。
-
