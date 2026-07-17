@@ -16,13 +16,14 @@ COPY --chown=app:app ecommerce_cs_agent ./ecommerce_cs_agent
 COPY --chown=app:app migrations ./migrations
 
 RUN pip install --no-cache-dir \
+        "anyio>=4,<5" \
         "fastapi>=0.115,<1" \
         "uvicorn>=0.34,<1" \
         "pydantic>=2.8,<3" \
         "psycopg[binary]>=3.2,<4" \
         "bcrypt>=4.1,<5" \
-        "langgraph>=1.2,<2" \
         "cryptography>=45,<47" \
+        "langgraph>=1.2,<2" \
     && pip install --no-cache-dir --no-deps .
 
 USER 10001:10001

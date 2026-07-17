@@ -28,6 +28,8 @@ def test_api_and_admin_dockerfiles_exist() -> None:
     assert "python -m ecommerce_cs_agent.db.cli migrate" not in api
     assert "COPY --chown=app:app migrations ./migrations" in api
     assert "USER 10001:10001" in api
+    assert '"anyio>=4,<5"' in api
+    assert '"cryptography>=45,<47"' in api
     assert "npm run build" in admin
     assert "nginxinc/nginx-unprivileged" in admin
 
@@ -101,6 +103,8 @@ def test_helm_values_define_dev_runtime_contract() -> None:
         "registry.cn-beijing.aliyuncs.com/threepeople/ecommerce-cs-agent-api"
     )
     assert values["api"]["envFromSecret"] == "ecommerce-cs-agent-runtime"
+    assert values["api"]["replicas"] == 2
+    assert values["api"]["decisionMaxConcurrency"] == 4
     assert values["api"]["ingress"]["host"] == (
         "api.ecommerce-cs-agent-dev.fcihome.com"
     )
@@ -115,6 +119,51 @@ def test_helm_values_define_dev_runtime_contract() -> None:
     )
     assert values["admin"]["ingress"]["tlsSecretName"] == "cs-agent-dev-tls"
     assert values["proxy"]["enabled"] is True
+
+
+def test_helm_renders_bounded_decision_execution_and_resilient_api_probes() -> None:
+    chart_dir = Path("deploy/helm/ecommerce-cs-agent")
+    values = yaml.safe_load((chart_dir / "values.yaml").read_text(encoding="utf-8"))
+    schema = json.loads((chart_dir / "values.schema.json").read_text(encoding="utf-8"))
+
+    assert values["api"]["decisionMaxConcurrency"] == 4
+    assert schema["properties"]["api"]["properties"]["decisionMaxConcurrency"] == {
+        "type": "integer",
+        "minimum": 1,
+    }
+
+    rendered = _render_helm("-f", "deploy/helm/ecommerce-cs-agent/values-dev.yaml")
+    documents = [document for document in yaml.safe_load_all(rendered) if document]
+    deployment = next(
+        document
+        for document in documents
+        if document.get("kind") == "Deployment" and document["metadata"]["name"].endswith("-api")
+    )
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    env = {item["name"]: item for item in container["env"]}
+
+    assert deployment["spec"]["replicas"] == 2
+    assert env["DECISION_MAX_CONCURRENCY"] == {
+        "name": "DECISION_MAX_CONCURRENCY",
+        "value": "4",
+    }
+    assert container["startupProbe"] == {
+        "httpGet": {"path": "/health", "port": "http"},
+        "periodSeconds": 2,
+        "failureThreshold": 30,
+    }
+    assert container["readinessProbe"] == {
+        "httpGet": {"path": "/health", "port": "http"},
+        "timeoutSeconds": 2,
+        "periodSeconds": 5,
+        "failureThreshold": 3,
+    }
+    assert container["livenessProbe"] == {
+        "httpGet": {"path": "/health", "port": "http"},
+        "timeoutSeconds": 2,
+        "periodSeconds": 10,
+        "failureThreshold": 6,
+    }
 
 
 def test_helm_api_uses_dedicated_service_account_and_secret_allowlist() -> None:
@@ -436,7 +485,7 @@ def test_dev_dependencies_include_draft_2020_json_schema_validator() -> None:
 def test_api_image_installs_llm_credential_encryption_runtime() -> None:
     dockerfile = Path("Dockerfile.api").read_text(encoding="utf-8")
 
-    assert '"cryptography>=45,<47"' in dockerfile
+    assert dockerfile.count('"cryptography>=45,<47"') == 1
 
 
 def test_helm_chart_defines_k8s_security_defaults() -> None:

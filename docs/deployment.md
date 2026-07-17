@@ -8,6 +8,12 @@
 4. 在 SACS 验证掩码、连接测试与两个必需节点绑定后，把 `api.llmNodeBindingEnabled` 改为 `true`。旧 `LLM_*` 运行变量保留一个回滚周期。
 5. 稳定后停止向业务 Pod 注入旧 `LLM_API_KEY`；主密钥轮换必须通过显式重加密任务，不能直接替换 Secret。
 
+## API 决策并发与健康检查
+
+`POST /v1/reply-decisions`、typed context refill、动作结果回填和 Customer Admin 模拟咨询都会运行同步 LangGraph/LLM 逻辑。API 必须通过受限 worker 执行这些调用，禁止在 FastAPI event loop 上直接运行阻塞式 DNS、socket、TLS、Provider 或数据库调用。`DECISION_MAX_CONCURRENCY` 由 Helm 的 `api.decisionMaxConcurrency` 显式注入，默认与 Dev 值均为 `4`，必须是正整数；达到上限后的请求等待 worker 容量，但 `/health` 仍由无外部依赖的异步 endpoint 响应。
+
+Dev 使用两个 API replica。startup probe 允许最多 60 秒启动；readiness 使用 2 秒超时、5 秒周期、3 次失败；liveness 使用 2 秒超时、10 秒周期、6 次失败。探针预算是滚动发布和瞬时抖动保护，不能替代 event-loop 隔离。API 镜像通过 `pip install --no-deps` 安装项目包，因此 Dockerfile 必须显式安装应用直接导入的 AnyIO、cryptography 等运行依赖；缺依赖应在镜像发布前由部署工件测试阻断。
+
 本文记录 `ecommerce-cs-agent` 当前 dev 环境底座、应用部署状态、镜像发布链路和评测连接方式。本文作为 Deploy 项目和应用项目之间的环境契约，敏感值只记录 Secret key，不记录明文。
 
 ## 当前环境
@@ -244,6 +250,14 @@ LLM cursor 签名 Secret：`ecommerce-cs-agent-llm-cursor`
 
 该 Secret 由 `api.cursorSigningSecretRef{name,key}` 引用，与运行时 Secret 和 Provider 凭据 Secret 分离；namespace 是 Helm release namespace。仓库只保存 Secret 名与 key；真实随机值必须通过受控 Secret 渠道创建并轮换。所有 API replica 必须读取同一个至少 32 字节的 key，否则 cursor 会随机失效。轮换后已有 cursor 会失效并返回 422，调用方应从第一页重新查询；轮换发布记录只保存时间、Secret 引用和 rollout 结果，不保存 key 值。
 
+LLM 凭据加密 Secret：`ecommerce-cs-agent-llm-credential-encryption`
+
+| Key | 用途 |
+| --- | --- |
+| `master-key` | 注入 `LLM_CREDENTIAL_ENCRYPTION_KEY`；其字符串必须是有效 base64，解码后恰好 32 字节，所有 API replica 使用同一值 |
+
+该 Secret 缺失时 Deployment 必须 fail closed，不能把引用改成 optional，也不能在 Helm 模板或 Pod 内为每个 replica 临时生成不同 key。创建、轮换和校验只能输出 Secret 名与 key 名，不得读取或记录 value；轮换前必须先完成数据库中模型凭据的显式重加密。
+
 模型凭据必须放在单独的 Secret 中，禁止复用 `ecommerce-cs-agent-runtime`。数据库/API 的 Provider 记录使用 `secret_ref{namespace,name,key}`：namespace 必须是最长 63 字符且不含点的 DNS-1123 label，name 必须是最长 253 字符且每段最长 63 字符的 DNS-1123 subdomain，key 必须是最长 253 字符的 Kubernetes data key。API/Pydantic、直接 service 写入和 runtime adapter 使用同一校验，非法引用在持久化或读取 Secret 前拒绝。Helm allowlist 的 namespace 固定为 Pod 所在 namespace，并由 downward API 注入。该 Secret 只允许包含模型 Provider 所需凭据 key；不得包含 `DATABASE_URL`、`JWT_SECRET`、`SESSION_SECRET` 或其他运行时密钥。Helm 的 `api.secretAccess.allowedSecretRefs` 必须按 `(Secret name, key)` 配置允许的 `allowedOrigins`；每个 origin 必须是无用户信息、路径、查询或片段的精确 HTTPS origin。API ServiceAccount 的 Role 只授予这些专用 Secret 的 `get` 权限。dev 发布前需通过受控 Secret 渠道创建该专用 Secret，不在 values、文档、日志或聊天中记录凭据值。
 
 API Deployment 的 `LLM_API_KEY` 通过 `secretKeyRef` 从 `api.runtimeLlmSecretRef` 指定的专用 Secret 与 key 注入，不写入 values 或渲染产物。该 `(name, key)` 必须同时存在于 `api.secretAccess.allowedSecretRefs`，且名称不得等于 `api.envFromSecret`；`ecommerce-cs-agent-runtime` 继续只通过 `envFrom` 提供非模型凭据运行配置。
@@ -299,7 +313,10 @@ LLM_MODEL=<from-secret>
 AGENT_API_TOKEN=<from-secret>
 OPEN_ERP_INTEGRATION_TOKEN=<from-secret>
 OPEN_ERP_BILLING_LEASE_SECRET=<from-secret>
+DECISION_MAX_CONCURRENCY=4
 ```
+
+`DECISION_MAX_CONCURRENCY` 由 Deployment 的普通环境变量注入，不放入运行时 Secret。
 
 ## Evaluation
 
@@ -346,6 +363,8 @@ curl -fsS https://admin.ecommerce-cs-agent-dev.fcihome.com/health
 curl -fsS https://system-admin.ecommerce-cs-agent-dev.fcihome.com/health
 TARGET_BASE_URL=https://api.ecommerce-cs-agent-dev.fcihome.com AGENT_API_TOKEN=<from-secret> python -m evals.cli run-suite --suite quick --target live --target-url "$TARGET_BASE_URL"
 ```
+
+批量模拟咨询发布验收还必须记录测试前后的 API Pod restart count，并在并发提交 30 条 `simulation_only` 消息时持续轮询公网 `/health`。验收要求：30 条请求零 `5xx`、健康轮询零失败、API Pod 零新增重启、所有响应 `external_send.attempted=false`；任一条件不满足均阻断发布。
 
 系统后台拆站完成前，第三条 health 命令是发布目标检查项；不能把 DNS 解析成功、Traefik default cert、或 `admin.ecommerce-cs-agent-dev.fcihome.com` 上的系统后台 tab 当作验收通过。
 

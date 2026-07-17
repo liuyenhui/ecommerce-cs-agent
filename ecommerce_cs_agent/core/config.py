@@ -10,6 +10,7 @@ class Settings:
     environment: str = "development"
     graph_version: str = "reply-decision-graph-v1"
     model_version: str = "reply-generator-v1"
+    decision_max_concurrency: int = 4
     agent_api_token: str = "test-agent-token"
     admin_session: str = "test-admin-session"
     system_admin_session: str = "test-system-session"
@@ -67,6 +68,7 @@ def load_settings() -> Settings:
         environment=environment,
         graph_version=os.environ.get("GRAPH_VERSION", "reply-decision-graph-v1"),
         model_version=os.environ.get("MODEL_VERSION", "reply-generator-v1"),
+        decision_max_concurrency=_env_positive_int("DECISION_MAX_CONCURRENCY", default=4),
         agent_api_token=os.environ.get("AGENT_API_TOKEN", "test-agent-token"),
         admin_session=_env_first("ADMIN_SESSION_SECRET", "SESSION_SECRET", default="test-admin-session"),
         system_admin_session=_env_first("SYSTEM_ADMIN_SESSION_SECRET", "JWT_SECRET", default="test-system-session"),
@@ -126,6 +128,19 @@ def _env_first_optional(*keys: str) -> str | None:
 def _env_bool(*keys: str) -> bool:
     value = _env_first_optional(*keys)
     return str(value or "").lower() in {"1", "true", "yes", "on"}
+
+
+def _env_positive_int(key: str, *, default: int) -> int:
+    raw_value = os.environ.get(key)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be a positive integer") from exc
+    if value < 1:
+        raise ValueError(f"{key} must be a positive integer")
+    return value
 
 
 def _missing_required_groups(groups: list[tuple[str, ...]]) -> list[str]:

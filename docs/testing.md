@@ -63,6 +63,14 @@ helm template ecommerce-cs-agent deploy/helm/ecommerce-cs-agent -n ecommerce-cs-
 rm -f /tmp/ecommerce-cs-agent-rendered.yaml
 ```
 
+决策并发回归：
+
+```bash
+.venv/bin/pytest tests/services/test_decision_execution.py tests/core/test_config.py tests/api/test_decision_concurrency.py tests/deploy/test_deploy_artifacts.py -q
+```
+
+这组测试必须证明同步决策工作不在 event-loop thread 执行、进程内峰值不超过 `DECISION_MAX_CONCURRENCY`、四个决策图入口都使用同一受限 executor、阻塞 worker 时 `/health` 仍能响应、Helm 渲染显式探针和 Dev 双副本。部署工件测试还必须检查 `Dockerfile.api` 显式安装应用直接导入的依赖，防止 `pip install --no-deps` 镜像在启动时因缺少模块进入 CrashLoopBackOff。
+
 真实 PostgreSQL 集成是可选本地检查，必须指向隔离测试库，并通过环境变量注入；命令与日志不得打印 DSN 或 Secret：
 
 ```bash
@@ -258,6 +266,8 @@ PR 不跑大规模 LLM 盲测。若需要在 PR 上抽检 eval，只能使用小
 | `action_planning_failure` | `action_request` 类型、payload、幂等键、人工确认或动作能力约束错误。 |
 | `audit_failure` | `decision_id`、trace、决策记录、Admin audit log 或评测证据缺失。 |
 | `runtime_failure` | 服务不可用、网络超时、未捕获异常、CLI 崩溃、依赖缺失或测试环境故障。 |
+
+批量模拟出现公网 `502/503` 时，报告必须同时记录 API Pod restart count、终止原因、探针事件和同窗口 `/health` 结果；不能只把错误归因于公网代理。发布前 30 条模拟咨询应与健康轮询并行，要求请求零 `5xx`、健康零失败、Pod 零新增重启以及 `external_send.attempted=false`。
 
 如果失败既像测试数据问题又像系统问题，先归入最接近的系统分类，并在报告中标记需要人工复核；不能用“评测不确定”掩盖红线失败。
 
