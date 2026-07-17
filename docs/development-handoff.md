@@ -6,6 +6,7 @@
 
 ### 2026-07-17
 
+- 新增 [System Admin 未满足上线条件文案设计](superpowers/specs/2026-07-17-system-admin-readiness-copy-design.md)：系统总览顶部统一表达全部未满足上线条件店铺，下方摘要明确限定为缺少商品资料，并提供进入配置完成度查看完整原因的入口。
 - System Admin“租户与店铺”确认合并为单一层级列表：租户为可展开主行、店铺为所属子行，统一按租户分页并保留租户/店铺详情抽屉；实现与验收边界见 [统一层级列表设计](superpowers/specs/2026-07-17-system-admin-tenant-store-hierarchy-design.md)。
 
 ### 2026-07-16
