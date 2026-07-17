@@ -192,6 +192,34 @@
 .paginationControls button { min-height: 36px; }
 .paginationControls button:disabled { cursor: not-allowed; opacity: .45; }
 
+.tenantStorePanel { min-width: 0; }
+.tenantStoreTableWrap { min-width: 0; max-width: 100%; overflow: hidden; }
+.tenantStoreTable { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.tenantStoreTable th,
+.tenantStoreTable td { border-bottom: 1px solid #e0e0e0; padding: 10px 12px; text-align: left; vertical-align: top; }
+.tenantStoreTable th { background: #f4f4f4; color: #262626; }
+.tenantStoreTable th:first-child { width: 38%; }
+.tenantStoreTable th:nth-child(2) { width: 11%; }
+.tenantStoreTable th:nth-child(3) { width: 13%; }
+.tenantStoreTable th:nth-child(4) { width: 14%; }
+.tenantStoreTable th:nth-child(5) { width: 24%; }
+.tenantStoreTenantRow { background: #ffffff; }
+.tenantStoreChildRow,
+.tenantStoreEmptyRow { background: #f7f9fb; }
+.tenantStoreIdentity { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
+.tenantStoreExpand { display: inline-grid; flex: 0 0 32px; place-items: center; width: 32px; min-height: 32px; border: 0; background: transparent; color: #161616; padding: 0; }
+.tenantStoreAction { display: block; min-width: 0; border: 0; background: transparent; color: inherit; text-align: left; white-space: normal; cursor: pointer; padding: 0; }
+.tenantStoreAction:hover { color: #0f62fe; }
+.tenantStoreAction:focus-visible,
+.tenantStoreExpand:focus-visible { outline: 2px solid #0f62fe; outline-offset: 2px; }
+.tenantStorePrimary { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+.tenantStorePrimary strong,
+.tenantStorePrimary span { display: block; overflow-wrap: anywhere; word-break: break-word; }
+.tenantStorePrimary span { min-width: 0; max-width: 100%; margin-top: 3px; color: #525252; font-size: 12px; }
+.tenantStoreChildRow .tenantStorePrimary,
+.tenantStoreEmptyRow td { padding-left: 50px; }
+.tenantStoreEmptyRow td { color: #525252; font-size: 13px; }
+
 @media (max-width: 1180px) {
   .systemWorkspace { grid-template-columns: 1fr; }
   .systemAccount { position: static; }
@@ -214,4 +242,14 @@
   .providerEditor .panelActions { grid-column: auto; }
   .providerList button, .releaseCard button { width: 100%; }
   .timeseriesBars div { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 560px) {
+  .tenantStoreTableWrap { overflow-x: hidden; }
+  .tenantStoreTable th,
+  .tenantStoreTable td { width: auto; padding: 9px 8px; }
+  .tenantStoreTable tr { border-bottom: 6px solid #ffffff; }
+  .tenantStoreChildRow .tenantStorePrimary,
+  .tenantStoreEmptyRow td { padding-left: 20px; }
+  .tenantStoreEmptyRow td { grid-template-columns: minmax(86px, 34%) minmax(0, 1fr); }
 }
