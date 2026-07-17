@@ -4,6 +4,10 @@
 
 ## 最近文档更新
 
+### 2026-07-17
+
+- System Admin“租户与店铺”确认合并为单一层级列表：租户为可展开主行、店铺为所属子行，统一按租户分页并保留租户/店铺详情抽屉；实现与验收边界见 [统一层级列表设计](superpowers/specs/2026-07-17-system-admin-tenant-store-hierarchy-design.md)。
+
 ### 2026-07-16
 
 - 实现本机 Admin live 测试凭据安全门禁：严格四 key 便利文件只接受仓库外 `~/.config/ecommerce-cs-agent/admin-test-credentials.env`，校验当前 owner、父目录 `0700`、文件 `0600`、symlink 拒绝与输出脱敏，且不替代运行时 Kubernetes Secret 的初始邮箱/密码哈希管理；Customer/System 隔离登录强制把临时 `storageState` 直接写入 `/tmp/ecommerce-admin-auth-*`，失败时事务清理并要求测试结束后删除。40 项 Node 行为测试作为权威门禁，PR checks 与镜像发布 verify job 均在 Admin 安装/构建前运行，发布 job 依赖 verify；详见 [本机 Admin 测试凭据设计](superpowers/specs/2026-07-16-local-admin-test-credentials-design.md)。
