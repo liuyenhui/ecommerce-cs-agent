@@ -11,7 +11,6 @@
 .systemMetricGrid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
 .priorityPanel,
-.readinessCard,
 .healthGroups section,
 .healthSummary,
 .auditFilters {
@@ -20,7 +19,6 @@
 }
 
 .priorityPanel,
-.readinessCard,
 .healthGroups section { padding: 16px; }
 
 .priorityGrid {
@@ -53,10 +51,8 @@
   font-size: 12px;
 }
 
-.readinessList,
 .healthGroups { display: grid; gap: 12px; }
 
-.readinessCard header,
 .healthGroups li,
 .healthSummary {
   display: flex;
@@ -65,13 +61,11 @@
   gap: 12px;
 }
 
-.readinessCard header div,
 .healthGroups li div { display: grid; gap: 4px; }
 
-.readinessCard header span,
 .healthGroups li span { color: #525252; font-size: 12px; }
 
-.readinessCard em,
+.readinessTable em,
 .healthGroups em {
   border: 1px solid currentColor;
   padding: 3px 7px;
@@ -79,12 +73,26 @@
   font-style: normal;
 }
 
-.readinessCard ul,
 .healthGroups ul {
   list-style: none;
   margin: 14px 0 0;
   padding: 0;
 }
+
+.readinessTableWrap { max-width: 100%; overflow-x: auto; border: 1px solid #c6c6c6; background: #fff; }
+.readinessTable { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.readinessTable th,
+.readinessTable td { border-bottom: 1px solid #e0e0e0; padding: 11px 12px; text-align: left; vertical-align: top; }
+.readinessTable th { background: #f4f4f4; color: #393939; font-size: 12px; }
+.readinessTable th:first-child { width: 76px; }
+.readinessTable th:nth-child(2),
+.readinessTable th:nth-child(3) { width: 31%; }
+.readinessTable th:nth-child(4),
+.readinessTable th:nth-child(5) { width: 110px; }
+.readinessStoreRow:hover { background: #f4f4f4; }
+.readinessToggle { width: 32px; min-height: 32px; border-color: #8d8d8d; padding: 0; font-size: 20px; line-height: 1; }
+.readinessDetailRow > td { background: #f8f8f8; padding: 0 16px 10px 52px; }
+.readinessChecks { list-style: none; margin: 0; padding: 0; }
 
 .readinessCheck {
   border-top: 1px solid #e0e0e0;
@@ -229,6 +237,17 @@
   .providerEditor .panelActions { grid-column: auto; }
   .providerList button, .releaseCard button { width: 100%; }
   .timeseriesBars div { grid-template-columns: 1fr; }
+  .readinessTableWrap { overflow: visible; border: 0; background: transparent; }
+  .readinessTable,
+  .readinessTable tbody { display: block; }
+  .readinessTable thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .readinessTable tr { display: grid; border: 1px solid #c6c6c6; background: #fff; margin-bottom: 10px; }
+  .readinessTable td { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; border-bottom: 1px solid #e0e0e0; overflow-wrap: anywhere; }
+  .readinessTable td::before { content: attr(data-label); color: #525252; font-size: 11px; font-weight: 700; }
+  .readinessDetailRow { margin-top: -11px !important; }
+  .readinessDetailRow > td { display: block; padding: 0 12px 10px; }
+  .readinessDetailRow > td::before { display: block; margin-bottom: 4px; }
+  .readinessCheck dl { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 560px) {

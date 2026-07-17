@@ -376,25 +376,47 @@ describe("operational pages", () => {
     expect(screen.getByRole("button", { name: `查看店铺 ${storeId} 详情` }).getAttribute("title")).toBe(storeId);
   });
 
-  it("shows reason, impact and next action for every blocked readiness check", () => {
-    const html = markup(<ReadinessPage state={{
+  it("keeps readiness details collapsed and expands each store independently", () => {
+    render(<ReadinessPage state={{
       kind: "success",
       data: {
-        items: [{
-          organization_id: "org-1",
-          store_id: "store-1",
-          status: "blocked",
-          updated_at: "2026-07-15T00:00:00Z",
-          checks: [{ code: "product_content", status: "blocked", message: "缺少商品资料", reason: "尚未导入" }]
-        }],
-        page: { page: 1, page_size: 20, total: 1 }
+        items: [
+          {
+            organization_id: "org-1",
+            store_id: "store-1",
+            status: "blocked",
+            updated_at: "2026-07-15T00:00:00Z",
+            checks: [{ code: "product_content", status: "blocked", message: "缺少商品资料", reason: "尚未导入", impact: "无法回答商品问题", next_action: "导入商品资料" }]
+          },
+          {
+            organization_id: "org-2",
+            store_id: "store-2",
+            status: "warning",
+            updated_at: "2026-07-15T00:00:00Z",
+            checks: [{ code: "price_snapshot", status: "warning", message: "缺少价格", reason: "尚未同步", impact: "无法回答价格问题", next_action: "同步价格快照" }]
+          }
+        ],
+        page: { page: 1, page_size: 20, total: 2 }
       }
     }} />);
 
-    expect(html).toContain("原因");
-    expect(html).toContain("影响");
-    expect(html).toContain("下一步");
-    expect(html).toContain("尚未导入");
+    const firstToggle = screen.getByRole("button", { name: "展开店铺 store-1 的检查项" });
+    const secondToggle = screen.getByRole("button", { name: "展开店铺 store-2 的检查项" });
+    expect(firstToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(secondToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("尚未导入")).toBeNull();
+    expect(screen.queryByText("尚未同步")).toBeNull();
+    expect(screen.getAllByRole("navigation", { name: "分页" })).toHaveLength(1);
+
+    fireEvent.click(firstToggle);
+    expect(firstToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("尚未导入")).toBeDefined();
+    expect(screen.getByText("无法回答商品问题")).toBeDefined();
+    expect(screen.getByText("导入商品资料")).toBeDefined();
+    expect(screen.queryByText("尚未同步")).toBeNull();
+
+    fireEvent.click(firstToggle);
+    expect(screen.queryByText("尚未导入")).toBeNull();
   });
 
   it("only renders retry controls when the server marks a task retryable", () => {
