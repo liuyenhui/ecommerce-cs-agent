@@ -15,6 +15,10 @@ api:
   cursorSigningSecretRef:
     name: ecommerce-cs-agent-llm-cursor
     key: signing-key
+  credentialEncryptionSecretRef:
+    name: ecommerce-cs-agent-llm-credential-encryption
+    key: master-key
+  llmNodeBindingEnabled: false
   serviceAccount:
     create: true
     name: ""

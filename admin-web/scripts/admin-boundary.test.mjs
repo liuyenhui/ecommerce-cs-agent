@@ -26,31 +26,11 @@ function assertNoAdminDemoFallback(source) {
   assert.doesNotMatch(source, /(?:demo|sample|fake)[_-]?(?:organization|tenant|store|admin)[_-]?(?:fallback|default|seed)?/i);
 }
 
-function assertLlmUiUsesSecretReferencesOnly(source) {
-  const forbidden = new Set([
-    "apikey",
-    "secretvalue",
-    "rawsecret",
-    "password",
-    "accesstoken",
-    "refreshtoken",
-    "privatekey",
-    "clientsecret",
-    "authorization",
-    "bearertoken"
-  ]);
-  const identifiers = source.match(/[A-Za-z][A-Za-z0-9_-]*/g) || [];
-  for (const identifier of identifiers) {
-    const canonical = identifier.replace(/[-_]/g, "").toLowerCase();
-    assert.ok(!forbidden.has(canonical), `forbidden raw credential field ${identifier}`);
-  }
-  assert.match(source, /<label>Secret namespace<input[^>]*value=\{form\.namespace\}/);
-  assert.match(source, /<label>Secret name<input[^>]*value=\{form\.secret_name\}/);
-  assert.match(source, /<label>Secret key<input[^>]*value=\{form\.secret_key\}/);
-  assert.match(
-    source,
-    /provider\.secret_ref\.namespace[\s\S]*provider\.secret_ref\.name[\s\S]*provider\.secret_ref\.key/
-  );
+function assertLlmUiUsesOneTimeCredentialInput(source) {
+  assert.match(source, /<label>API Key[\s\S]*<input name="api_key" type="password" autoComplete="new-password"/);
+  assert.match(source, /api_key_masked/);
+  assert.doesNotMatch(source, /localStorage|sessionStorage|URLSearchParams/);
+  assert.doesNotMatch(source, /Secret namespace|secret_ref/);
 }
 
 function assertNoRawCredentialAst(source, fileName) {
@@ -76,7 +56,8 @@ function assertNoRawCredentialAst(source, fileName) {
   };
   const check = (value, loginScope) => {
     const normalized = canonical(value);
-    if (forbidden.has(normalized) && !(normalized === "password" && loginScope)) {
+    const oneTimeLlmCredential = normalized === "apikey" && /LlmGovernancePage|system-api|system-types/.test(fileName);
+    if (forbidden.has(normalized) && !oneTimeLlmCredential && !(normalized === "password" && loginScope)) {
       throw new Error(`forbidden raw credential field ${value} in ${fileName}`);
     }
   };
@@ -250,7 +231,7 @@ test("system admin keeps all nine task-oriented destinations reachable", () => {
     "系统总览",
     "租户与店铺",
     "配置完成度",
-    "LLM 治理",
+    "LLM 配置",
     "评测与发布",
     "决策追踪",
     "任务中心",
@@ -314,19 +295,19 @@ test("in-memory Admin production classes default to empty collections and factor
   assert.match(customerDataFactory, /raise RuntimeError\("DATABASE_URL is required for Customer Admin data outside test"\)/);
 });
 
-test("LLM governance UI accepts Kubernetes Secret references but no raw secret fields", () => {
+test("LLM configuration UI accepts one-time API Key input without browser persistence", () => {
   const source = [
     readRelative("system-admin/src/pages/LlmGovernancePage.tsx"),
     readRelative("system-admin/src/pages/ReleasesPage.tsx")
   ].join("\n");
 
-  assertLlmUiUsesSecretReferencesOnly(source);
+  assertLlmUiUsesOneTimeCredentialInput(source);
 });
 
 test("LLM raw-secret source guard rejects an isolated forbidden field", () => {
   assert.throws(
-    () => assertLlmUiUsesSecretReferencesOnly("const form = { secret_value: value };"),
-    /secret_value/
+    () => assertLlmUiUsesOneTimeCredentialInput("const form = { secret_value: value };"),
+    /API Key/
   );
 });
 
@@ -336,32 +317,26 @@ test("LLM raw-secret guard rejects camelCase form fields even when unrelated Sec
     return <label>API key<input name="apiKey" /></label>;
   `;
 
-  assert.throws(() => assertLlmUiUsesSecretReferencesOnly(mutant), /apiKey/);
+  assert.throws(() => assertLlmUiUsesOneTimeCredentialInput(mutant), /API Key/);
 });
 
-test("LLM raw-secret guard accepts only concrete Kubernetes Secret reference controls and rendering", () => {
+test("LLM credential guard accepts the one-time password control and masked rendering", () => {
   const safeFixture = `
-    <label>Secret namespace<input value={form.namespace} /></label>
-    <label>Secret name<input value={form.secret_name} /></label>
-    <label>Secret key<input value={form.secret_key} /></label>
-    <span>{provider.secret_ref.namespace}/{provider.secret_ref.name}:{provider.secret_ref.key}</span>
+    <label>API Key<input name="api_key" type="password" autoComplete="new-password" value={form.api_key} /></label>
+    <span>{model.api_key_masked}</span>
   `;
 
-  assert.doesNotThrow(() => assertLlmUiUsesSecretReferencesOnly(safeFixture));
+  assert.doesNotThrow(() => assertLlmUiUsesOneTimeCredentialInput(safeFixture));
 });
 
-test("Provider credential boundary keeps the real DOM allowlist regression and stable panel locator", () => {
+test("LLM credential boundary keeps the real one-time DOM regression", () => {
   const providerPage = readRelative("system-admin/src/pages/LlmGovernancePage.tsx");
   const regression = readRelative("system-admin/src/system-admin.test.tsx");
   const packageJson = JSON.parse(readRelative("package.json"));
 
-  assert.match(providerPage, /data-testid="llm-provider-panel"/);
-  assert.match(regression, /allowlists the exact Provider create and edit controls across the real rendered panel/);
-  assert.match(regression, /querySelectorAll<[^>]+>\("input, select, textarea"\)/);
-  assert.match(regression, /APPROVED_PROVIDER_CREATE_CONTROLS/);
-  assert.match(regression, /APPROVED_PROVIDER_UPDATE_CONTROLS/);
-  assert.match(regression, /providerControlMutant/);
-  assert.match(regression, /"credential", "密钥值"/);
+  assert.match(providerPage, /aria-label=\{editing \? "编辑 LLM 表单" : "添加 LLM 表单"\}/);
+  assert.match(regression, /uses a one-time password field without browser persistence/);
+  assert.match(regression, /autocomplete/);
   assert.match(packageJson.scripts.test, /system-admin\/src\/system-admin\.test\.tsx/);
 });
 

@@ -129,6 +129,8 @@ LangGraph 子图 / 异步 Worker：更复杂多 Agent 协作和后台长任务
 
 LangGraph 不作为对外 API 边界。外部系统仍只接入 `POST /v1/reply-decisions`、typed context refill、`actions/results` 和反馈接口。
 
+LLM 选择也不成为可编辑 graph：服务端注册表固定真实节点顺序与 `uses_llm/required`，System Admin 只维护全局单模型绑定。第一版不采用 fallback route；节点失败显式进入安全转人工路径。
+
 推荐用 LangGraph 承载：
 
 - 每条消息的客户阶段分类：规则和订单/物流事实优先，结构化 LLM 辅助语义分类；阶段结果作为 Reply Generator 明确输入，不允许模型自行改写签收边界或复购规则。

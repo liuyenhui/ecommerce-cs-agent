@@ -99,6 +99,14 @@ export type TraceFilters = {
 };
 
 export type LlmSecretReference = { namespace: string; name: string; key: string };
+export type LlmModel = {
+  llm_id: string; name: string; provider: "openai" | "deepseek" | "qwen" | "openai_compatible";
+  base_url: string; model_id: string; has_api_key: boolean; api_key_masked: string; enabled: boolean; status: string; revision: number;
+  last_connection_test_status?: "passed" | "failed" | null; last_connection_test_latency_ms?: number | null;
+  last_connection_test_error_code?: string | null; last_connection_tested_at?: string | null;
+};
+export type LangGraphLlmNode = { node_id: string; label: string; description: string; uses_llm: boolean; required: boolean; llm_id: string | null };
+export type LangGraphLlmBindings = { scope: "global"; revision: number; nodes: LangGraphLlmNode[] };
 export type LlmProvider = {
   provider_id: string; name: string; provider_type: "openai" | "openai_compatible" | "anthropic" | "azure_openai";
   base_url: string; secret_ref: LlmSecretReference; enabled: boolean; status: string; revision: number;

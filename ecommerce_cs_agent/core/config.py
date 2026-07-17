@@ -30,6 +30,8 @@ class Settings:
     llm_base_url: str | None = None
     llm_model: str | None = None
     llm_cursor_signing_key: str | None = None
+    llm_credential_encryption_key: str | None = None
+    llm_node_binding_enabled: bool = False
     admin_oidc_enabled: bool = False
     admin_oidc_issuer: str | None = None
     admin_oidc_client_id: str | None = None
@@ -93,6 +95,8 @@ def load_settings() -> Settings:
         llm_base_url=os.environ.get("LLM_BASE_URL"),
         llm_model=os.environ.get("LLM_MODEL"),
         llm_cursor_signing_key=os.environ.get("LLM_CURSOR_SIGNING_KEY"),
+        llm_credential_encryption_key=os.environ.get("LLM_CREDENTIAL_ENCRYPTION_KEY"),
+        llm_node_binding_enabled=_env_bool("LLM_NODE_BINDING_ENABLED"),
         admin_oidc_enabled=_env_bool("ADMIN_OIDC_ENABLED", "OIDC_ENABLED"),
         admin_oidc_issuer=_env_first_optional("ADMIN_OIDC_ISSUER", "OIDC_ISSUER"),
         admin_oidc_client_id=_env_first_optional("ADMIN_OIDC_CLIENT_ID", "OIDC_CLIENT_ID"),

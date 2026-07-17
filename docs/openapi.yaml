@@ -2885,6 +2885,140 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/system-admin/llms:
+    get:
+      tags: [System Admin LLM Configuration]
+      operationId: listSystemAdminLlms
+      summary: 查询可用 LLM
+      description: 返回全系统可用 LLM；API Key 只返回 has_api_key 和掩码，绝不返回密文或明文。
+      x-roles: [super_admin, release_admin, technical_support, security_auditor]
+      security: [{SystemAdminSession: []}]
+      responses:
+        "200":
+          description: 脱敏 LLM 列表
+          content: {application/json: {schema: {type: object, required: [items], properties: {items: {type: array, items: {$ref: "#/components/schemas/LlmModelConfig"}}}}}}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+    post:
+      tags: [System Admin LLM Configuration]
+      operationId: createSystemAdminLlm
+      summary: 添加 LLM
+      description: API Key 只允许经 HTTPS 一次性提交，服务端认证加密后仅保存密文、nonce、版本和末四位。
+      x-roles: [super_admin, release_admin]
+      security: [{SystemAdminSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, provider, base_url, model_id, api_key]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 128}
+                provider: {type: string, enum: [openai, deepseek, qwen, openai_compatible]}
+                base_url: {type: string, format: uri, pattern: "^https://"}
+                model_id: {type: string, minLength: 1, maxLength: 256}
+                api_key: {type: string, minLength: 1, maxLength: 4096, writeOnly: true}
+      responses:
+        "201":
+          description: 已创建的脱敏 LLM
+          content: {application/json: {schema: {$ref: "#/components/schemas/LlmModelConfig"}}}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+
+  /v1/system-admin/llms/{llm_id}:
+    patch:
+      tags: [System Admin LLM Configuration]
+      operationId: updateSystemAdminLlm
+      summary: 编辑、停用或安全换 Key
+      x-roles: [super_admin, release_admin]
+      security: [{SystemAdminSession: []}]
+      parameters:
+        - {name: llm_id, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_revision]
+              minProperties: 2
+              properties:
+                expected_revision: {type: integer, minimum: 1}
+                name: {type: string, minLength: 1, maxLength: 128}
+                provider: {type: string, enum: [openai, deepseek, qwen, openai_compatible]}
+                base_url: {type: string, format: uri, pattern: "^https://"}
+                model_id: {type: string, minLength: 1, maxLength: 256}
+                api_key: {type: string, minLength: 1, maxLength: 4096, writeOnly: true}
+                enabled: {type: boolean}
+      responses:
+        "200":
+          description: 更新后的脱敏 LLM
+          content: {application/json: {schema: {$ref: "#/components/schemas/LlmModelConfig"}}}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+
+  /v1/system-admin/llms/{llm_id}/connection-tests:
+    post:
+      tags: [System Admin LLM Configuration]
+      operationId: testSystemAdminLlmConnection
+      summary: 执行有界、脱敏的真实连接测试
+      x-roles: [super_admin, release_admin, technical_support]
+      security: [{SystemAdminSession: []}]
+      parameters:
+        - {name: llm_id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200": {description: 仅含状态、耗时和安全错误码}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
+  /v1/system-admin/langgraph-llm-bindings:
+    get:
+      tags: [System Admin LLM Configuration]
+      operationId: getSystemAdminLangGraphLlmBindings
+      summary: 查询服务端节点注册表和全局 LLM 绑定
+      x-roles: [super_admin, release_admin, technical_support, security_auditor]
+      security: [{SystemAdminSession: []}]
+      responses:
+        "200":
+          description: 有序节点注册表、全局 revision 与当前绑定
+          content: {application/json: {schema: {$ref: "#/components/schemas/LangGraphLlmBindings"}}}
+    put:
+      tags: [System Admin LLM Configuration]
+      operationId: replaceSystemAdminLangGraphLlmBindings
+      summary: 原子替换全部全局节点绑定
+      description: 必需节点不可为空；仅允许绑定启用且最近连接测试通过的 LLM；提交后新请求立即生效。
+      x-roles: [super_admin, release_admin]
+      security: [{SystemAdminSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_revision, bindings]
+              properties:
+                expected_revision: {type: integer, minimum: 0}
+                bindings:
+                  type: array
+                  maxItems: 32
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [node_id, llm_id]
+                    properties:
+                      node_id: {type: string, enum: [classify_service_stage, generate_candidate]}
+                      llm_id: {type: string, format: uuid}
+      responses:
+        "200":
+          description: 原子替换后的完整绑定
+          content: {application/json: {schema: {$ref: "#/components/schemas/LangGraphLlmBindings"}}}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+
 components:
   securitySchemes:
     AgentApiAuth:
@@ -3139,6 +3273,47 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
 
   schemas:
+    LlmModelConfig:
+      type: object
+      additionalProperties: false
+      required: [llm_id, name, provider, base_url, model_id, has_api_key, api_key_masked, enabled, status, revision]
+      properties:
+        llm_id: {type: string, format: uuid}
+        name: {type: string}
+        provider: {type: string, enum: [openai, deepseek, qwen, openai_compatible]}
+        base_url: {type: string, format: uri}
+        model_id: {type: string}
+        has_api_key: {type: boolean}
+        api_key_masked: {type: string, pattern: "^••••.{4}$"}
+        enabled: {type: boolean}
+        status: {type: string, enum: [untested, active, unhealthy, disabled]}
+        last_connection_test_status: {type: [string, "null"], enum: [passed, failed, null]}
+        last_connection_test_latency_ms: {type: [integer, "null"], minimum: 0}
+        last_connection_test_error_code: {type: [string, "null"]}
+        last_connection_tested_at: {type: [string, "null"], format: date-time}
+        revision: {type: integer, minimum: 1}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    LangGraphLlmBindings:
+      type: object
+      additionalProperties: false
+      required: [scope, revision, nodes]
+      properties:
+        scope: {type: string, const: global}
+        revision: {type: integer, minimum: 0}
+        nodes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [node_id, label, uses_llm, required, llm_id]
+            properties:
+              node_id: {type: string}
+              label: {type: string}
+              description: {type: string}
+              uses_llm: {type: boolean}
+              required: {type: boolean}
+              llm_id: {type: [string, "null"], format: uuid}
     LlmSecretReference:
       type: object
       additionalProperties: false

@@ -6,6 +6,9 @@
 
 ### 2026-07-17
 
+- 实施 SACS 多 LLM 与 LangGraph 节点绑定：新增认证加密模型配置、服务端节点注册表、全局原子绑定、运行时 feature flag 与幂等旧配置导入；SACS 页面收敛为“可用 LLM”和“LangGraph 节点使用的 LLM”。
+- 新运行路径要求 `LLM_CREDENTIAL_ENCRYPTION_KEY`；先保持 `LLM_NODE_BINDING_ENABLED=false` 完成 migration/import/连接测试，再切换并保留旧 `LLM_*` 一个回滚周期。API、数据库、日志、审计、trace 和浏览器不得出现 Key 明文。
+- SACS 的 LLM 目标体验确认简化为单页双区块：管理员直接添加多个 LLM（API Key 只在写入时提交并加密保存），再为全系统 LangGraph LLM 节点各绑定一个已验证模型；第一版不暴露 Secret 引用、组织路由、降级模型、运行参数、草稿或发布版本，详见 [SACS 多 LLM 与 LangGraph 节点绑定设计](superpowers/specs/2026-07-17-sacs-llm-node-configuration-design.md)。当前实现仍沿用旧治理契约，必须通过独立开发与迁移任务切换，不能把本条误认为已经上线。
 - ACS 阶段分类回归新增 30 条 Dev 模拟基线与 16 条近似表达：确定性回退现在覆盖现货/出库/派送、签收后无法开机、异味发热投诉、旧客复购升级款及运输/退换/维修叠加购买等语义；OpenAI-compatible Provider 必须保留规则已识别的主次分类，非法或不可用输出继续记录失败码并完整回退。测试同时断言预期 action 与 `simulation` 永不自动发送；实施和 Dev 迭代步骤见 [ACS 阶段分类回归加固计划](superpowers/plans/2026-07-17-service-stage-regression-hardening.md)。
 - Customer Admin 与 System Admin 的用户可见日期时间统一使用 `zh-CN`、`Asia/Shanghai` 和 `YYYY年M月D日 HH:mm:ss`；API/数据库 UTC 契约与原始技术 JSON保持不变，详见 [Admin Web 上海时区中文时间显示设计](superpowers/specs/2026-07-17-admin-shanghai-time-display-design.md)。
 - System Admin“配置完成度”确认改为按店铺分页的可展开列表：主行紧凑展示店铺、租户、状态和未通过项数量，默认收起，展开后显示检查项、原因、影响和下一步；详见 [配置完成度可展开列表设计](superpowers/specs/2026-07-17-system-admin-readiness-expandable-list-design.md)。
