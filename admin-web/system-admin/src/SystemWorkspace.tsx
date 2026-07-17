@@ -45,6 +45,21 @@ const emptyPage = (): PageEnvelope => ({ items: [], page: { page: 1, page_size: 
 const empty = <T,>(title: string, description: string): RequestState<T> => ({ kind: "empty", title, description });
 const failed = <T,>(error: unknown): RequestState<T> => requestFailure(error);
 
+export async function loadAllStores(
+  api: Pick<typeof systemApi, "stores">,
+  signal?: AbortSignal,
+  pageSize = 100
+): Promise<PageEnvelope> {
+  const first = await api.stores({ page: 1, page_size: pageSize }, signal);
+  const items = [...first.items];
+  const pageCount = Math.ceil(first.page.total / pageSize);
+  for (let page = 2; page <= pageCount; page += 1) {
+    const next = await api.stores({ page, page_size: pageSize }, signal);
+    items.push(...next.items);
+  }
+  return { items, page: { page: 1, page_size: pageSize, total: first.page.total } };
+}
+
 export async function loadDashboardSupportingData(api: Pick<typeof systemApi, "readiness" | "tasks" | "traces">, now = new Date(), signal?: AbortSignal) {
   const today = new Date(now);
   today.setUTCHours(0, 0, 0, 0);
@@ -72,7 +87,7 @@ export function SystemWorkspace({ activePage, session, setToast }: { activePage:
   const [audit, setAudit] = React.useState<RequestState<PageEnvelope>>(loading);
   const [health, setHealth] = React.useState<RequestState<SystemHealth>>(loading);
   const controllers = React.useRef(new Map<string, AbortController>());
-  const tenantPages = React.useRef({ tenants: 1, stores: 1 });
+  const tenantPage = React.useRef(1);
   const auditQuery = React.useRef<Record<string, string | number>>({ page: 1, page_size: 20 });
   const traceQuery = React.useRef<Record<string, string | number>>({ page: 1, page_size: 20 });
 
@@ -100,14 +115,14 @@ export function SystemWorkspace({ activePage, session, setToast }: { activePage:
     } catch (error) { if (!controller.signal.aborted) setDashboard(failed(error)); }
   }
 
-  async function loadTenants(tenantPage = tenantPages.current.tenants, storePage = tenantPages.current.stores) {
+  async function loadTenants(page = tenantPage.current) {
     const organizationController = beginRequest("organizations");
     const storeController = beginRequest("stores");
-    tenantPages.current = { tenants: tenantPage, stores: storePage };
+    tenantPage.current = page;
     setTenants(loading());
     const results = await Promise.allSettled([
-      systemApi.tenants({ page: tenantPage, page_size: 20 }, organizationController.signal),
-      systemApi.stores({ page: storePage, page_size: 20 }, storeController.signal)
+      systemApi.tenants({ page, page_size: 20 }, organizationController.signal),
+      loadAllStores(systemApi, storeController.signal)
     ]);
     if (organizationController.signal.aborted || storeController.signal.aborted) return;
     const failures = results.flatMap((result, index) => result.status === "rejected" ? [`${index ? "店铺" : "租户"}数据暂不可用`] : []);
@@ -124,21 +139,9 @@ export function SystemWorkspace({ activePage, session, setToast }: { activePage:
     try {
       const data = await systemApi.tenants({ page, page_size: 20 }, controller.signal);
       if (controller.signal.aborted) return;
-      tenantPages.current.tenants = page;
+      tenantPage.current = page;
       setTenants((current) => current.kind === "success" || current.kind === "partial"
         ? { ...current, data: { ...current.data, tenants: data } }
-        : current);
-    } catch (error) { if (!controller.signal.aborted) setTenants(failed(error)); }
-  }
-
-  async function loadStorePage(page: number) {
-    const controller = beginRequest("stores");
-    try {
-      const data = await systemApi.stores({ page, page_size: 20 }, controller.signal);
-      if (controller.signal.aborted) return;
-      tenantPages.current.stores = page;
-      setTenants((current) => current.kind === "success" || current.kind === "partial"
-        ? { ...current, data: { ...current.data, stores: data } }
         : current);
     } catch (error) { if (!controller.signal.aborted) setTenants(failed(error)); }
   }
@@ -228,7 +231,7 @@ export function SystemWorkspace({ activePage, session, setToast }: { activePage:
   return <div className="systemWorkspace">
     <section className="contentPane">
       {activePage === "dashboard" ? <DashboardPage state={dashboard} /> : null}
-      {activePage === "tenants" ? <TenantsPage state={tenants} onTenantPageChange={(page) => void loadTenantPage(page)} onStorePageChange={(page) => void loadStorePage(page)} /> : null}
+      {activePage === "tenants" ? <TenantsPage state={tenants} onTenantPageChange={(page) => void loadTenantPage(page)} /> : null}
       {activePage === "readiness" ? <ReadinessPage state={readiness} onPageChange={(page) => void loadReadiness(page)} /> : null}
       {activePage === "llm" ? <LlmGovernancePage roles={roles} /> : null}
       {activePage === "releases" ? <ReleasesPage roles={roles} /> : null}

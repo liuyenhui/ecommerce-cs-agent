@@ -21,6 +21,7 @@ import {
   RAIL_COLLAPSED_STORAGE_KEY,
   SystemNavigation,
   SystemWorkspace,
+  loadAllStores,
   loadDashboardSupportingData,
   persistRailCollapsed,
   readRailCollapsed,
@@ -248,6 +249,24 @@ describe("DashboardPage", () => {
 });
 
 describe("operational pages", () => {
+  it("loads every store page before building the tenant hierarchy", async () => {
+    const calls: number[] = [];
+    const api = {
+      stores: async ({ page }: Record<string, number>) => {
+        calls.push(page);
+        return page === 1
+          ? { items: [{ store_id: "store-1", organization_id: "org-1" }], page: { page: 1, page_size: 1, total: 2 } }
+          : { items: [{ store_id: "store-2", organization_id: "org-2" }], page: { page: 2, page_size: 1, total: 2 } };
+      }
+    };
+
+    const result = await loadAllStores(api as never, undefined, 1);
+
+    expect(calls).toEqual([1, 2]);
+    expect(result.items.map((item) => item.store_id)).toEqual(["store-1", "store-2"]);
+    expect(result.page.total).toBe(2);
+  });
+
   it("submits datetime-local audit bounds as timezone-aware ISO timestamps", () => {
     let submitted: Record<string, string> | undefined;
     render(<AuditPage
