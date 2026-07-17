@@ -6,6 +6,7 @@
 
 ### 2026-07-17
 
+- System Admin“当前账号”摘要改为左侧导航底部信息区，正文不再保留右侧账号列；桌面折叠时隐藏摘要，移动导航抽屉继续显示，详见 [账号摘要侧栏布局设计](superpowers/specs/2026-07-17-system-admin-account-rail-design.md)。
 - 新增 [System Admin 未满足上线条件文案设计](superpowers/specs/2026-07-17-system-admin-readiness-copy-design.md)：系统总览顶部统一表达全部未满足上线条件店铺，下方摘要明确限定为缺少商品资料，并提供进入配置完成度查看完整原因的入口。
 - System Admin“租户与店铺”已合并为单一层级列表：前端聚合全部店铺页，租户为可展开主行、店铺为所属子行，只保留租户分页并保留租户/店铺详情抽屉；组件测试覆盖多页聚合、层级归属、收起/展开、空店铺、详情和长 ID，详见 [统一层级列表设计](superpowers/specs/2026-07-17-system-admin-tenant-store-hierarchy-design.md)。
 
