@@ -76,6 +76,7 @@ def test_release_gate_runs_rollout_health_eval_and_writes_redacted_report(
             }
             return CommandResult(command=list(command), returncode=0, stdout=json.dumps(payload))
         if command[:3] == [os.sys.executable, "-m", "evals.cli"]:
+            assert command[-2:] == ["--timeout", "30.0"]
             assert env is not None
             assert env["AGENT_API_TOKEN"] == secret
             assert "KUBECONFIG_CONTENT" not in env

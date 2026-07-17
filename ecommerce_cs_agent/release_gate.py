@@ -100,6 +100,7 @@ class DevReleaseGateConfig:
     poll_interval_seconds: float = 5.0
     timeout_seconds: int = 900
     health_timeout_seconds: float = 10.0
+    live_eval_timeout_seconds: float = 30.0
     extra_secrets: tuple[str, ...] = field(default_factory=tuple)
     required_runtime_secret_groups: tuple[tuple[str, ...], ...] = DEFAULT_RUNTIME_SECRET_GROUPS
 
@@ -700,6 +701,8 @@ def _run_live_eval(
         "live",
         "--target-url",
         config.target_url,
+        "--timeout",
+        str(config.live_eval_timeout_seconds),
     ]
     env = _minimal_eval_env(token)
     result = runner(command, env=env, timeout=config.timeout_seconds)
