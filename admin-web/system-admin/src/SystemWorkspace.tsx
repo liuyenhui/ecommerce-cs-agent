@@ -60,18 +60,32 @@ export async function loadAllStores(
   return { items, page: { page: 1, page_size: pageSize, total: first.page.total } };
 }
 
+function lacksProductContent(record: JsonRecord): record is ReadinessRecord {
+  return Array.isArray(record.checks) && record.checks.some((check) => {
+    if (!check || typeof check !== "object") return false;
+    const readinessCheck = check as JsonRecord;
+    return readinessCheck.code === "product_content" && readinessCheck.status !== "pass";
+  });
+}
+
 export async function loadDashboardSupportingData(api: Pick<typeof systemApi, "readiness" | "tasks" | "traces">, now = new Date(), signal?: AbortSignal) {
   const today = new Date(now);
   today.setUTCHours(0, 0, 0, 0);
   const results = await Promise.allSettled([
-    api.readiness({ status: "blocked", page_size: 5 }, signal),
+    api.readiness({ status: "blocked", page_size: 100 }, signal),
     api.tasks({ page_size: 5 }, signal),
     api.traces({ time_from: today.toISOString(), page_size: 5 }, signal)
   ]);
   const labels = ["配置完成度", "任务", "决策"];
+  const pages = results.map((result) => result.status === "fulfilled" ? result.value : emptyPage());
+  const productContentBlockers = pages[0].items.filter(lacksProductContent);
+  pages[0] = {
+    items: productContentBlockers.slice(0, 5),
+    page: { page: 1, page_size: 5, total: productContentBlockers.length }
+  };
   return {
     failures: results.flatMap((result, index) => result.status === "rejected" ? [`${labels[index]}数据暂不可用`] : []),
-    pages: results.map((result) => result.status === "fulfilled" ? result.value : emptyPage())
+    pages
   };
 }
 
