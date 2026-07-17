@@ -234,6 +234,11 @@ describe("DashboardPage", () => {
     expect(html).toContain("301");
     expect(html).toContain("暂无可计算数据");
     expect(html).toContain("release-real");
+    expect(html).toContain("未满足上线条件");
+    expect(html).toContain("缺少商品资料的店铺");
+    expect(html).toContain("以下店铺因缺少必要配置，暂时无法上线。");
+    expect(html).toContain("未满足上线条件包括：缺少商品资料、缺少价格配置、缺少已审核知识、API 未完成接入等情况。");
+    expect(html).not.toContain("上线阻断摘要");
     expect(html).not.toContain("999");
     expect(html).not.toContain("888");
   });
@@ -244,6 +249,8 @@ describe("DashboardPage", () => {
       readiness: { items: [], page: { page: 1, page_size: 5, total: 0 } }, tasks: { items: [], page: { page: 1, page_size: 5, total: 0 } }, decisions: { items: [], page: { page: 1, page_size: 5, total: 0 } }
     } }} />);
     expect(html).toContain("发布数据暂不可用");
+    expect(html).toContain("暂无缺少商品资料的店铺");
+    expect(html).toContain("当前摘要中没有缺少商品资料的店铺。");
     expect(html).not.toContain("暂无最近发布");
   });
 });
