@@ -208,14 +208,14 @@
 .tenantStoreEmptyRow { background: #f7f9fb; }
 .tenantStoreIdentity { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
 .tenantStoreExpand { display: inline-grid; flex: 0 0 32px; place-items: center; width: 32px; min-height: 32px; border: 0; background: transparent; color: #161616; padding: 0; }
-.tenantStoreAction { min-width: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; padding: 0; }
+.tenantStoreAction { display: block; min-width: 0; border: 0; background: transparent; color: inherit; text-align: left; white-space: normal; cursor: pointer; padding: 0; }
 .tenantStoreAction:hover { color: #0f62fe; }
 .tenantStoreAction:focus-visible,
 .tenantStoreExpand:focus-visible { outline: 2px solid #0f62fe; outline-offset: 2px; }
 .tenantStorePrimary { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 .tenantStorePrimary strong,
 .tenantStorePrimary span { display: block; overflow-wrap: anywhere; word-break: break-word; }
-.tenantStorePrimary span { margin-top: 3px; color: #525252; font-size: 12px; }
+.tenantStorePrimary span { min-width: 0; max-width: 100%; margin-top: 3px; color: #525252; font-size: 12px; }
 .tenantStoreChildRow .tenantStorePrimary,
 .tenantStoreEmptyRow td { padding-left: 50px; }
 .tenantStoreEmptyRow td { color: #525252; font-size: 13px; }
