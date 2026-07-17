@@ -4,6 +4,10 @@
 
 ## 最近文档更新
 
+### 2026-07-17
+
+- System Admin“租户与店铺”确认合并为单一层级列表：租户为可展开主行、店铺为所属子行，统一按租户分页并保留租户/店铺详情抽屉；实现与验收边界见 [统一层级列表设计](superpowers/specs/2026-07-17-system-admin-tenant-store-hierarchy-design.md)。
+
 ### 2026-07-15
 
 - Kubernetes API 与模型 Provider 的自定义 TLS socket 均在系统默认安全上下文上显式固定最低 `TLSv1.2`，保留证书校验、SNI、固定 IP 和绝对 Deadline 约束；回归测试同时覆盖集群 CA 与公共 CA 两条 context 构造路径，以满足 CodeQL 协议下限门禁。
