@@ -44,5 +44,7 @@
   "nearby-mixed-return-01":["products","rules"],
   "nearby-mixed-return-02":["products","rules"],
   "nearby-mixed-repair-01":["products","rules"],
-  "nearby-mixed-repair-02":["products","rules"]
+  "nearby-mixed-repair-02":["products","rules"],
+  "nearby-address-replace-03":[],
+  "nearby-presale-stockout-03":["products"]
 }

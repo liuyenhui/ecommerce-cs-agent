@@ -129,6 +129,28 @@ def test_classifier_preserves_deterministic_primary_and_secondary_stages() -> No
     assert result["_classifier_source"] == "llm_hybrid"
 
 
+def test_classifier_does_not_expand_typed_context_beyond_deterministic_rules() -> None:
+    provider = _ClassificationOpenAIProvider(
+        {
+            "primary_stage": "pre_sale",
+            "secondary_stages": [],
+            "confidence": 0.8,
+            "reason_code": "purchase_intent",
+            "evidence_refs": [],
+            "needs_context": ["products", "logistics"],
+        }
+    )
+
+    result = provider.classify_service_stage(
+        message="黑色款还有库存吗，今天能安排出库吗？",
+        conversation={},
+        context={},
+    )
+
+    assert result["primary_stage"] == "pre_sale"
+    assert result["needs_context"] == ["products"]
+
+
 def test_classifier_invalid_output_falls_back_to_full_deterministic_result() -> None:
     provider = _ClassificationOpenAIProvider({})
 
