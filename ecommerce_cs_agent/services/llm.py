@@ -178,7 +178,9 @@ class OpenAICompatibleReplyProvider:
                 )
             )
             normalized["reason_code"] = "mixed_intent" if normalized["secondary_stages"] else baseline["reason_code"]
-        normalized["needs_context"] = list(dict.fromkeys([*baseline["needs_context"], *normalized["needs_context"]]))
+        # Typed context controls business-data retrieval. Keep that decision deterministic
+        # so a semantic classifier cannot broaden collection beyond validated rules.
+        normalized["needs_context"] = baseline["needs_context"]
         normalized["evidence_refs"] = list(dict.fromkeys([*baseline["evidence_refs"], *normalized["evidence_refs"]]))
         return {**normalized, "_classifier_source": "llm_hybrid", "_classifier_error": None}  # type: ignore[return-value]
 

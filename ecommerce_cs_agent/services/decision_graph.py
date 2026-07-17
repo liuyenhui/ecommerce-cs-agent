@@ -21,7 +21,10 @@ PRODUCT_KEYWORDS = (
     "商品", "产品", "材质", "尺寸", "颜色", "规格", "参数", "重量", "功率", "容量", "型号", "版本",
     "适配", "包装", "数量", "material", "size", "weight", "power", "capacity", "model", "version",
 )
-ACTION_KEYWORDS = ("改备注", "备注", "改地址", "修改地址", "收货地址", "update note", "change address")
+ACTION_KEYWORDS = (
+    "改备注", "备注", "改地址", "修改地址", "收货地址", "地址换成", "地址换到", "换收货地址",
+    "update note", "change address",
+)
 RELEVANCE_ANCHORS = (
     "材质",
     "尺寸",
