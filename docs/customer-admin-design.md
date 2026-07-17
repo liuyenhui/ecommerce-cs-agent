@@ -169,7 +169,7 @@
 | 价格快照 | `POST /v1/product-content/price-snapshots`、`GET /v1/product-content/products/{product_id}/health` | 维护价格快照并检查资料健康状态。 |
 | 规则配置 | `POST /v1/rules/store-rules`、`POST /v1/rules/platform-rules` | 维护店铺级和平台级规则。 |
 | 动作能力 | `POST /v1/capabilities/action-capabilities` | 维护外部动作能力清单和触发表达。 |
-| 消息历史与模拟 | `GET /v1/admin/message-traces`、`GET /v1/message-traces/{decision_id}`、`POST /v1/admin/message-simulations` | 查询本店铺消息历史、AI/人工回复和 LangGraph 运行回放；模拟咨询只创建 trace，不外发。 |
+| 消息历史与模拟 | `GET /v1/admin/message-traces`、`GET /v1/message-traces/{decision_id}`、`POST /v1/admin/message-simulations` | 查询本店铺消息历史、AI/人工回复和 LangGraph 运行回放；AI 消息气泡显示售前/售中/售后/待判定 Badge，决策路径展示主次分类、置信度、理由码和脱敏证据；模拟咨询只创建 trace，不外发。 |
 | 审计查询 | `GET /v1/admin/audit-logs`、`GET /v1/message-traces/{decision_id}` | 查询后台变更和消息决策追踪。 |
 
 接口约束：

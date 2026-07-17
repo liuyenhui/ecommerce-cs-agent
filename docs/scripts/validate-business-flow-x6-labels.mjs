@@ -71,6 +71,7 @@ expect(!initSource.includes("label-agent-realtime"), 'realtime notification must
 expect(html.includes('实时通知（非本期目标）'), 'documentation must keep realtime notification marked as not in current scope');
 expect(html.includes('WebSocket(实时连接) 是后续异步通知能力'), 'documentation must explain WebSocket realtime notification as future async capability');
 expect(initSource.includes('context_requests[]'), 'business flow must show context_requests[] from the new API design');
+expect(html.includes('service_stage(售前/售中/售后/待判定分类)'), 'business flow must describe the customer service stage response');
 expect(initSource.includes('/contexts/* 回填'), 'business flow must show typed context refill APIs');
 expect(initSource.includes('/actions/results'), 'business flow must show action result callback API');
 expect(initSource.includes('5 秒预算'), 'business flow must show the 5 second context aggregation budget');

@@ -98,6 +98,8 @@ POST <external_callback_url>
 
 商品、订单、物流和规则都是可选上下文。外部系统如果已经有低成本、可信的上下文，可以随主请求传入；如果没有，Agent 先做轻量意图和上下文需求判断，一次性返回当前可判断出的 `context_requests[]`。客户端按类型并行调用补充接口，服务端用同一个 `decision_id` 聚合上下文，直到返回明确可答复内容、动作请求或人工介入。
 
+每条客户消息独立输出 `service_stage`：`pre_sale`、`in_sale`、`after_sale` 或 `unknown`。未签收订单相关问题为售中，已签收后的使用、质量、退换和维修为售后；老用户再次购买、比较或换新仍为售前。混合诉求使用 `primary_stage + secondary_stages[]`，事实不足时返回 `unknown` 并通过 `needs_context[]` 对齐 typed `context_requests[]`，不能让模型猜测阶段。
+
 当前内部编排使用 LangGraph，`decision_id` 映射 graph `thread_id`。每次 invoke 临时创建 `InMemorySaver`，native checkpoint ID 只用于该次运行诊断，方法返回后不在长期服务实例保存 saver 或 compiled graph。typed context refill 聚合完成后从 Repository 持久化 `DecisionState` 重构输入，以同一 `decision_id/thread_id` 重新 invoke；这不是 LangGraph native snapshot 的原生 interrupt/resume。外部持久化 LangGraph checkpointer 与原生 interrupt/resume 是目标架构，当前跨进程延续依据是 PostgreSQL 中的 Repository 状态。
 
 context refill、action result 和 human feedback 必须使用已鉴权 Principal 的租户/店铺 scope 校验原决策；Connector Token 始终强制该边界，不能信任 payload 中可选的 tenant/store 字段。全局 external API Token 是平台级凭据，不作为租户隔离证明。

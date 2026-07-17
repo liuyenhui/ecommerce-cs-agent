@@ -55,6 +55,17 @@ def test_required_context_request_types_pass_when_all_types_present() -> None:
     assert all(result.passed for result in results)
 
 
+def test_expected_service_stage_is_a_hard_eval_assertion() -> None:
+    case = make_case({"expected_primary_stage": "after_sale"})
+    response = make_response({"service_stage": {"primary_stage": "pre_sale"}})
+
+    results = evaluate_hard_rules(case, response)
+
+    failure = next(result for result in results if result.name == "expected_primary_stage")
+    assert failure.passed is False
+    assert failure.failure_type == "state_flow_failure"
+
+
 def test_missing_context_request_type_reports_context_failure() -> None:
     case = make_case(
         {

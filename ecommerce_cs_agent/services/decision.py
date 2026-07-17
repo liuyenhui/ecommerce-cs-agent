@@ -8,7 +8,7 @@ from typing import Any
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.decision_graph import ReplyDecisionGraph
 from ecommerce_cs_agent.services.decision_types import DecisionState
-from ecommerce_cs_agent.services.llm import DeterministicReplyProvider, ReplyProvider
+from ecommerce_cs_agent.services.llm import ReplyProvider, reply_provider_for
 from ecommerce_cs_agent.services.repository import (
     DecisionRepository,
     InMemoryDecisionRepository,
@@ -27,7 +27,7 @@ class DecisionService:
     ):
         self.settings = settings
         self.repository = repository or _repository_for(settings)
-        self.reply_provider = reply_provider or DeterministicReplyProvider()
+        self.reply_provider = reply_provider or reply_provider_for(settings)
         self.graph = ReplyDecisionGraph(
             settings=settings,
             repository=self.repository,
@@ -324,6 +324,7 @@ class DecisionService:
             "confidence": response.get("confidence"),
             "risk_level": response.get("risk_level"),
             "decision_status": response.get("decision_status"),
+            "service_stage": response.get("service_stage"),
             "customer_message": message.get("content"),
             "ai_reply": _first_candidate_text(response),
             "human_reply": _latest_human_reply(state.feedback),

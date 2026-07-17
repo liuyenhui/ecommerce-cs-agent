@@ -73,9 +73,10 @@ def test_missing_order_logistics_returns_parallel_context_requests(monkeypatch) 
         "orders",
         "logistics",
     ]
-    assert [step["name"] for step in payload["trace"]["steps"][:3]] == [
+    assert [step["name"] for step in payload["trace"]["steps"][:4]] == [
         "normalize_request",
         "retrieve_context",
+        "classify_service_stage",
         "classify_intent",
     ]
     assert payload["trace"]["graph"]["nodes"][0]["id"] == "normalize_request"

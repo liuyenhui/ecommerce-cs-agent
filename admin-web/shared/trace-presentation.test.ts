@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { decisionStatuses, presentDecisionBadges, presentDecisionTrace } from "./trace-presentation";
+import { decisionStatuses, presentDecisionBadges, presentDecisionTrace, presentServiceStage } from "./trace-presentation";
+
+describe("presentServiceStage", () => {
+  it.each([
+    ["pre_sale", "售前"],
+    ["in_sale", "售中"],
+    ["after_sale", "售后"],
+    ["unknown", "待判定"]
+  ])("maps %s to %s", (stage, label) => {
+    expect(presentServiceStage({ primary_stage: stage })).toMatchObject({ label, raw: stage });
+  });
+
+  it("keeps legacy traces without a classification explicit", () => {
+    expect(presentServiceStage(undefined)).toEqual({ label: "未分类", raw: "", tone: "neutral" });
+  });
+});
 
 describe("presentDecisionBadges", () => {
   it("presents candidate decisions as localized badges in a stable order", () => {

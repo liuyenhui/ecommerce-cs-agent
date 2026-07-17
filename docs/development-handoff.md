@@ -4,6 +4,11 @@
 
 ## 最近文档更新
 
+### 2026-07-17
+
+- 回复决策新增逐消息 `service_stage` 分类：签收前订单问题为售中，签收后的使用/质量/退换/维修为售后，复购和再次购买归售前；混合诉求保留主次分类，事实不足返回 `unknown` 与 typed context 缺口。
+- LangGraph 在资料检索后增加 `classify_service_stage`，分类结果写入响应/trace、传给 Reply Provider，并在 Customer Admin AI 消息 Badge 与决策路径显示；64 条离线规范对话作为 CI 分类基线。
+
 ### 2026-07-16
 
 - 实现本机 Admin live 测试凭据安全门禁：严格四 key 便利文件只接受仓库外 `~/.config/ecommerce-cs-agent/admin-test-credentials.env`，校验当前 owner、父目录 `0700`、文件 `0600`、symlink 拒绝与输出脱敏，且不替代运行时 Kubernetes Secret 的初始邮箱/密码哈希管理；Customer/System 隔离登录强制把临时 `storageState` 直接写入 `/tmp/ecommerce-admin-auth-*`，失败时事务清理并要求测试结束后删除。40 项 Node 行为测试作为权威门禁，PR checks 与镜像发布 verify job 均在 Admin 安装/构建前运行，发布 job 依赖 verify；详见 [本机 Admin 测试凭据设计](superpowers/specs/2026-07-16-local-admin-test-credentials-design.md)。
