@@ -21,6 +21,7 @@ import {
   RAIL_COLLAPSED_STORAGE_KEY,
   SystemNavigation,
   SystemWorkspace,
+  loadAllStores,
   loadDashboardSupportingData,
   persistRailCollapsed,
   readRailCollapsed,
@@ -248,6 +249,24 @@ describe("DashboardPage", () => {
 });
 
 describe("operational pages", () => {
+  it("loads every store page before building the tenant hierarchy", async () => {
+    const calls: number[] = [];
+    const api = {
+      stores: async ({ page }: Record<string, number>) => {
+        calls.push(page);
+        return page === 1
+          ? { items: [{ store_id: "store-1", organization_id: "org-1" }], page: { page: 1, page_size: 1, total: 2 } }
+          : { items: [{ store_id: "store-2", organization_id: "org-2" }], page: { page: 2, page_size: 1, total: 2 } };
+      }
+    };
+
+    const result = await loadAllStores(api as never, undefined, 1);
+
+    expect(calls).toEqual([1, 2]);
+    expect(result.items.map((item) => item.store_id)).toEqual(["store-1", "store-2"]);
+    expect(result.page.total).toBe(2);
+  });
+
   it("submits datetime-local audit bounds as timezone-aware ISO timestamps", () => {
     let submitted: Record<string, string> | undefined;
     render(<AuditPage
@@ -264,18 +283,66 @@ describe("operational pages", () => {
     expect(submitted?.time_to).toBe(new Date(submitted?.time_to || "").toISOString());
   });
 
-  it("uses paginated totals and keeps tenant details separate from readiness", () => {
-    const html = markup(<TenantsPage state={{
+  it("renders stores beneath their tenant in one hierarchy", () => {
+    render(<TenantsPage state={{
       kind: "success",
       data: {
-        tenants: { items: [{ organization_id: "org-1", name: "甲组织", status: "active" }], page: { page: 1, page_size: 20, total: 73 } },
-        stores: { items: [], page: { page: 1, page_size: 20, total: 109 } }
+        tenants: { items: [
+          { organization_id: "org-1", name: "甲组织", status: "active" },
+          { organization_id: "org-2", name: "乙组织", status: "active" }
+        ], page: { page: 1, page_size: 20, total: 2 } },
+        stores: { items: [
+          { store_id: "store-1", organization_id: "org-1", platform: "pdd", status: "active" }
+        ], page: { page: 1, page_size: 100, total: 1 } }
       }
     }} />);
 
-    expect(html).toContain("共 73 个租户");
-    expect(html).toContain("共 109 家店铺");
-    expect(html).not.toContain("配置完成度检查");
+    expect(screen.getByText("共 2 个租户、1 家店铺")).toBeDefined();
+    expect(screen.getByRole("table", { name: "租户与店铺" })).toBeDefined();
+    expect(screen.getByText("store-1").closest("tr")?.previousElementSibling?.textContent).toContain("甲组织");
+    expect(screen.getByText("乙组织").closest("tr")?.nextElementSibling?.textContent).toContain("暂无店铺");
+    expect(screen.queryByRole("table", { name: "店铺" })).toBeNull();
+    expect(screen.getAllByRole("navigation", { name: "分页" })).toHaveLength(1);
+  });
+
+  it("collapses tenant stores without opening details and keeps both detail drawers", () => {
+    render(<TenantsPage state={{
+      kind: "success",
+      data: {
+        tenants: { items: [{ organization_id: "org-1", name: "甲组织", status: "active" }], page: { page: 1, page_size: 20, total: 1 } },
+        stores: { items: [{ store_id: "store-1", organization_id: "org-1", platform: "pdd", status: "active" }], page: { page: 1, page_size: 100, total: 1 } }
+      }
+    }} />);
+
+    const collapse = screen.getByRole("button", { name: "收起甲组织的店铺" });
+    fireEvent.click(collapse);
+    expect(screen.queryByText("store-1")).toBeNull();
+    expect(screen.queryByText("租户详情")).toBeNull();
+    const expand = screen.getByRole("button", { name: "展开甲组织的店铺" });
+    expect(expand.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(expand);
+    fireEvent.click(screen.getByRole("button", { name: "查看店铺 store-1 详情" }));
+    expect(screen.getByRole("heading", { name: "店铺详情" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看租户 甲组织 详情" }));
+    expect(screen.getByRole("heading", { name: "租户详情" })).toBeDefined();
+  });
+
+  it("keeps long tenant and store identifiers available without widening the hierarchy", () => {
+    const tenantId = "tenant-with-an-extremely-long-identifier";
+    const storeId = "store-with-an-extremely-long-identifier";
+    const { container } = render(<TenantsPage state={{
+      kind: "success",
+      data: {
+        tenants: { items: [{ organization_id: tenantId, name: tenantId, status: "active" }], page: { page: 1, page_size: 20, total: 1 } },
+        stores: { items: [{ store_id: storeId, organization_id: tenantId, platform: "pdd", status: "active" }], page: { page: 1, page_size: 100, total: 1 } }
+      }
+    }} />);
+
+    expect(container.querySelector(".tenantStoreTableWrap")).not.toBeNull();
+    expect(screen.getByRole("button", { name: `查看租户 ${tenantId} 详情` }).getAttribute("title")).toBe(tenantId);
+    expect(screen.getByRole("button", { name: `查看店铺 ${storeId} 详情` }).getAttribute("title")).toBe(storeId);
   });
 
   it("shows reason, impact and next action for every blocked readiness check", () => {
