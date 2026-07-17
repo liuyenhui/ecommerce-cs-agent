@@ -6,6 +6,7 @@
 
 ### 2026-07-17
 
+- Dev 发布门禁的真实 quick eval 现在显式使用独立的 30 秒单请求超时，以容纳咨询阶段分类的真实 Provider 调用；健康检查与门禁总执行上限保持独立，模型不可用或超过该有界超时仍会阻断发布。
 - 回复决策新增逐消息 `service_stage` 分类：签收前订单问题为售中，签收后的使用/质量/退换/维修为售后，复购和再次购买归售前；混合诉求保留主次分类，事实不足返回 `unknown` 与 typed context 缺口。
 - LangGraph 在资料检索后增加 `classify_service_stage`，分类结果写入响应/trace、传给 Reply Provider，并在 Customer Admin AI 消息 Badge 与决策路径显示；64 条离线规范对话作为 CI 分类基线。
 - System Admin“当前账号”摘要改为左侧导航底部信息区，正文不再保留右侧账号列；桌面折叠时隐藏摘要，移动导航抽屉继续显示，详见 [账号摘要侧栏布局设计](superpowers/specs/2026-07-17-system-admin-account-rail-design.md)。
