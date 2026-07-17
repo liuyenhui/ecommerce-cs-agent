@@ -95,7 +95,7 @@ export function App() {
     onCloseToast={() => setToast(null)}
   >
     {systemSession
-      ? <SystemWorkspace session={systemSession} activePage={activePage} setToast={setToast} />
+      ? <SystemWorkspace session={systemSession} activePage={activePage} setToast={setToast} onNavigate={setActivePage} />
       : loggingOut
         ? <section className="loginSurface"><p className="inlineStatus" role="status">正在退出系统后台</p></section>
         : <LoginPanelBase title="系统后台登录" onSubmit={login} onLoggedIn={loggedIn} setToast={setToast} />}

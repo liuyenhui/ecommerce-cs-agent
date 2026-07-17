@@ -75,7 +75,7 @@ export async function loadDashboardSupportingData(api: Pick<typeof systemApi, "r
   };
 }
 
-export function SystemWorkspace({ activePage, session, setToast }: { activePage: SystemPage; session?: JsonRecord; setToast: (toast: ToastState) => void }) {
+export function SystemWorkspace({ activePage, session, setToast, onNavigate }: { activePage: SystemPage; session?: JsonRecord; setToast: (toast: ToastState) => void; onNavigate: (page: SystemPage) => void }) {
   const sessionUser = (session?.user as JsonRecord | undefined) || {};
   const roles = Array.isArray(sessionUser.roles) ? sessionUser.roles.map(String) : [];
   const [dashboard, setDashboard] = React.useState<RequestState<DashboardData>>(loading);
@@ -230,7 +230,7 @@ export function SystemWorkspace({ activePage, session, setToast }: { activePage:
 
   return <div className="systemWorkspace">
     <section className="contentPane">
-      {activePage === "dashboard" ? <DashboardPage state={dashboard} /> : null}
+      {activePage === "dashboard" ? <DashboardPage state={dashboard} onNavigate={onNavigate} /> : null}
       {activePage === "tenants" ? <TenantsPage state={tenants} onTenantPageChange={(page) => void loadTenantPage(page)} /> : null}
       {activePage === "readiness" ? <ReadinessPage state={readiness} onPageChange={(page) => void loadReadiness(page)} /> : null}
       {activePage === "llm" ? <LlmGovernancePage roles={roles} /> : null}
