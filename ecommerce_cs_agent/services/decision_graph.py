@@ -22,8 +22,12 @@ PRODUCT_KEYWORDS = (
     "适配", "包装", "数量", "material", "size", "weight", "power", "capacity", "model", "version",
 )
 ACTION_KEYWORDS = (
-    "改备注", "备注", "改地址", "修改地址", "收货地址", "地址换成", "地址换到", "换收货地址",
+    "改备注", "备注", "改地址", "修改地址", "地址换成", "地址换到", "换收货地址",
     "update note", "change address",
+)
+ACTION_ADDRESS_PATTERNS = (
+    re.compile(r"(?:收货)?地址[^，。！？?]{0,8}(?:改|修改|更换|换成|换到|替换)"),
+    re.compile(r"(?:改|修改|更换|换成|换到|替换)[^，。！？?]{0,8}(?:收货)?地址"),
 )
 RELEVANCE_ANCHORS = (
     "材质",
@@ -323,7 +327,7 @@ class ReplyDecisionGraph:
             content,
             has_product_knowledge=bool(state.get("matched_knowledge")),
         )
-        if any(word in lowered or word in content for word in ACTION_KEYWORDS):
+        if _asks_external_action(lowered, content):
             missing_context = []
         missing_context = list(dict.fromkeys([*state["service_stage"]["needs_context"], *missing_context]))
         outputs = ["intent", *[f"risk:{flag}" for flag in risk_flags], *[f"missing_context:{item}" for item in missing_context]]
@@ -366,7 +370,7 @@ class ReplyDecisionGraph:
         satisfied = set()
         if state.get("matched_knowledge"):
             satisfied.add("products")
-        if any(word in state["lowered"] or word in state["content"] for word in ACTION_KEYWORDS):
+        if _asks_external_action(state["lowered"], state["content"]):
             satisfied.update({"orders", "products", "logistics"})
         classification = {
             **classification,
@@ -405,7 +409,7 @@ class ReplyDecisionGraph:
     def _action_gate(self, state: ReplyDecisionGraphState) -> ReplyDecisionGraphState:
         content = state["content"]
         lowered = state["lowered"]
-        route = "action_request" if any(word in lowered or word in content for word in ACTION_KEYWORDS) else "candidate"
+        route = "action_request" if _asks_external_action(lowered, content) else "candidate"
         outputs = ["action_request"] if route == "action_request" else ["candidate_requested"]
         return _with_step(_take(state, route), "action_gate", inputs_ref=["context_complete"], outputs_ref=outputs)
 
@@ -648,6 +652,12 @@ def _candidate_confidence(candidates: list[dict[str, Any]]) -> float:
     if not candidates:
         return 0.0
     return max(float(candidate.get("confidence", 0.0)) for candidate in candidates)
+
+
+def _asks_external_action(lowered: str, content: str) -> bool:
+    return any(word in lowered or word in content for word in ACTION_KEYWORDS) or any(
+        pattern.search(content) for pattern in ACTION_ADDRESS_PATTERNS
+    )
 
 
 def _evidence_confidence(signals: list[dict[str, Any]]) -> float:
