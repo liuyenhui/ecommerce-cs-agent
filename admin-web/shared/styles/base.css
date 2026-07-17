@@ -415,6 +415,18 @@ pre {
   color: #dbe4ee;
 }
 
+.railFooter {
+  margin-top: 12px;
+}
+
+.railFooter .userSummary {
+  border-color: #334155;
+  background: #182235;
+}
+
+.railFooter .userSummary dt { color: #9aa7b8; }
+.railFooter .userSummary dd { color: #eef2f7; }
+
 .railCollapsed .rail {
   padding-inline: 8px;
   overflow-x: hidden;
@@ -430,6 +442,10 @@ pre {
 .railCollapsed .navList button span,
 .railCollapsed .navGroup,
 .railCollapsed .railCollapseButton span {
+  display: none;
+}
+
+.railCollapsed .railFooter {
   display: none;
 }
 
@@ -1494,6 +1510,10 @@ tbody tr:hover {
 
   .railCollapseButton {
     display: none;
+  }
+
+  .railCollapsed .railFooter {
+    display: block;
   }
 
   .appShell.navOpen .rail {

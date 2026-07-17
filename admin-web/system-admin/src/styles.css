@@ -5,15 +5,7 @@
 }
 
 .systemWorkspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
-  gap: 16px;
-  align-items: start;
-}
-
-.systemAccount {
-  position: sticky;
-  top: 18px;
+  min-width: 0;
 }
 
 .systemMetricGrid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -219,11 +211,6 @@
 .tenantStoreChildRow .tenantStorePrimary,
 .tenantStoreEmptyRow td { padding-left: 50px; }
 .tenantStoreEmptyRow td { color: #525252; font-size: 13px; }
-
-@media (max-width: 1180px) {
-  .systemWorkspace { grid-template-columns: 1fr; }
-  .systemAccount { position: static; }
-}
 
 @media (max-width: 900px) {
   .systemMetricGrid,

@@ -34,7 +34,8 @@ export function AdminFrame({
   onCloseNav,
   onCloseToast,
   railCollapsed = false,
-  onToggleRail
+  onToggleRail,
+  railFooter
 }: {
   isAuthenticated: boolean;
   mobileNavOpen: boolean;
@@ -47,6 +48,7 @@ export function AdminFrame({
   onCloseToast: () => void;
   railCollapsed?: boolean;
   onToggleRail?: () => void;
+  railFooter?: React.ReactNode;
 }) {
   const railRef = React.useRef<HTMLElement>(null);
   const mainPaneRef = React.useRef<HTMLElement>(null);
@@ -110,6 +112,7 @@ export function AdminFrame({
             {railCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
             <span>{railCollapsed ? "展开" : "收起"}</span>
           </button> : null}
+          {railFooter ? <div className="railFooter">{railFooter}</div> : null}
         </aside>
       ) : null}
       {isAuthenticated ? <button className="navBackdrop" aria-label="关闭导航" onClick={onCloseNav} /> : null}

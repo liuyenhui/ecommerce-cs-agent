@@ -1,5 +1,5 @@
 import React from "react";
-import { AdminFrame, LoginPanelBase, TopBar, useCloseOnEscape } from "../../shared/components";
+import { AdminFrame, LoginPanelBase, SystemUserSummary, TopBar, useCloseOnEscape } from "../../shared/components";
 import type { JsonRecord, ToastState } from "../../shared/types";
 import { systemApi } from "./system-api";
 import { persistRailCollapsed, readRailCollapsed, SystemNavigation, SystemWorkspace } from "./SystemWorkspace";
@@ -89,6 +89,7 @@ export function App() {
     onToggleRail={toggleRail}
     brand="System Admin"
     navigation={<SystemNavigation activePage={activePage} collapsed={railCollapsed} onChange={setActivePage} onNavigate={closeNav} />}
+    railFooter={systemSession ? <SystemUserSummary user={(systemSession.user as JsonRecord | undefined) || {}} /> : null}
     topBar={<TopBar eyebrow="SYSTEM ADMIN" title={heading.title} subtitle={heading.subtitle} showNavButton={isAuthenticated} navOpen={mobileNavOpen} onToggleNav={() => setMobileNavOpen((open) => !open)} onLogout={() => void logout()} />}
     toast={toast}
     onCloseNav={closeNav}

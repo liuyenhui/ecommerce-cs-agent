@@ -1,6 +1,6 @@
 import React from "react";
 import { Activity, Bot, Building2, ClipboardCheck, HeartPulse, ListChecks, Rocket, Search, ShieldCheck } from "lucide-react";
-import { Navigation, SystemUserSummary } from "../../shared/components";
+import { Navigation } from "../../shared/components";
 import type { JsonRecord, NavItem, ToastState } from "../../shared/types";
 import { requestFailure, systemApi } from "./system-api";
 import type { AuditFilters, DashboardData, PageEnvelope, ReadinessRecord, RequestState, SystemHealth, SystemPage, TaskRecord, TenantData, TraceFilters } from "./system-types";
@@ -254,6 +254,5 @@ export function SystemWorkspace({ activePage, session, setToast, onNavigate }: {
       {activePage === "audit" ? <AuditPage state={audit} onSearch={(filters) => void loadAudit({ ...filters, page: 1 })} onPageChange={(page) => void loadAudit({ ...auditQuery.current, page })} /> : null}
       {activePage === "health" ? <HealthPage state={health} /> : null}
     </section>
-    {session ? <aside className="systemAccount"><SystemUserSummary user={(session.user as JsonRecord | undefined) || {}} /></aside> : null}
   </div>;
 }
