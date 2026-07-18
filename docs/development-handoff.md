@@ -4,6 +4,10 @@
 
 ## 最近文档更新
 
+### 2026-07-18
+
+- ACS eval 工具新增固定脱敏店铺快照驱动的 10 组 / 30 轮安全批量模拟入口：逐轮继续复用 `POST /v1/reply-decisions`、`contexts/products|orders|logistics` 与 LangGraph，同组累积会话历史，并以事实、指代、上下文、转人工、trace、无外发和零 `blocked/needs_review` 作为硬门禁；实施与验收命令见 [ACS 安全批量模拟评测计划](superpowers/plans/2026-07-18-acs-batch-simulation-eval.md)。
+
 ### 2026-07-17
 
 - Dev 近似表达回归补齐确定性边界：地址修改支持“地址能换成/可以修改为/更换一下收货地址”等双向、有限间隔语序，按外部动作请求处理且不先索取订单；真实 LLM 只能辅助阶段语义，不得扩张规则校验后的 `needs_context[]`，避免售前库存咨询因“出库”被额外索取物流。线上发现及相邻表达已加入离线模拟语料。

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from evals.models import TestCase
+from evals.models import AgentResponse, ContextRequest, TestCase
 from evals.runner import LiveAgentClient, run_cases
 
 
@@ -49,3 +49,40 @@ def test_live_agent_client_sends_bearer_token_when_configured() -> None:
     client = LiveAgentClient("https://api.example.test", auth_token="test-token")
 
     assert client._client.headers["Authorization"] == "Bearer test-token"
+
+
+def test_live_agent_client_uses_typed_context_array_and_simulation_source() -> None:
+    case = TestCase.model_validate(
+        {
+            "case_id": "typed-refill",
+            "scenario": "product",
+            "input": {"request": {"organization_id": "org-1", "store_id": "store-1", "source": "simulation"}},
+            "public_context": {"products": [{"external_product_id": "p-1"}]},
+            "hidden_expected_behavior": {},
+        }
+    )
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"decision_id": "d-1", "decision_status": "candidate", "action": "candidate"}
+
+    class Client:
+        def post(self, endpoint, json):
+            captured.update({"endpoint": endpoint, "payload": json})
+            return Response()
+
+    client = LiveAgentClient("https://api.example.test", auth_token="test-token")
+    client._client = Client()
+    client.refill_context(
+        case,
+        AgentResponse.from_payload({"decision_id": "d-1", "decision_status": "waiting_context", "action": "context_request"}),
+        ContextRequest(context_request_id="ctx-1", type="products"),
+    )
+
+    assert captured["payload"]["products"] == [{"external_product_id": "p-1"}]
+    assert "items" not in captured["payload"]
+    assert captured["payload"]["source"] == "simulation"
