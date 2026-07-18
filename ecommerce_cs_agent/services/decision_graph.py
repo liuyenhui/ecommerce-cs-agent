@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import re
 from typing import Any, Callable, TypedDict
 
@@ -19,8 +20,10 @@ TENANT_SECURITY_KEYWORDS = ("隔壁店", "别的店", "其他店", "别人店", 
 SHIPPING_KEYWORDS = ("发货", "物流", "快递", "什么时候到", "ship", "shipping", "delivery")
 PRODUCT_KEYWORDS = (
     "商品", "产品", "材质", "尺寸", "颜色", "规格", "参数", "重量", "功率", "容量", "型号", "版本",
-    "适配", "包装", "数量", "material", "size", "weight", "power", "capacity", "model", "version",
+    "适配", "包装", "数量", "价格", "活动价", "多少钱", "库存", "有货", "买不了", "在售", "下架",
+    "适合", "能用", "免水洗", "毫升", "material", "size", "weight", "power", "capacity", "model", "version",
 )
+ORDER_KEYWORDS = ("订单", "买的什么", "买了什么", "order")
 ACTION_KEYWORDS = (
     "改备注", "备注", "改地址", "修改地址", "地址换成", "地址换到", "换收货地址",
     "update note", "change address",
@@ -670,19 +673,68 @@ def _evidence_confidence(signals: list[dict[str, Any]]) -> float:
 def _missing_context(payload: dict[str, Any], lowered: str, content: str, *, has_product_knowledge: bool = False) -> list[str]:
     context = payload.get("context") or {}
     missing: list[str] = []
-    asks_shipping = any(word in lowered or word in content for word in SHIPPING_KEYWORDS)
+    if any(word in lowered or word in content for word in ACTION_KEYWORDS):
+        return missing
+    history = " ".join(
+        str(item.get("content") or "")
+        for item in (payload.get("conversation", {}).get("messages") or [])
+        if isinstance(item, dict)
+    )
+    intent_text = f"{history} {content}"
+    intent_lowered = intent_text.lower()
+    asks_shipping = any(word in intent_lowered or word in intent_text for word in SHIPPING_KEYWORDS)
     if asks_shipping:
         if not context.get("orders"):
             missing.append("orders")
         if not context.get("logistics"):
             missing.append("logistics")
-    asks_product = any(word in lowered or word in content for word in PRODUCT_KEYWORDS)
+    asks_product = any(word in intent_lowered or word in intent_text for word in PRODUCT_KEYWORDS)
     if asks_product and not context.get("products") and not has_product_knowledge:
         missing.append("products")
+    asks_order = any(word in intent_lowered or word in intent_text for word in ORDER_KEYWORDS)
+    if asks_order and not asks_shipping and not context.get("orders"):
+        missing.append("orders")
     asks_rules = any(word in lowered or word in content for word in RULE_KEYWORDS)
     if asks_rules and not context.get("rules"):
         missing.append("rules")
     return missing
+
+
+def _context_grounded_reply(context: dict[str, Any]) -> str:
+    safe: dict[str, list[dict[str, Any]]] = {"products": [], "orders": [], "logistics": []}
+    for product in context.get("products") or []:
+        attributes = product.get("attributes") if isinstance(product.get("attributes"), dict) else {}
+        safe["products"].append(
+            {
+                "external_product_id": product.get("external_product_id"),
+                "title": product.get("title"),
+                "price": product.get("price"),
+                "status_text": attributes.get("status_text"),
+                "activity_min": attributes.get("activity_min"),
+                "stock_total": attributes.get("stock_total"),
+            }
+        )
+    for order in context.get("orders") or []:
+        raw = order.get("raw_payload") if isinstance(order.get("raw_payload"), dict) else {}
+        safe["orders"].append(
+            {
+                "external_order_id": order.get("external_order_id"),
+                "status": raw.get("status_text") or order.get("status"),
+                "items": order.get("items") or [],
+            }
+        )
+    for logistics in context.get("logistics") or []:
+        safe["logistics"].append(
+            {
+                "external_order_id": logistics.get("external_order_id"),
+                "status": logistics.get("status"),
+                "carrier": logistics.get("carrier"),
+                "tracking_no": logistics.get("tracking_no"),
+            }
+        )
+    if not any(safe.values()):
+        return ""
+    return json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
 
 
 def _knowledge_evidence(item: dict[str, Any]) -> dict[str, Any]:

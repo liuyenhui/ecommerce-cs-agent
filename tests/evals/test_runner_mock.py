@@ -86,3 +86,17 @@ def test_live_agent_client_uses_typed_context_array_and_simulation_source() -> N
     assert captured["payload"]["products"] == [{"external_product_id": "p-1"}]
     assert "items" not in captured["payload"]
     assert captured["payload"]["source"] == "simulation"
+    assert captured["payload"]["captured_at"].endswith("Z")
+
+
+def test_agent_response_accepts_partial_context_refill_without_action() -> None:
+    response = AgentResponse.from_payload(
+        {
+            "decision_id": "d-1",
+            "decision_status": "partial_context",
+            "remaining_context_requests": [{"context_request_id": "ctx-logistics", "type": "logistics"}],
+            "trace": {"steps": [{"name": "context_gate", "status": "completed"}]},
+        }
+    )
+
+    assert response.action == "context_request"

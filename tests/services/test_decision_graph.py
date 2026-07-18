@@ -8,6 +8,7 @@ import pytest
 
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.decision import DecisionService
+from ecommerce_cs_agent.services.decision_graph import _context_grounded_reply, _missing_context
 from ecommerce_cs_agent.services.llm import DeterministicReplyProvider, NodeBoundReplyProvider
 from ecommerce_cs_agent.services.repository import InMemoryDecisionRepository, PostgresDecisionRepository
 from ecommerce_cs_agent.services.service_stage import classify_service_stage
@@ -110,6 +111,30 @@ def test_product_attribute_stage_requests_products_before_candidate_generation()
     assert [request["type"] for request in response["context_requests"]] == ["products"]
     assert response["action"] == "context_request"
     assert response["candidates"] == []
+
+
+def test_context_detection_covers_price_inventory_order_and_conversation_reference() -> None:
+    empty = {"context": {}, "conversation": {"messages": []}}
+    shipping_history = {"context": {}, "conversation": {"messages": [{"content": "我的订单什么时候到？"}]}}
+
+    assert _missing_context(empty, "活动价呢", "活动价呢") == ["products"]
+    assert _missing_context(empty, "是多少毫升", "是多少毫升") == ["products"]
+    assert _missing_context(empty, "这个订单买了什么", "这个订单买了什么") == ["orders"]
+    assert _missing_context(shipping_history, "查到了吗", "查到了吗") == ["orders", "logistics"]
+    assert _missing_context(shipping_history, "帮我改备注", "帮我改备注") == []
+
+
+def test_context_grounded_reply_uses_safe_typed_fields_and_omits_raw_source_refs() -> None:
+    reply = _context_grounded_reply(
+        {
+            "products": [{"external_product_id": "p-1", "title": "宠物香波", "price": 75, "attributes": {"stock_total": 4}}],
+            "orders": [{"external_order_id": "pdd-order-abc", "items": [{"external_product_id": "p-1"}], "raw_payload": {"status_text": "已收货", "source_ref": "private-source"}}],
+            "logistics": [{"external_order_id": "pdd-order-abc", "status": "已收货", "carrier": "中通快递", "tracking_no": "******0156"}],
+        }
+    )
+
+    assert all(term in reply for term in ("宠物香波", "75", "4", "已收货", "中通快递"))
+    assert "private-source" not in reply
 
 
 def test_decision_graph_uses_approved_knowledge_for_safe_auto_reply() -> None:

@@ -107,6 +107,7 @@ class LiveAgentClient:
             "organization_id": case.request_payload.get("organization_id", "org-eval"),
             "store_id": case.request_payload.get("store_id", "store-eval"),
             "source": case.request_payload.get("source", "eval"),
+            "captured_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             context_request.type: _public_context_for(case, context_request.type),
         }
         refill_response = self._client.post(endpoint, json=payload)

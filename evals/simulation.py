@@ -17,8 +17,9 @@ from evals.models import AgentResponse, AssertionResult, ExpectedBehavior, TestC
 ALLOWED_CONTEXT_TYPES = {"products", "orders", "logistics"}
 PRIVATE_FIELD_NAMES = {
     "buyer_name", "receiver_name", "phone", "mobile", "address",
-    "receiver_address", "full_address", "tracking_no", "tracking_number", "waybill_no",
+    "receiver_address", "full_address",
 }
+TRACKING_FIELD_NAMES = {"tracking_no", "tracking_number", "waybill_no"}
 PHONE_RE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
 
 
@@ -31,6 +32,8 @@ class SimulationGeneration(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model: str = Field(min_length=1)
     snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{24,64}$")
+    generated_at: str | None = None
+    steps: list[str] = Field(default_factory=list)
 
 
 class SimulationExpected(BaseModel):
@@ -150,6 +153,8 @@ class SimulationRunner:
                         "agent_response": final.raw,
                         "fixture": {
                             "generation_model": fixture.generation.model,
+                            "generated_at": fixture.generation.generated_at,
+                            "generation_steps": fixture.generation.steps,
                             "snapshot_sha256": fixture.generation.snapshot_sha256,
                         },
                     }
@@ -168,6 +173,8 @@ class SimulationRunner:
             "run_id": run_id,
             "suite": fixture.suite,
             "generation_model": fixture.generation.model,
+            "generated_at": fixture.generation.generated_at,
+            "generation_steps": fixture.generation.steps,
             "snapshot_sha256": fixture.generation.snapshot_sha256,
             "conversations": len(fixture.conversations),
             "total_messages": len(rows),
@@ -194,10 +201,17 @@ def load_simulation_fixture(snapshot_path: Path, conversations_path: Path) -> Si
     definition = json.loads(conversations_path.read_text(encoding="utf-8"))
     declared_hash = str(definition.pop("snapshot_hash"))
     generation_model = str(definition.pop("generation_model"))
+    generated_at = definition.pop("generated_at", None)
+    generation_steps = definition.pop("generation_steps", [])
     return SimulationFixture.model_validate(
         {
             **definition,
-            "generation": {"model": generation_model, "snapshot_sha256": declared_hash},
+            "generation": {
+                "model": generation_model,
+                "snapshot_sha256": declared_hash,
+                "generated_at": generated_at,
+                "steps": generation_steps,
+            },
             "snapshot": snapshot,
         }
     )
@@ -338,6 +352,8 @@ def _validate_privacy(value: Any, path: str = "fixture") -> None:
             normalized = key.lower()
             if normalized in PRIVATE_FIELD_NAMES:
                 raise ValueError(f"private field is forbidden in simulation fixture: {path}.{key}")
+            if normalized in TRACKING_FIELD_NAMES and (not isinstance(child, str) or "*" not in child):
+                raise ValueError(f"unmasked tracking field is forbidden in simulation fixture: {path}.{key}")
             _validate_privacy(child, f"{path}.{key}")
     elif isinstance(value, list):
         for index, child in enumerate(value):

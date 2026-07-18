@@ -7,6 +7,7 @@
 ### 2026-07-18
 
 - ACS eval 工具新增固定脱敏店铺快照驱动的 10 组 / 30 轮安全批量模拟入口：逐轮继续复用 `POST /v1/reply-decisions`、`contexts/products|orders|logistics` 与 LangGraph，同组累积会话历史，并以事实、指代、上下文、转人工、trace、无外发和零 `blocked/needs_review` 作为硬门禁；实施与验收命令见 [ACS 安全批量模拟评测计划](superpowers/plans/2026-07-18-acs-batch-simulation-eval.md)。
+- 真实 K3s-backed 批量模拟暴露并修复 typed refill 缺少 `captured_at`、`partial_context` 无 `action` 的兼容问题，以及价格、库存、订单、规格和多轮指代未请求上下文、补上下文后候选未消费 typed snapshot 的问题；动作意图继续优先于历史订单上下文，避免影响既有 action request 流程。
 
 ### 2026-07-17
 

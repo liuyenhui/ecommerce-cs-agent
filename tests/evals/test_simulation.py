@@ -155,7 +155,7 @@ def test_real_redacted_snapshot_and_fixed_conversations_form_valid_fixture() -> 
         Path("evals/cases/simulation/store-972824439-conversations.json"),
     )
 
-    assert fixture.generation.snapshot_sha256 == "7e9b0144a81624a93521d0b5"
+    assert fixture.generation.snapshot_sha256 == "9128f2ef13710e6b826e271f"
     assert len(fixture.snapshot["products"]) == 17
     assert len(fixture.snapshot["orders"]) == 8
     assert len(fixture.snapshot["logistics"]) == 5
