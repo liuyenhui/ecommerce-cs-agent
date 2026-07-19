@@ -137,6 +137,35 @@ def test_context_grounded_reply_uses_safe_typed_fields_and_omits_raw_source_refs
     assert "private-source" not in reply
 
 
+def test_grounded_reply_after_product_refill_is_customer_readable() -> None:
+    service = DecisionService(Settings(environment="test"), repository=InMemoryDecisionRepository())
+    response = service.create_reply_decision(_request("req-grounded-price", "943355104583 现在多少钱？"))
+    product_request = next(item for item in response["context_requests"] if item["type"] == "products")
+
+    completed = service.refill_context(
+        response["decision_id"],
+        "products",
+        {
+            "context_request_id": product_request["context_request_id"],
+            "idempotency_key": "ctx-grounded-price",
+            "organization_id": "org-001",
+            "store_id": "store-001",
+            "captured_at": "2026-07-19T10:00:00Z",
+            "products": [
+                {"external_product_id": "943355104583", "title": "宠物免洗除臭喷雾145ml", "price": 75},
+                {"external_product_id": "unrelated-product", "title": "无关商品", "price": 999},
+            ],
+        },
+    )
+
+    reply = completed["candidates"][0]["reply_text"]
+    assert "75" in reply
+    assert "喷雾" in reply
+    assert not reply.lstrip().startswith(("{", "["))
+    assert '"products":' not in reply
+    assert "无关商品" not in reply
+
+
 def test_decision_graph_uses_approved_knowledge_for_safe_auto_reply() -> None:
     repository = _KnowledgeRepository(
         [

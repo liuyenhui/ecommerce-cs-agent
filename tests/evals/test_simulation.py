@@ -142,6 +142,37 @@ def test_simulation_assertions_reject_external_send_and_missing_trace() -> None:
     assert "no_external_send" in failures
 
 
+def test_simulation_rejects_context_dump_as_customer_reply() -> None:
+    payload = fixture_payload()
+    fixture = SimulationFixture.model_validate(payload)
+    turn = fixture.conversations[0].turns[0]
+    response = AgentResponse.from_payload(
+        {
+            "decision_id": "d-json-dump",
+            "decision_status": "candidate",
+            "action": "candidate",
+            "candidates": [
+                {
+                    "reply_text": '{"products":[{"external_product_id":"p-1","title":"宠物香波"},'
+                    '{"external_product_id":"p-2","title":"无关商品"}]}'
+                }
+            ],
+            "trace": {
+                "thread_id": "d-json-dump",
+                "graph_version": "reply-decision-graph-v1",
+                "langgraph_checkpoint_id": "cp-json-dump",
+                "steps": [{"name": "generate_candidate", "status": "completed"}],
+                "external_send": {"attempted": False},
+            },
+        }
+    )
+
+    assertions = assert_simulation_response(turn, response, fixture.snapshot)
+    failures = {item.name for item in assertions if not item.passed}
+
+    assert {"natural_language", "answers_current_question", "single_relevant_entity"} <= failures
+
+
 def test_real_redacted_snapshot_and_fixed_conversations_form_valid_fixture() -> None:
     snapshot_path = Path(
         "/Users/huiliu/.config/superpowers/worktrees/open_erp_agent/acs-context-simulation/"
