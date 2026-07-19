@@ -387,7 +387,7 @@ pre {
   grid-template-columns: 1fr;
 }
 
-.appShell.railCollapsed {
+.appShell.railCollapsed:not(.isGuest) {
   grid-template-columns: 64px minmax(0, 1fr);
 }
 

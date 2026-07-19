@@ -35,7 +35,7 @@ test("trace node badges wrap on mobile without horizontal scrolling or full-widt
 });
 
 test("desktop collapsed navigation stays accessible and exactly 64 pixels wide", () => {
-  assert.match(cssSource, /\.appShell\.railCollapsed\s*\{[\s\S]*grid-template-columns:\s*64px minmax\(0, 1fr\);/);
+  assert.match(cssSource, /\.appShell\.railCollapsed:not\(\.isGuest\)\s*\{[\s\S]*grid-template-columns:\s*64px minmax\(0, 1fr\);/);
   assert.match(sharedSource, /className="railCollapseButton"[\s\S]*aria-label=\{railCollapsed \? "展开桌面导航" : "收起桌面导航"\}/);
   assert.match(sharedSource, /aria-expanded=\{!railCollapsed\}/);
   assert.match(sharedSource, /title=\{railCollapsed \? "展开导航" : "收起导航"\}/);
