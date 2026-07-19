@@ -4,6 +4,11 @@
 
 ## 最近文档更新
 
+### 2026-07-20
+
+- ACS grounded candidate 可通过组织已发布且正在运行的 `reply_generation` 主/备路由进行受控润色；确定性层继续拥有事实、实体、动作、隐私与转人工决策，模型输出经事实清单校验后才可采用，失败或漂移时明确回退确定性草稿。
+- 模拟评测对 candidate/auto-reply 新增强制模型证据：必须包含真实模型 ID、primary/fallback 角色、`status=succeeded`、校验通过与 fallback 标记；`deterministic-reply-v1` 或 Provider 失败回退不得冒充模型成功。trace、指标和安全 question/reply 报告只保存 metadata，不保存 Prompt、消息、模型原始回复、HTTP body 或 Secret。
+
 ### 2026-07-19
 
 - ACS 固定脱敏快照模拟评测新增客户可读中文回复质量门禁：拒绝 typed-context JSON/schema dump、答非所问、无关实体和无依据承诺，并分别校验首轮 context refill 与补充后的最终动作；最终 K3s-backed 10 组 / 30 轮报告为 `reports/evals/acs-natural-replies-final-approved-20260719.{jsonl,summary.json}`，快照 hash 为 `9128f2ef13710e6b826e271f`，30/30 通过且 `blocked=0`、`needs_review=0`、无外发。

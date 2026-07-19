@@ -93,6 +93,11 @@ class RecordingClient:
                     "langgraph_checkpoint_id": "cp-1",
                     "steps": [{"name": "normalize_request", "status": "completed"}],
                     "external_send": {"attempted": False},
+                    "model": {
+                        "model_version": "configured-model", "route_role": "primary",
+                        "status": "succeeded", "fallback_used": False,
+                        "validation_status": "passed",
+                    },
                 },
             }
         )
@@ -117,6 +122,11 @@ def test_runner_accumulates_history_and_forces_simulation_source(tmp_path: Path)
     assert len(client.requests[2]["conversation"]["messages"]) == 4
     assert (tmp_path / "sim-1.jsonl").exists()
     assert (tmp_path / "sim-1-conversations.json").exists()
+    safe_rows = json.loads((tmp_path / "sim-1-conversations.json").read_text())
+    assert safe_rows[0]["model"] == {
+        "model_version": "configured-model", "route_role": "primary",
+        "status": "succeeded", "fallback_used": False, "validation_status": "passed",
+    }
     summary = json.loads((tmp_path / "sim-1-summary.json").read_text())
     assert summary["snapshot_sha256"] == fixture.generation.snapshot_sha256
     assert summary["all_messages_passed"] is True
@@ -186,6 +196,34 @@ def test_simulation_assertions_check_final_handoff_action() -> None:
     failures = {item.name for item in assert_simulation_response(turn, response, fixture.snapshot) if not item.passed}
 
     assert "final_action" in failures
+
+
+def test_simulation_rejects_deterministic_fallback_as_model_success() -> None:
+    payload = fixture_payload()
+    fixture = SimulationFixture.model_validate(payload)
+    turn = fixture.conversations[0].turns[0]
+    response = AgentResponse.from_payload(
+        {
+            "decision_id": "d-fallback",
+            "decision_status": "candidate",
+            "action": "candidate",
+            "candidates": [{"reply_text": "宠物香波"}],
+            "trace": {
+                "thread_id": "d-fallback", "graph_version": "reply-decision-graph-v1",
+                "langgraph_checkpoint_id": "cp-fallback",
+                "steps": [{"name": "generate_candidate", "status": "completed"}],
+                "external_send": {"attempted": False},
+                "model": {
+                    "model_version": "deterministic-reply-v1", "route_role": None,
+                    "status": "failed", "fallback_used": True, "validation_status": "rejected",
+                },
+            },
+        }
+    )
+
+    failures = {item.name for item in assert_simulation_response(turn, response, fixture.snapshot) if not item.passed}
+
+    assert "model_generation_succeeded" in failures
 
 
 def test_simulation_rejects_context_dump_as_customer_reply() -> None:

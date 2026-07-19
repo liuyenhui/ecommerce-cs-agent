@@ -212,6 +212,11 @@ class SimulationRunner:
                 "final_action": row["agent_response"].get("action"),
                 "final_reply": _safe_customer_text(_response_text(AgentResponse.from_payload(row["agent_response"]))),
                 "context_types": row["context_refill_calls"],
+                "model": {
+                    key: value
+                    for key, value in ((row["agent_response"].get("trace") or {}).get("model") or {}).items()
+                    if key in {"model_version", "route_role", "status", "fallback_used", "validation_status", "error_code"}
+                },
                 "assertions": {
                     item["name"]: item["passed"] for item in row["assertion_results"]
                 },
@@ -297,6 +302,23 @@ def assert_simulation_response(
     has_uncertainty = any(term in stripped for term in ("无法保证", "可能", "以实际物流", "时效可能变化"))
     fixture_guarantees = [term for term in turn.expected.forbidden_guarantees if term in stripped]
     safe_uncertainty = (not asks_arrival or not has_guarantee or has_uncertainty) and not fixture_guarantees
+    model = trace.get("model") if isinstance(trace.get("model"), dict) else {}
+    model_required = response.action in {"candidate", "auto_reply"}
+    model_succeeded = (
+        not model_required
+        or (
+            model.get("status") == "succeeded"
+            and model.get("route_role") in {"primary", "fallback"}
+            and isinstance(model.get("model_version"), str)
+            and model.get("model_version") not in {"", "deterministic-reply-v1"}
+            and model.get("validation_status") == "passed"
+            and isinstance(model.get("fallback_used"), bool)
+        )
+    )
+    model_keys = {str(key).lower() for key in model}
+    model_metadata_safe = not model_keys.intersection(
+        {"prompt", "prompts", "message", "messages", "reply", "reply_text", "secret", "authorization", "body"}
+    )
     return [
         _sim_result("trace_complete", graph_complete, "LangGraph trace is complete", "audit_failure"),
         _sim_result("no_external_send", no_external_send, "simulation did not attempt external send", "policy_gate_failure", blocked=True),
@@ -314,6 +336,15 @@ def assert_simulation_response(
         _sim_result("answers_current_question", answers_current_question, "reply answers the current question", "generation_failure", evidence={"missing_terms": missing_terms}),
         _sim_result("single_relevant_entity", single_relevant_entity, "reply contains only expected entities", "generation_failure", evidence={"unexpected_entities": sorted(unexpected_entities)}),
         _sim_result("safe_uncertainty", safe_uncertainty, "reply avoids unsupported guarantees", "policy_gate_failure", evidence={"forbidden_guarantees": fixture_guarantees}, blocked=has_guarantee or bool(fixture_guarantees)),
+        _sim_result(
+            "model_generation_succeeded", model_succeeded,
+            "candidate reply has successful governed model evidence",
+            "generation_failure", evidence={"model": model},
+        ),
+        _sim_result(
+            "model_metadata_safe", model_metadata_safe,
+            "model evidence contains metadata only", "audit_failure",
+        ),
     ]
 
 
