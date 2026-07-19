@@ -8,7 +8,7 @@ import pytest
 
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.decision import DecisionService
-from ecommerce_cs_agent.services.decision_graph import _context_grounded_reply, _missing_context
+from ecommerce_cs_agent.services.decision_graph import _missing_context
 from ecommerce_cs_agent.services.llm import DeterministicReplyProvider, NodeBoundReplyProvider
 from ecommerce_cs_agent.services.repository import InMemoryDecisionRepository, PostgresDecisionRepository
 from ecommerce_cs_agent.services.service_stage import classify_service_stage
@@ -122,19 +122,6 @@ def test_context_detection_covers_price_inventory_order_and_conversation_referen
     assert _missing_context(empty, "这个订单买了什么", "这个订单买了什么") == ["orders"]
     assert _missing_context(shipping_history, "查到了吗", "查到了吗") == ["orders", "logistics"]
     assert _missing_context(shipping_history, "帮我改备注", "帮我改备注") == []
-
-
-def test_context_grounded_reply_uses_safe_typed_fields_and_omits_raw_source_refs() -> None:
-    reply = _context_grounded_reply(
-        {
-            "products": [{"external_product_id": "p-1", "title": "宠物香波", "price": 75, "attributes": {"stock_total": 4}}],
-            "orders": [{"external_order_id": "pdd-order-abc", "items": [{"external_product_id": "p-1"}], "raw_payload": {"status_text": "已收货", "source_ref": "private-source"}}],
-            "logistics": [{"external_order_id": "pdd-order-abc", "status": "已收货", "carrier": "中通快递", "tracking_no": "******0156"}],
-        }
-    )
-
-    assert all(term in reply for term in ("宠物香波", "75", "4", "已收货", "中通快递"))
-    assert "private-source" not in reply
 
 
 def test_grounded_reply_after_product_refill_is_customer_readable() -> None:

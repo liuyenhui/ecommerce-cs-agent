@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import json
 import re
 from typing import Any, Callable, TypedDict
 
@@ -10,6 +9,7 @@ from langgraph.constants import END, START
 from langgraph.graph.state import StateGraph
 
 from ecommerce_cs_agent.core.config import Settings
+from ecommerce_cs_agent.services.grounded_reply import compose_grounded_reply
 from ecommerce_cs_agent.services.llm import ReplyProvider
 from ecommerce_cs_agent.services.repository import DecisionRepository
 from ecommerce_cs_agent.services.service_stage import ServiceStageClassification
@@ -420,19 +420,33 @@ class ReplyDecisionGraph:
         if state.get("route") != "candidate":
             return _with_step(state, "generate_candidate", inputs_ref=["action_gate"], outputs_ref=[state.get("route", "skipped")])
         evidence = [_knowledge_evidence(item) for item in state.get("matched_knowledge", [])]
-        try:
-            reply_text = self.reply_provider.generate_candidate(
+        payload = state["payload"]
+        context = payload.get("context") or {}
+        grounded = (
+            compose_grounded_reply(
                 message=state["content"],
-                knowledge=state.get("matched_knowledge", []),
-                service_stage=state["service_stage"],
-                context=state["payload"].get("context") if isinstance(state["payload"].get("context"), dict) else {},
+                history=payload.get("conversation", {}).get("messages") or [],
+                context=context,
             )
-        except Exception:
-            return _with_step(
-                {**state, "route": "handoff", "risk_flags": [*state.get("risk_flags", []), "llm_unavailable"]},
-                "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=["handoff:llm_unavailable"],
-                llm=_safe_llm_trace(self.reply_provider, "generate_candidate"), status="failed", error={"code": "llm_call_failed"},
-            )
+            if any(context.get(key) for key in ("products", "orders", "logistics"))
+            else None
+        )
+        if grounded:
+            reply_text = grounded.reply_text
+        else:
+            try:
+                reply_text = self.reply_provider.generate_candidate(
+                    message=state["content"],
+                    knowledge=state.get("matched_knowledge", []),
+                    service_stage=state["service_stage"],
+                    context=context if isinstance(context, dict) else {},
+                )
+            except Exception:
+                return _with_step(
+                    {**state, "route": "handoff", "risk_flags": [*state.get("risk_flags", []), "llm_unavailable"]},
+                    "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=["handoff:llm_unavailable"],
+                    llm=_safe_llm_trace(self.reply_provider, "generate_candidate"), status="failed", error={"code": "llm_call_failed"},
+                )
         candidate = {
             "suggestion_id": f"suggestion-{state['decision_id'][-8:]}",
             "reply_text": reply_text,
@@ -698,43 +712,6 @@ def _missing_context(payload: dict[str, Any], lowered: str, content: str, *, has
     if asks_rules and not context.get("rules"):
         missing.append("rules")
     return missing
-
-
-def _context_grounded_reply(context: dict[str, Any]) -> str:
-    safe: dict[str, list[dict[str, Any]]] = {"products": [], "orders": [], "logistics": []}
-    for product in context.get("products") or []:
-        attributes = product.get("attributes") if isinstance(product.get("attributes"), dict) else {}
-        safe["products"].append(
-            {
-                "external_product_id": product.get("external_product_id"),
-                "title": product.get("title"),
-                "price": product.get("price"),
-                "status_text": attributes.get("status_text"),
-                "activity_min": attributes.get("activity_min"),
-                "stock_total": attributes.get("stock_total"),
-            }
-        )
-    for order in context.get("orders") or []:
-        raw = order.get("raw_payload") if isinstance(order.get("raw_payload"), dict) else {}
-        safe["orders"].append(
-            {
-                "external_order_id": order.get("external_order_id"),
-                "status": raw.get("status_text") or order.get("status"),
-                "items": order.get("items") or [],
-            }
-        )
-    for logistics in context.get("logistics") or []:
-        safe["logistics"].append(
-            {
-                "external_order_id": logistics.get("external_order_id"),
-                "status": logistics.get("status"),
-                "carrier": logistics.get("carrier"),
-                "tracking_no": logistics.get("tracking_no"),
-            }
-        )
-    if not any(safe.values()):
-        return ""
-    return json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
 
 
 def _knowledge_evidence(item: dict[str, Any]) -> dict[str, Any]:
