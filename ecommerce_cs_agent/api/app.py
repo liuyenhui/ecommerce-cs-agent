@@ -134,19 +134,20 @@ def create_app(
             connection_tester=connection_tester,
             release_gate_checker=release_gate_checker,
         )
-        provider_session = (
-            RuntimeEnvironmentProviderSession.from_environment()
-            if local_acs_debug
-            else KubernetesSecretProviderConnectionTester.from_environment()
-        )
-        decisions = DecisionService(
-            settings,
-            reply_provider=GovernedReplyProvider(
-                route_repository=PostgresRuntimeRouteRepository(settings.database_url),
-                provider_client=OpenAICompatibleProviderClient(session=provider_session),
-                metric_recorder=PostgresInvocationMetricRecorder(settings.database_url),
-            ),
-        )
+        provider_session = None
+        if local_acs_debug and os.environ.get("LLM_GOVERNANCE_RUNTIME_LLM_SECRET_REF"):
+            provider_session = RuntimeEnvironmentProviderSession.from_environment()
+        elif not local_acs_debug and hasattr(connection_tester, "execute_json"):
+            provider_session = connection_tester
+        if provider_session is not None:
+            decisions = DecisionService(
+                settings,
+                reply_provider=GovernedReplyProvider(
+                    route_repository=PostgresRuntimeRouteRepository(settings.database_url),
+                    provider_client=OpenAICompatibleProviderClient(session=provider_session),
+                    metric_recorder=PostgresInvocationMetricRecorder(settings.database_url),
+                ),
+            )
     open_erp = OpenErpIntegrationService(settings)
     if llm_node_configuration_repository is not None and settings.environment.lower() != "test":
         raise RuntimeError("LLM node configuration repository injection is test-only")
