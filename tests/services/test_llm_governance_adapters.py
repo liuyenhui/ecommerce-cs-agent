@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import replace
 import json
 import threading
 import time
@@ -13,6 +14,7 @@ from ecommerce_cs_agent.services import llm_governance_adapters as adapter_modul
 from ecommerce_cs_agent.services.llm_governance_adapters import (
     KubernetesSecretProviderConnectionTester,
     PostgresEvaluationReleaseGateChecker,
+    RuntimeEnvironmentProviderSession,
     _KubernetesApiTransport,
     _PinnedProviderTransport,
 )
@@ -248,6 +250,33 @@ def test_secure_provider_session_posts_json_with_in_memory_secret(tmp_path: Path
 
     assert (status, body) == (200, b'{"ok":true}')
     assert len(provider_requests) == 1
+
+
+def test_local_runtime_session_is_bound_to_exact_secret_ref_and_origin() -> None:
+    requests: list[object] = []
+    session = RuntimeEnvironmentProviderSession(
+        allowed_namespace="runtime",
+        allowed_secret_name="llm-runtime",
+        allowed_secret_key="api-key",
+        allowed_base_url="https://models.example.test/v1",
+        secret_value="provider-secret",
+        provider_transport=lambda request, *_args: requests.append(request) or (200, b"{}"),
+        resolver=lambda *_args: ["93.184.216.34"],
+    )
+    provider = RuntimeProvider(
+        "provider", "openai_compatible", "https://models.example.test/v1", "runtime",
+        "llm-runtime", "api-key", "model", True, "active",
+    )
+    assert session.execute_json(
+        provider=provider, path="/chat/completions", payload={"model": "model"}, timeout_seconds=5
+    ) == (200, b"{}")
+    assert requests[0].headers["Authorization"] == "Bearer provider-secret"
+
+    with pytest.raises(ValueError, match="runtime_provider_binding_mismatch"):
+        session.execute_json(
+            provider=replace(provider, secret_name="other"),
+            path="/chat/completions", payload={}, timeout_seconds=5,
+        )
 
 
 @pytest.mark.parametrize(

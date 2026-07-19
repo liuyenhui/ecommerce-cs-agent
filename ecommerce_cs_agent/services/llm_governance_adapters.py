@@ -831,6 +831,96 @@ class KubernetesSecretProviderConnectionTester:
         return status, response_body
 
 
+class RuntimeEnvironmentProviderSession:
+    """Local ACS debug adapter for one Secret-derived runtime key and origin."""
+
+    def __init__(
+        self, *, allowed_namespace: str, allowed_secret_name: str,
+        allowed_secret_key: str, allowed_base_url: str, secret_value: str,
+        provider_transport: ProviderTransport | None = None,
+        resolver: Resolver = _bounded_resolver,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if (
+            not is_dns1123_label(allowed_namespace)
+            or not is_dns1123_subdomain(allowed_secret_name)
+            or not is_kubernetes_data_key(allowed_secret_key)
+            or not secret_value
+            or _contains_control(secret_value)
+        ):
+            raise RuntimeError("local runtime Provider binding is invalid")
+        self._namespace = allowed_namespace
+        self._name = allowed_secret_name
+        self._key = allowed_secret_key
+        self._base_url = str(allowed_base_url).rstrip("/")
+        self._origin = _canonical_origin(self._base_url, require_origin_only=False)
+        self._secret = secret_value
+        self._transport = provider_transport or _PinnedProviderTransport(resolver=resolver)
+        self._resolver = resolver
+        self._monotonic = monotonic
+
+    @classmethod
+    def from_environment(
+        cls, *, environ: Mapping[str, str] | None = None,
+        provider_transport: ProviderTransport | None = None,
+        resolver: Resolver = _bounded_resolver,
+    ) -> "RuntimeEnvironmentProviderSession":
+        env = os.environ if environ is None else environ
+        try:
+            reference = json.loads(env.get("LLM_GOVERNANCE_RUNTIME_LLM_SECRET_REF", ""))
+            name, key = reference["name"], reference["key"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            raise RuntimeError("local runtime Provider binding is invalid") from None
+        return cls(
+            allowed_namespace=env.get("LLM_GOVERNANCE_SECRET_NAMESPACE", ""),
+            allowed_secret_name=name,
+            allowed_secret_key=key,
+            allowed_base_url=env.get("LLM_BASE_URL", ""),
+            secret_value=env.get("LLM_API_KEY", ""),
+            provider_transport=provider_transport,
+            resolver=resolver,
+        )
+
+    def execute_json(
+        self, *, provider: Any, path: str, payload: dict[str, Any], timeout_seconds: int
+    ) -> tuple[int, bytes]:
+        if (
+            path != "/chat/completions"
+            or provider.provider_type not in {"openai", "openai_compatible"}
+            or provider.secret_namespace != self._namespace
+            or provider.secret_name != self._name
+            or provider.secret_key != self._key
+            or str(provider.base_url).rstrip("/") != self._base_url
+            or _canonical_origin(provider.base_url, require_origin_only=False) != self._origin
+        ):
+            raise ValueError("runtime_provider_binding_mismatch")
+        parsed = urlsplit(self._base_url)
+        host = parsed.hostname.encode("idna").decode("ascii").lower() if parsed.hostname else ""
+        port = parsed.port or 443
+        addresses = self._resolver(host, port, float(timeout_seconds))
+        try:
+            parsed_addresses = [ipaddress.ip_address(address) for address in addresses]
+        except ValueError:
+            raise _SecurityPolicyError("public_address_required") from None
+        if not parsed_addresses or any(not address.is_global for address in parsed_addresses):
+            raise _SecurityPolicyError("public_address_required")
+        deadline = _Deadline(self._monotonic() + min(20, max(1, timeout_seconds)), self._monotonic)
+        authority = host if port == 443 else f"{host}:{port}"
+        request = Request(
+            f"{self._base_url}{path}",
+            data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(),
+            method="POST",
+            headers={
+                "Accept": "application/json", "Content-Type": "application/json",
+                "Host": authority, "Authorization": f"Bearer {self._secret}",
+            },
+        )
+        status, body = self._transport(request, deadline, str(parsed_addresses[0]), host)
+        if 300 <= status < 400:
+            raise _SecurityPolicyError("provider_redirect_forbidden")
+        return status, body
+
+
 class PostgresEvaluationReleaseGateChecker:
     def __init__(self, database_url: str, *, connect: Callable[[str], Any] = psycopg.connect) -> None:
         self._database_url = database_url

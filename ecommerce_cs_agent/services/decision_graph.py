@@ -181,6 +181,7 @@ class ReplyDecisionGraphState(TypedDict, total=False):
     steps: list[dict[str, Any]]
     taken_conditions: list[str]
     response: dict[str, Any]
+    model_metadata: dict[str, Any]
 
 
 class ReplyDecisionGraph:
@@ -432,10 +433,10 @@ class ReplyDecisionGraph:
             else None
         )
         if grounded:
-            reply_text = grounded.reply_text
+            draft = grounded.reply_text
         else:
             try:
-                reply_text = self.reply_provider.generate_candidate(
+                draft = self.reply_provider.generate_candidate(
                     message=state["content"],
                     knowledge=state.get("matched_knowledge", []),
                     service_stage=state["service_stage"],
@@ -447,14 +448,32 @@ class ReplyDecisionGraph:
                     "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=["handoff:llm_unavailable"],
                     llm=_safe_llm_trace(self.reply_provider, "generate_candidate"), status="failed", error={"code": "llm_call_failed"},
                 )
+        model_metadata = {
+            "model_version": self.reply_provider.model_version,
+            "route_role": None,
+            "status": "not_attempted",
+            "fallback_used": False,
+            "validation_status": "not_attempted",
+        }
+        if grounded and grounded.handoff_reason in {None, "insufficient_context"}:
+            rewrite = self.reply_provider.rewrite_grounded(
+                organization_id=state["organization_id"],
+                store_id=state["store_id"],
+                question=state["content"],
+                history=payload.get("conversation", {}).get("messages") or [],
+                deterministic=draft,
+                facts=grounded.fact_manifest,
+            )
+            draft = rewrite.reply_text
+            model_metadata = rewrite.model_metadata
         candidate = {
             "suggestion_id": f"suggestion-{state['decision_id'][-8:]}",
-            "reply_text": reply_text,
+            "reply_text": draft,
             "evidence": evidence,
             "confidence": _evidence_confidence(state.get("knowledge_relevance", [])) if evidence else 0.68,
             "referenced_entity_ids": list(grounded.referenced_entity_ids) if grounded else [],
         }
-        updates = {**state, "candidates": [candidate]}
+        updates = {**state, "candidates": [candidate], "model_metadata": model_metadata}
         if grounded and grounded.handoff_reason and grounded.handoff_reason != "insufficient_context":
             updates = {**updates, "route": "handoff", "handoff_reason": grounded.handoff_reason}
         return _with_step(updates, "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=[f"candidate:{candidate['suggestion_id']}"], llm=_safe_llm_trace(self.reply_provider, "generate_candidate"))
@@ -553,6 +572,12 @@ class ReplyDecisionGraph:
             settings=self.settings,
             reply_provider=self.reply_provider,
             state=traced,
+        )
+        trace["model"] = state.get(
+            "model_metadata",
+            {"model_version": self.reply_provider.model_version, "route_role": None,
+             "status": "not_attempted", "fallback_used": False,
+             "validation_status": "not_attempted"},
         )
         payload = state["payload"]
         trace["tenant_id"] = payload.get("tenant_id") or payload.get("organization_id")

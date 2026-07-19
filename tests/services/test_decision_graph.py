@@ -9,7 +9,15 @@ import pytest
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.decision import DecisionService
 from ecommerce_cs_agent.services.decision_graph import _missing_context
-from ecommerce_cs_agent.services.llm import DeterministicReplyProvider, NodeBoundReplyProvider
+from ecommerce_cs_agent.services.grounded_reply import compose_grounded_reply
+from ecommerce_cs_agent.services.llm import DeterministicReplyProvider, GovernedReplyProvider, NodeBoundReplyProvider
+from ecommerce_cs_agent.services.llm_provider import LlmProviderError, ProviderGenerationResult
+from ecommerce_cs_agent.services.llm_runtime import (
+    InMemoryRuntimeRouteRepository,
+    RuntimeProvider,
+    RuntimeReplyRoute,
+    RuntimeRoutePolicy,
+)
 from ecommerce_cs_agent.services.repository import InMemoryDecisionRepository, PostgresDecisionRepository
 from ecommerce_cs_agent.services.service_stage import classify_service_stage
 
@@ -112,7 +120,6 @@ def test_product_attribute_stage_requests_products_before_candidate_generation()
     assert response["action"] == "context_request"
     assert response["candidates"] == []
 
-
 def test_context_detection_covers_price_inventory_order_and_conversation_reference() -> None:
     empty = {"context": {}, "conversation": {"messages": []}}
     shipping_history = {"context": {}, "conversation": {"messages": [{"content": "我的订单什么时候到？"}]}}
@@ -151,6 +158,119 @@ def test_grounded_reply_after_product_refill_is_customer_readable() -> None:
     assert not reply.lstrip().startswith(("{", "["))
     assert '"products":' not in reply
     assert "无关商品" not in reply
+
+
+class _ModelClient:
+    def __init__(self, results: list[ProviderGenerationResult | Exception]) -> None:
+        self.results = list(results)
+        self.calls: list[str] = []
+
+    def generate(self, provider, *, messages, policy):
+        self.calls.append(provider.provider_id)
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+class _MetricRecorder:
+    def __init__(self) -> None:
+        self.rows: list[dict[str, Any]] = []
+
+    def record_invocation(self, *, scenario_route_id, route_role, organization_id, store_id,
+                          input_tokens, output_tokens, latency_ms, status, error_code) -> None:
+        self.rows.append(locals() | {"self": None})
+        self.rows[-1].pop("self", None)
+
+
+def _governed_provider(results: list[ProviderGenerationResult | Exception]) -> tuple[GovernedReplyProvider, _ModelClient, _MetricRecorder]:
+    primary = RuntimeProvider(
+        "primary", "openai_compatible", "https://primary.example/v1", "runtime",
+        "primary-secret", "api-key", "model-primary", True, "active",
+    )
+    fallback = RuntimeProvider(
+        "fallback", "openai_compatible", "https://fallback.example/v1", "runtime",
+        "fallback-secret", "api-key", "model-fallback", True, "active",
+    )
+    route = RuntimeReplyRoute(
+        "route-1", "org-001", "version-1", "reply_generation", "running", True,
+        primary, fallback, RuntimeRoutePolicy(0.2, 256, 10, 0, 5, 60),
+    )
+    client = _ModelClient(results)
+    metrics = _MetricRecorder()
+    provider = GovernedReplyProvider(
+        route_repository=InMemoryRuntimeRouteRepository(
+            routes=[route], store_organizations={("org-001", "store-001")}
+        ),
+        provider_client=client,
+        metric_recorder=metrics,
+    )
+    return provider, client, metrics
+
+
+def _model_result(reply: str, *, model: str = "model-primary") -> ProviderGenerationResult:
+    return ProviderGenerationResult(
+        reply_payload={"reply_text": reply}, input_tokens=20, output_tokens=10,
+        latency_ms=7, safe_metadata={"provider_id": "provider", "model": model, "status": "succeeded"},
+    )
+
+
+def test_grounded_candidate_uses_released_primary_model_and_safe_trace() -> None:
+    provider, client, metrics = _governed_provider(
+        [_model_result("这款喷雾当前价格为75元，可以直接参考这个价格。")]
+    )
+    service = DecisionService(
+        Settings(environment="test"), repository=InMemoryDecisionRepository(), reply_provider=provider
+    )
+    initial = service.create_reply_decision(_request("req-model-primary", "943355104583 现在多少钱？"))
+    context_request = next(item for item in initial["context_requests"] if item["type"] == "products")
+
+    completed = service.refill_context(
+        initial["decision_id"], "products",
+        {"context_request_id": context_request["context_request_id"], "idempotency_key": "model-primary",
+         "organization_id": "org-001", "store_id": "store-001", "captured_at": "2026-07-20T00:00:00Z",
+         "products": [{"external_product_id": "943355104583", "title": "这款喷雾", "price": 75}]},
+    )
+
+    assert completed["candidates"][0]["reply_text"].endswith("可以直接参考这个价格。")
+    assert client.calls == ["primary"]
+    assert completed["trace"]["model"] == {
+        "model_version": "model-primary", "route_role": "primary", "status": "succeeded",
+        "fallback_used": False, "validation_status": "passed",
+    }
+    assert len(metrics.rows) == 1
+    assert "prompt" not in json.dumps(completed["trace"]["model"])
+    assert "reply" not in json.dumps(metrics.rows)
+
+
+def test_primary_failure_uses_fallback_and_unsafe_reply_uses_deterministic_draft() -> None:
+    provider, client, metrics = _governed_provider(
+        [LlmProviderError("auth_failed"), _model_result("这款喷雾当前价格为75元。", model="model-fallback")]
+    )
+    facts = compose_grounded_reply(
+        message="p 当前价格多少？", history=[],
+        context={"products": [{"external_product_id": "p", "title": "这款喷雾", "price": 75}]},
+    ).fact_manifest
+    rewrite = provider.rewrite_grounded(
+        organization_id="org-001", store_id="store-001", question="现在多少钱？",
+        history=[], deterministic="这款喷雾当前价格为75元。",
+        facts=facts,
+    )
+    assert rewrite.reply_text == "这款喷雾当前价格为75元。"
+    assert rewrite.model_metadata["route_role"] == "fallback"
+    assert rewrite.model_metadata["fallback_used"] is True
+    assert client.calls == ["primary", "fallback"]
+    assert [row["status"] for row in metrics.rows] == ["failed", "succeeded"]
+
+    unsafe_provider, _client, unsafe_metrics = _governed_provider([_model_result("库存为999件。"), LlmProviderError("timeout")])
+    unsafe = unsafe_provider.rewrite_grounded(
+        organization_id="org-001", store_id="store-001", question="现在多少钱？",
+        history=[], deterministic="这款喷雾当前价格为75元。", facts=facts,
+    )
+    assert unsafe.reply_text == "这款喷雾当前价格为75元。"
+    assert unsafe.model_metadata["status"] == "failed"
+    assert unsafe.model_metadata["validation_status"] == "rejected"
+    assert len(unsafe_metrics.rows) == 2
 
 
 def test_handoff_decision_includes_customer_readable_reply() -> None:

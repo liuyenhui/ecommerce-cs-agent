@@ -1,4 +1,5 @@
 from dataclasses import replace
+import inspect
 
 from ecommerce_cs_agent.services.llm_runtime import (
     InMemoryRuntimeRouteRepository,
@@ -6,6 +7,7 @@ from ecommerce_cs_agent.services.llm_runtime import (
     RuntimeReplyRoute,
     RuntimeRoutePolicy,
 )
+from ecommerce_cs_agent.services.repository import PostgresInvocationMetricRecorder
 
 
 def _route(*, release_status: str = "running", route_enabled: bool = True) -> RuntimeReplyRoute:
@@ -89,3 +91,15 @@ def test_requires_reply_generation_scenario_and_active_provider() -> None:
     )
 
     assert repository.resolve_reply_route(organization_id="org-a", store_id="store-a") is None
+
+
+def test_metric_recorder_api_cannot_accept_prompt_message_or_reply_content() -> None:
+    parameters = inspect.signature(PostgresInvocationMetricRecorder.record_invocation).parameters
+
+    assert "prompt" not in parameters
+    assert "message" not in parameters
+    assert "reply" not in parameters
+    assert set(parameters) == {
+        "self", "scenario_route_id", "route_role", "organization_id", "store_id",
+        "input_tokens", "output_tokens", "latency_ms", "status", "error_code",
+    }
