@@ -272,3 +272,21 @@ def test_missing_order_context_asks_for_specific_reference(message: str) -> None
 
     assert "订单尾号" in outcome.reply_text
     assert "进一步确认" not in outcome.reply_text
+
+
+def test_grounded_outcome_exposes_safe_fact_manifest_for_model_rewrite() -> None:
+    product = {
+        "external_product_id": "p-spray",
+        "title": "比熊免水洗喷雾145ml",
+        "price": 75,
+        "attributes": {"activity_min": 69},
+    }
+
+    outcome = compose_grounded_reply(
+        message="p-spray 当前活动价多少？", history=[], context={"products": [product]}
+    )
+
+    assert "69" in outcome.fact_manifest.required_terms
+    assert "69" in outcome.fact_manifest.allowed_numbers
+    assert "p-spray" not in outcome.fact_manifest.allowed_entities
+    assert "治疗" in outcome.fact_manifest.prohibited_claims

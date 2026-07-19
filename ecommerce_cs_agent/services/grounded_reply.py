@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 import re
 from typing import Any, Literal
+
+from ecommerce_cs_agent.services.reply_generation import GroundedFactManifest
 
 
 GroundedIntent = Literal[
@@ -30,6 +32,7 @@ class GroundedReplyOutcome:
     reply_text: str
     handoff_reason: str | None = None
     referenced_entity_ids: tuple[str, ...] = ()
+    fact_manifest: GroundedFactManifest = GroundedFactManifest((), (), (), ())
 
 
 def compose_grounded_reply(
@@ -61,7 +64,8 @@ def compose_grounded_reply(
             "ambiguous_reference",
             tuple(str(item.get("external_order_id")) for item in entities["orders"]),
         )
-    return render_grounded_outcome(intent=intent, entities=entities, context=context, message=message)
+    outcome = render_grounded_outcome(intent=intent, entities=entities, context=context, message=message)
+    return replace(outcome, fact_manifest=_fact_manifest(outcome.reply_text, entities))
 
 
 def classify_grounded_intent(message: str) -> GroundedIntent:
@@ -326,6 +330,32 @@ def _products_matching_message(
 def _title_specification(title: str) -> str | None:
     match = re.search(r"\d+(?:\.\d+)?\s*(?:ml|毫升|kg|千克|g|克|cm|厘米)", title, re.IGNORECASE)
     return match.group(0).replace(" ", "") if match else None
+
+
+def _fact_manifest(
+    reply_text: str, entities: dict[str, list[dict[str, Any]]]
+) -> GroundedFactManifest:
+    numbers = tuple(dict.fromkeys(re.findall(r"\d+(?:\.\d+)?", reply_text)))
+    semantic_terms = tuple(
+        term
+        for term in (
+            "活动价", "价格", "库存", "比熊", "小猫", "免水洗", "已收货",
+            "已发货", "待收货", "售罄", "已下架", "中通快递", "顺丰速运",
+        )
+        if term in reply_text
+    )
+    entities_text = tuple(
+        dict.fromkeys(
+            [_short_title(item) for item in entities["products"]]
+            + [str(item.get("carrier")) for item in entities["logistics"] if item.get("carrier")]
+        )
+    )
+    return GroundedFactManifest(
+        required_terms=numbers + semantic_terms,
+        allowed_numbers=numbers,
+        allowed_entities=entities_text,
+        prohibited_claims=("治疗", "治愈", "保证送达", "肯定送到", "一定送到"),
+    )
 
 
 def _display_order_ref(order: dict[str, Any]) -> str:
