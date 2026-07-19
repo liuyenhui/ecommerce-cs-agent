@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 GroundedIntent = Literal[
     "price",
+    "promotion_price",
     "stock",
     "availability",
     "carrier",
@@ -51,13 +52,16 @@ def compose_grounded_reply(
         )
     intent = classify_grounded_intent(message)
     entities = resolve_grounded_entities(message=message, history=history, context=context)
-    if len(entities["orders"]) > 1:
+    if len(entities["orders"]) > 1 and intent in {
+        "carrier", "logistics_status", "order_status", "order_items",
+        "tracking_reference", "arrival_guarantee",
+    }:
         return GroundedReplyOutcome(
             "找到多个相同展示尾号的订单，暂时无法确定您指的是哪一单，建议转人工客服核实。",
             "ambiguous_reference",
             tuple(str(item.get("external_order_id")) for item in entities["orders"]),
         )
-    return render_grounded_outcome(intent=intent, entities=entities, context=context)
+    return render_grounded_outcome(intent=intent, entities=entities, context=context, message=message)
 
 
 def classify_grounded_intent(message: str) -> GroundedIntent:
@@ -68,7 +72,9 @@ def classify_grounded_intent(message: str) -> GroundedIntent:
         return "comparison" if "哪个" in text or "比较" in text else (
             "stock" if "库存" in text or "呢" in text else "price"
         )
-    if any(term in text for term in ("多少钱", "价格", "活动价", "卖多少")):
+    if "活动价" in text:
+        return "promotion_price"
+    if any(term in text for term in ("多少钱", "价格", "卖多少")):
         return "price"
     if any(term in text for term in ("库存", "有货")):
         return "stock"
@@ -80,7 +86,7 @@ def classify_grounded_intent(message: str) -> GroundedIntent:
         return "tracking_reference"
     if any(term in text for term in ("肯定能到", "保证到", "一定能到")):
         return "arrival_guarantee"
-    if any(term in text for term in ("到哪一步", "物流状态", "到哪了")):
+    if any(term in text for term in ("到哪一步", "物流状态", "到哪了", "什么时候到")):
         return "logistics_status"
     if "订单" in text and any(term in text for term in ("状态", "怎样", "发货")):
         return "order_status"
@@ -102,12 +108,9 @@ def resolve_grounded_entities(
     orders = [item for item in context.get("orders") or [] if isinstance(item, dict)]
     logistics = [item for item in context.get("logistics") or [] if isinstance(item, dict)]
     explicit_products = [item for item in products if str(item.get("external_product_id") or "") in message]
+    has_explicit_product_id = bool(explicit_products)
     if not explicit_products:
-        explicit_products = [
-            item
-            for item in products
-            if any(token and token in _title(item) for token in re.findall(r"[\u4e00-\u9fff]{2,}", message))
-        ]
+        explicit_products = _products_matching_message(message, products)
     prior_text = " ".join(str(item.get("content") or "") for item in history if isinstance(item, dict))
     prior_products = [
         item
@@ -116,6 +119,13 @@ def resolve_grounded_entities(
     ]
 
     selected_products = explicit_products
+    pronoun_reference = any(term in message for term in ("这个", "这款", "它", "那", "对应商品", "里面"))
+    if pronoun_reference and prior_products and not has_explicit_product_id:
+        prior_ids = {str(item.get("external_product_id") or "") for item in prior_products}
+        prior_matches = [
+            item for item in explicit_products if str(item.get("external_product_id") or "") in prior_ids
+        ]
+        selected_products = prior_matches or [_unique_entities(prior_products, "external_product_id")[-1]]
     if not selected_products and ("前一个" in message or "后一个" in message):
         unique_prior = _unique_entities(prior_products, "external_product_id")
         if unique_prior:
@@ -163,14 +173,25 @@ def resolve_grounded_entities(
 
 
 def render_grounded_outcome(
-    *, intent: GroundedIntent, entities: dict[str, list[dict[str, Any]]], context: dict[str, Any]
+    *, intent: GroundedIntent, entities: dict[str, list[dict[str, Any]]], context: dict[str, Any], message: str
 ) -> GroundedReplyOutcome:
     products = entities["products"]
     orders = entities["orders"]
     logistics = entities["logistics"]
-    referenced: list[str] = []
-    referenced.extend(str(item.get("external_order_id")) for item in orders if item.get("external_order_id"))
-    referenced.extend(str(item.get("external_product_id")) for item in products if item.get("external_product_id"))
+    product_refs = [str(item.get("external_product_id")) for item in products if item.get("external_product_id")]
+    order_refs = [str(item.get("external_order_id")) for item in orders if item.get("external_order_id")]
+    if intent in {"price", "promotion_price", "stock", "availability", "comparison", "audience", "specification", "usage"}:
+        referenced = product_refs
+    elif intent == "order_items":
+        item_refs = [
+            str(item.get("external_product_id"))
+            for order in orders
+            for item in (order.get("items") or [])
+            if isinstance(item, dict) and item.get("external_product_id")
+        ]
+        referenced = order_refs + item_refs
+    else:
+        referenced = order_refs
 
     if intent == "comparison" and len(products) >= 2:
         first, second = products[:2]
@@ -190,6 +211,11 @@ def render_grounded_outcome(
                 f"{title}当前价格为{_money(_effective_price(product))}元。",
                 referenced_entity_ids=tuple(referenced),
             )
+        if intent == "promotion_price":
+            return GroundedReplyOutcome(
+                f"{title}当前活动价为{_money(_effective_price(product))}元。",
+                referenced_entity_ids=tuple(referenced),
+            )
         if intent == "stock":
             stock = attributes.get("stock_total")
             text = f"{title}当前库存为{stock}件。" if stock is not None else f"暂未查到{title}的库存数量。"
@@ -198,15 +224,29 @@ def render_grounded_outcome(
             status = str(attributes.get("status_text") or "状态未知")
             return GroundedReplyOutcome(f"{title}当前为“{status}”状态。", referenced_entity_ids=tuple(referenced))
         if intent == "audience":
+            audience = next(
+                (term for term in ("比熊", "小猫", "猫咪", "狗狗", "幼猫", "幼犬") if term in _title(product) and term in message),
+                None,
+            )
             return GroundedReplyOutcome(
-                f"从商品名称看，{title}适用于名称中标注的宠物类型；如果宠物有特殊皮肤情况，建议先咨询专业人士。",
+                (
+                    f"从商品名称看，这款适合{audience}使用；如果宠物有特殊皮肤情况，建议先咨询专业人士。"
+                    if audience
+                    else f"从商品名称看，{title}标注了适用宠物类型；如果宠物有特殊皮肤情况，建议先咨询专业人士。"
+                ),
                 referenced_entity_ids=tuple(referenced),
             )
         if intent == "specification":
-            return GroundedReplyOutcome(f"这款商品是{title}，规格以名称中的标注为准。", referenced_entity_ids=tuple(referenced))
+            specification = _title_specification(_title(product))
+            text = (
+                f"这款商品的规格是{specification}。"
+                if specification
+                else f"暂未查到{title}的明确规格，建议转人工客服确认。"
+            )
+            return GroundedReplyOutcome(text, referenced_entity_ids=tuple(referenced))
         if intent == "usage":
             if "免水洗" in _title(product):
-                return GroundedReplyOutcome(f"{title}属于免水洗产品，可按商品说明使用。", referenced_entity_ids=tuple(referenced))
+                return GroundedReplyOutcome(f"是的，{title}属于免水洗产品，可按商品说明使用。", referenced_entity_ids=tuple(referenced))
     if intent == "order_items" and orders:
         if products:
             names = "、".join(_title(item) for item in products)
@@ -238,7 +278,16 @@ def render_grounded_outcome(
             f"当前物流状态是“{status}”，但运输时效可能变化，无法保证明天一定送达。",
             referenced_entity_ids=tuple(referenced),
         )
-    return GroundedReplyOutcome("目前的信息不足以准确回答这个问题，建议转人工客服进一步确认。", "insufficient_context", tuple(referenced))
+    if (
+        "订单" in message
+        or any(term in message for term in ("刚才那个", "查到了吗"))
+        or "订单" in str(context)
+        or any(term in intent for term in ("order", "logistics", "arrival"))
+    ):
+        reply = "还需要订单尾号才能查询，请提供订单尾号，由人工客服继续查询。"
+    else:
+        reply = "目前的信息不足以准确回答这个问题，建议转人工客服进一步确认。"
+    return GroundedReplyOutcome(reply, "insufficient_context", tuple(referenced))
 
 
 def _unique_entities(items: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
@@ -250,6 +299,33 @@ def _unique_entities(items: list[dict[str, Any]], key: str) -> list[dict[str, An
             seen.add(value)
             result.append(item)
     return result
+
+
+def _products_matching_message(
+    message: str, products: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    chunks = re.findall(r"[\u4e00-\u9fff]+", message)
+    ngrams = {
+        chunk[start : start + size]
+        for chunk in chunks
+        for size in range(2, min(6, len(chunk)) + 1)
+        for start in range(0, len(chunk) - size + 1)
+    }
+    ignored = {"多少", "现在", "这个", "对应", "商品", "里面", "还有", "有货", "为什么"}
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for product in products:
+        matches = [token for token in ngrams - ignored if token in _title(product)]
+        if matches:
+            scored.append((max(map(len, matches)), product))
+    if not scored:
+        return []
+    best = max(score for score, _ in scored)
+    return [product for score, product in scored if score == best]
+
+
+def _title_specification(title: str) -> str | None:
+    match = re.search(r"\d+(?:\.\d+)?\s*(?:ml|毫升|kg|千克|g|克|cm|厘米)", title, re.IGNORECASE)
+    return match.group(0).replace(" ", "") if match else None
 
 
 def _display_order_ref(order: dict[str, Any]) -> str:

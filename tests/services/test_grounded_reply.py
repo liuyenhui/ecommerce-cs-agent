@@ -149,3 +149,126 @@ def test_ambiguous_order_reference_requires_handoff() -> None:
     )
     outcome = compose_grounded_reply(message="订单尾号2213是什么状态？", history=[], context=ambiguous)
     assert outcome.handoff_reason == "ambiguous_reference"
+
+
+def test_specification_preserves_volume_from_long_title() -> None:
+    product = {
+        "external_product_id": "943355104583",
+        "title": "yu东方森草香水喷雾宠物猫咪够通用干洗除臭免水洗145ml",
+        "price": 56,
+        "attributes": {},
+    }
+
+    outcome = compose_grounded_reply(
+        message="943355104583 是多少毫升？", history=[], context={"products": [product]}
+    )
+
+    assert "145ml" in outcome.reply_text
+
+
+def test_order_items_reference_product_id_without_product_refill() -> None:
+    order = {
+        "external_order_id": "pdd-order-a",
+        "items": [{"external_product_id": "931294670634"}],
+        "raw_payload": {"display_order_ref": "****1234", "product_names": ["宠物专用香波"]},
+    }
+
+    outcome = compose_grounded_reply(
+        message="这个订单买的什么？",
+        history=[{"content": "订单尾号 1234 状态怎样？"}],
+        context={"orders": [order]},
+    )
+
+    assert "931294670634" in outcome.referenced_entity_ids
+
+
+def test_product_price_after_order_does_not_reference_order_id() -> None:
+    product = {"external_product_id": "931294670634", "title": "宠物专用香波", "price": 118}
+    order = {
+        "external_order_id": "pdd-order-a",
+        "items": [{"external_product_id": "931294670634"}],
+        "raw_payload": {"display_order_ref": "****1234"},
+    }
+
+    outcome = compose_grounded_reply(
+        message="对应商品现在卖多少钱？",
+        history=[{"content": "订单尾号 1234"}, {"content": "这个订单购买的是宠物专用香波。"}],
+        context={"products": [product], "orders": [order]},
+    )
+
+    assert outcome.referenced_entity_ids == ("931294670634",)
+
+
+def test_product_keyword_beats_ambiguous_prior_orders() -> None:
+    bowl = {
+        "external_product_id": "942682179530",
+        "title": "宠物狗碗防滑饭盆",
+        "price": 20,
+        "attributes": {"stock_total": 120},
+    }
+    orders = [
+        {"external_order_id": f"pdd-order-{i}", "items": [], "raw_payload": {"display_order_ref": "****2711"}}
+        for i in range(3)
+    ]
+
+    outcome = compose_grounded_reply(
+        message="里面的狗碗还有货吗？",
+        history=[{"content": "订单尾号 2711 现在怎样？"}],
+        context={"products": [bowl], "orders": orders},
+    )
+
+    assert "库存为120件" in outcome.reply_text
+    assert outcome.handoff_reason is None
+
+
+def test_pronoun_prefers_prior_product_over_shared_title_terms() -> None:
+    prior = {"external_product_id": "p-prior", "title": "狗狗小猫免水洗喷雾", "price": 10}
+    other = {"external_product_id": "p-other", "title": "小猫免水洗护毛素", "price": 20}
+
+    outcome = compose_grounded_reply(
+        message="这个是免水洗的吗？",
+        history=[{"content": "p-prior 是多少毫升？"}, {"content": "这款商品的规格是145ml。"}],
+        context={"products": [other, prior]},
+    )
+
+    assert outcome.referenced_entity_ids == ("p-prior",)
+
+
+def test_explicit_product_id_beats_pronoun_history() -> None:
+    prior = {"external_product_id": "p-prior", "title": "喷雾", "price": 75}
+    explicit = {"external_product_id": "942682179530", "title": "狗碗", "price": 125}
+
+    outcome = compose_grounded_reply(
+        message="那 942682179530 活动价多少？",
+        history=[{"content": "p-prior 活动价多少？"}],
+        context={"products": [prior, explicit]},
+    )
+
+    assert outcome.referenced_entity_ids == ("942682179530",)
+    assert "125" in outcome.reply_text
+
+
+def test_customer_reply_leads_with_direct_answer_language() -> None:
+    product = {
+        "external_product_id": "p-spray",
+        "title": "比熊小猫通用免水洗喷雾145ml",
+        "price": 75,
+        "attributes": {"activity_min": 69},
+    }
+    context = {"products": [product]}
+
+    audience = compose_grounded_reply(message="p-spray 适合比熊吗？", history=[], context=context)
+    usage = compose_grounded_reply(message="这个是免水洗的吗？", history=[{"content": "p-spray"}], context=context)
+    promotion = compose_grounded_reply(message="p-spray 活动价呢？", history=[], context=context)
+
+    assert "这款适合比熊使用" in audience.reply_text
+    assert usage.reply_text.startswith("是的")
+    assert "当前活动价为69元" in promotion.reply_text
+
+
+@pytest.mark.parametrize("message", ["我的订单什么时候到？", "就是刚才那个，查到了吗？"])
+def test_missing_order_context_asks_for_specific_reference(message: str) -> None:
+    outcome = compose_grounded_reply(message=message, history=[], context={})
+
+    assert "订单尾号" in outcome.reply_text
+    assert "进一步确认" not in outcome.reply_text

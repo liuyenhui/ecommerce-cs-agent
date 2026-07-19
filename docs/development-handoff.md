@@ -4,6 +4,11 @@
 
 ## 最近文档更新
 
+### 2026-07-19
+
+- ACS 固定脱敏快照模拟评测新增客户可读中文回复质量门禁：拒绝 typed-context JSON/schema dump、答非所问、无关实体和无依据承诺，并分别校验首轮 context refill 与补充后的最终动作；最终 K3s-backed 10 组 / 30 轮报告为 `reports/evals/acs-natural-replies-final-approved-20260719.{jsonl,summary.json}`，快照 hash 为 `9128f2ef13710e6b826e271f`，30/30 通过且 `blocked=0`、`needs_review=0`、无外发。
+- Grounded deterministic composer 在外部 Provider 401 时只消费 typed 商品、订单与物流快照，支持活动价、规格、库存、商品/订单切换、模糊指代、脱敏运单号和安全转人工；缺订单定位时明确请求订单尾号，不生成泛泛免责或虚构到货承诺。
+
 ### 2026-07-18
 
 - ACS eval 工具新增固定脱敏店铺快照驱动的 10 组 / 30 轮安全批量模拟入口：逐轮继续复用 `POST /v1/reply-decisions`、`contexts/products|orders|logistics` 与 LangGraph，同组累积会话历史，并以事实、指代、上下文、转人工、trace、无外发和零 `blocked/needs_review` 作为硬门禁；实施与验收命令见 [ACS 安全批量模拟评测计划](superpowers/plans/2026-07-18-acs-batch-simulation-eval.md)。

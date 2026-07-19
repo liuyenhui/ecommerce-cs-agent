@@ -131,7 +131,9 @@ class SimulationRunner:
                 final.raw.setdefault(
                     "external_send", {"attempted": False, "reason": "simulation_runner_has_no_send_path"}
                 )
-                base_assertions = evaluate_hard_rules(case, initial)
+                base_assertions = [
+                    item for item in evaluate_hard_rules(case, initial) if item.name != "expected_action"
+                ]
                 simulation_assertions = assert_simulation_response(turn, final, fixture.snapshot)
                 assertions = base_assertions + simulation_assertions
                 judge = judge_response(case, final, assertions)
@@ -271,7 +273,8 @@ def assert_simulation_response(
         for entity in turn.expected.referenced_entity_ids
         if entity not in response_entities and entity not in text
     ]
-    handoff_ok = not turn.expected.handoff_required or response.action == "handoff"
+    expected_final_action = "handoff" if turn.expected.handoff_required else turn.expected.expected_action
+    final_action_ok = expected_final_action is None or response.action == expected_final_action
     stripped = text.strip()
     parsed_container = False
     try:
@@ -299,7 +302,14 @@ def assert_simulation_response(
         _sim_result("no_external_send", no_external_send, "simulation did not attempt external send", "policy_gate_failure", blocked=True),
         _sim_result("snapshot_facts", not missing_terms and not forbidden_terms, "answer is grounded in snapshot expectations", "generation_failure", evidence={"missing_terms": missing_terms, "forbidden_terms": forbidden_terms}),
         _sim_result("multi_turn_reference", not missing_entities, "multi-turn reference resolved to expected entities", "context_failure", evidence={"missing_entity_ids": missing_entities}),
-        _sim_result("handoff_policy", handoff_ok, "handoff policy matches expectation", "policy_gate_failure", blocked=turn.expected.handoff_required),
+        _sim_result(
+            "final_action",
+            final_action_ok,
+            "final action matches expectation after context refill",
+            "policy_gate_failure",
+            evidence={"expected_action": expected_final_action, "actual_action": response.action},
+            blocked=turn.expected.handoff_required,
+        ),
         _sim_result("natural_language", natural_language, "reply is concise natural language", "generation_failure"),
         _sim_result("answers_current_question", answers_current_question, "reply answers the current question", "generation_failure", evidence={"missing_terms": missing_terms}),
         _sim_result("single_relevant_entity", single_relevant_entity, "reply contains only expected entities", "generation_failure", evidence={"unexpected_entities": sorted(unexpected_entities)}),
@@ -317,7 +327,11 @@ def _turn_case(
     snapshot = fixture.snapshot
     store = snapshot.get("store", snapshot)
     now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    expected_action = "handoff" if turn.expected.handoff_required else turn.expected.expected_action
+    expected_action = (
+        "context_request"
+        if turn.expected.required_context_request_types
+        else ("handoff" if turn.expected.handoff_required else turn.expected.expected_action)
+    )
     return TestCase.model_validate(
         {
             "case_id": f"{conversation.conversation_id}-{turn.turn_id}",

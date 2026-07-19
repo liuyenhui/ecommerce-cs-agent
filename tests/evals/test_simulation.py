@@ -122,6 +122,20 @@ def test_runner_accumulates_history_and_forces_simulation_source(tmp_path: Path)
     assert summary["all_messages_passed"] is True
 
 
+def test_turn_case_expects_initial_context_request_before_final_handoff() -> None:
+    payload = fixture_payload()
+    payload["conversations"] = payload["conversations"][:1]
+    payload["conversations"][0]["turns"][0]["expected"].update(
+        {"handoff_required": True, "required_context_request_types": ["products"]}
+    )
+    fixture = SimulationFixture.model_validate(payload, context={"allow_partial": True})
+    from evals.simulation import _turn_case
+
+    case = _turn_case(fixture, fixture.conversations[0], fixture.conversations[0].turns[0], 0, [])
+
+    assert case.hidden_expected_behavior.expected_action == "context_request"
+
+
 def test_simulation_assertions_reject_external_send_and_missing_trace() -> None:
     payload = fixture_payload()
     fixture = SimulationFixture.model_validate(payload)
@@ -141,6 +155,37 @@ def test_simulation_assertions_reject_external_send_and_missing_trace() -> None:
     failures = {item.name for item in assertions if not item.passed}
     assert "trace_complete" in failures
     assert "no_external_send" in failures
+
+
+def test_simulation_assertions_check_final_handoff_action() -> None:
+    payload = fixture_payload()
+    fixture = SimulationFixture.model_validate(payload)
+    turn = fixture.conversations[0].turns[0].model_copy(
+        update={
+            "expected": fixture.conversations[0].turns[0].expected.model_copy(
+                update={"handoff_required": True, "required_answer_terms": []}
+            )
+        }
+    )
+    response = AgentResponse.from_payload(
+        {
+            "decision_id": "d-handoff",
+            "decision_status": "candidate",
+            "action": "candidate",
+            "candidates": [{"reply_text": "需要人工客服进一步核实。"}],
+            "trace": {
+                "thread_id": "d-handoff",
+                "graph_version": "reply-decision-graph-v1",
+                "langgraph_checkpoint_id": "cp-handoff",
+                "steps": [{"name": "policy_gate", "status": "completed"}],
+                "external_send": {"attempted": False},
+            },
+        }
+    )
+
+    failures = {item.name for item in assert_simulation_response(turn, response, fixture.snapshot) if not item.passed}
+
+    assert "final_action" in failures
 
 
 def test_simulation_rejects_context_dump_as_customer_reply() -> None:
@@ -284,3 +329,19 @@ def test_real_redacted_snapshot_and_fixed_conversations_form_valid_fixture() -> 
     assert len(fixture.snapshot["orders"]) == 8
     assert len(fixture.snapshot["logistics"]) == 5
     assert sum(len(item.turns) for item in fixture.conversations) == 30
+
+
+def test_fixed_missing_order_cases_require_actionable_order_reference_prompt() -> None:
+    payload = json.loads(
+        Path("evals/cases/simulation/store-972824439-conversations.json").read_text(encoding="utf-8")
+    )
+    turns = {
+        turn["turn_id"]: turn
+        for conversation in payload["conversations"]
+        for turn in conversation["turns"]
+    }
+
+    for turn_id in ("mc-1", "mc-2"):
+        terms = turns[turn_id]["expected"]["required_answer_terms"]
+        assert "请提供订单尾号" in terms
+        assert "信息不足" not in terms
