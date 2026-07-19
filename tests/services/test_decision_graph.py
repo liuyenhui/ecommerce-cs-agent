@@ -153,6 +153,18 @@ def test_grounded_reply_after_product_refill_is_customer_readable() -> None:
     assert "无关商品" not in reply
 
 
+def test_handoff_decision_includes_customer_readable_reply() -> None:
+    service = DecisionService(Settings(environment="test"), repository=InMemoryDecisionRepository())
+
+    response = service.create_reply_decision(_request("req-grounded-handoff", "帮我撤销退款并重新发货"))
+
+    assert response["action"] == "handoff"
+    assert response["candidates"]
+    reply = response["candidates"][0]["reply_text"]
+    assert "需要人工客服" in reply
+    assert not reply.lstrip().startswith(("{", "["))
+
+
 def test_decision_graph_uses_approved_knowledge_for_safe_auto_reply() -> None:
     repository = _KnowledgeRepository(
         [

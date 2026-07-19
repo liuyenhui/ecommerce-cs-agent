@@ -46,6 +46,8 @@ class SimulationExpected(BaseModel):
     required_answer_terms: list[str] = Field(default_factory=list)
     forbidden_answer_terms: list[str] = Field(default_factory=list)
     referenced_entity_ids: list[str] = Field(default_factory=list)
+    required_answer_type: str | None = None
+    forbidden_guarantees: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_context_types(self) -> "SimulationExpected":
@@ -191,6 +193,33 @@ class SimulationRunner:
         (self.reports_dir / f"{run_id}-summary.json").write_text(
             json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
+        safe_conversations = [
+            {
+                "group": row["conversation_id"],
+                "turn": row["turn_id"],
+                "scenario": row["scenario"],
+                "buyer_message": _safe_customer_text(
+                    next(
+                        turn.message
+                        for conversation in fixture.conversations
+                        if conversation.conversation_id == row["conversation_id"]
+                        for turn in conversation.turns
+                        if turn.turn_id == row["turn_id"]
+                    )
+                ),
+                "final_action": row["agent_response"].get("action"),
+                "final_reply": _safe_customer_text(_response_text(AgentResponse.from_payload(row["agent_response"]))),
+                "context_types": row["context_refill_calls"],
+                "assertions": {
+                    item["name"]: item["passed"] for item in row["assertion_results"]
+                },
+                "passed": row["passed"],
+            }
+            for row in rows
+        ]
+        (self.reports_dir / f"{run_id}-conversations.json").write_text(
+            json.dumps(safe_conversations, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
         return SimulationRunResult(
             run_id=run_id, started_at=started_at, completed_at=completed_at, rows=rows, summary=summary
         )
@@ -231,14 +260,50 @@ def assert_simulation_response(
     expected_terms.extend(str(_resolve_fact_ref(snapshot, ref)) for ref in turn.expected.fact_refs)
     missing_terms = [term for term in expected_terms if term not in text]
     forbidden_terms = [term for term in turn.expected.forbidden_answer_terms if term in text]
-    missing_entities = [entity for entity in turn.expected.referenced_entity_ids if entity not in text]
+    response_entities = {
+        str(entity)
+        for candidate in response.candidates
+        if isinstance(candidate, dict)
+        for entity in (candidate.get("referenced_entity_ids") or [])
+    }
+    missing_entities = [
+        entity
+        for entity in turn.expected.referenced_entity_ids
+        if entity not in response_entities and entity not in text
+    ]
     handoff_ok = not turn.expected.handoff_required or response.action == "handoff"
+    stripped = text.strip()
+    parsed_container = False
+    try:
+        parsed_container = isinstance(json.loads(stripped), (dict, list))
+    except (json.JSONDecodeError, TypeError):
+        pass
+    schema_key_count = sum(
+        stripped.count(key)
+        for key in ('"products"', '"orders"', '"logistics"', '"external_product_id"', '"raw_payload"')
+    )
+    natural_language = bool(stripped) and len(stripped) <= 300 and not parsed_container and schema_key_count < 2
+    generic_only = stripped in {"请以商品详情页为准。", "请以商品详情页为准", "建议咨询客服。", "建议咨询客服"}
+    answers_current_question = natural_language and not generic_only and not missing_terms
+    entity_mentions = set(re.findall(r"(?:p-\d+|product-[A-Za-z0-9_-]+|\d{12})", stripped))
+    expected_entities = set(turn.expected.referenced_entity_ids)
+    unexpected_entities = (entity_mentions | response_entities) - expected_entities if expected_entities else entity_mentions
+    single_relevant_entity = len(unexpected_entities) == 0 and len(entity_mentions) <= max(len(expected_entities), 1)
+    asks_arrival = any(term in turn.message for term in ("明天", "到货", "什么时候到", "能到"))
+    has_guarantee = any(term in stripped for term in ("肯定送到", "肯定能到", "保证送达", "一定送到"))
+    has_uncertainty = any(term in stripped for term in ("无法保证", "可能", "以实际物流", "时效可能变化"))
+    fixture_guarantees = [term for term in turn.expected.forbidden_guarantees if term in stripped]
+    safe_uncertainty = (not asks_arrival or not has_guarantee or has_uncertainty) and not fixture_guarantees
     return [
         _sim_result("trace_complete", graph_complete, "LangGraph trace is complete", "audit_failure"),
         _sim_result("no_external_send", no_external_send, "simulation did not attempt external send", "policy_gate_failure", blocked=True),
         _sim_result("snapshot_facts", not missing_terms and not forbidden_terms, "answer is grounded in snapshot expectations", "generation_failure", evidence={"missing_terms": missing_terms, "forbidden_terms": forbidden_terms}),
         _sim_result("multi_turn_reference", not missing_entities, "multi-turn reference resolved to expected entities", "context_failure", evidence={"missing_entity_ids": missing_entities}),
         _sim_result("handoff_policy", handoff_ok, "handoff policy matches expectation", "policy_gate_failure", blocked=turn.expected.handoff_required),
+        _sim_result("natural_language", natural_language, "reply is concise natural language", "generation_failure"),
+        _sim_result("answers_current_question", answers_current_question, "reply answers the current question", "generation_failure", evidence={"missing_terms": missing_terms}),
+        _sim_result("single_relevant_entity", single_relevant_entity, "reply contains only expected entities", "generation_failure", evidence={"unexpected_entities": sorted(unexpected_entities)}),
+        _sim_result("safe_uncertainty", safe_uncertainty, "reply avoids unsupported guarantees", "policy_gate_failure", evidence={"forbidden_guarantees": fixture_guarantees}, blocked=has_guarantee or bool(fixture_guarantees)),
     ]
 
 
@@ -361,3 +426,9 @@ def _validate_privacy(value: Any, path: str = "fixture") -> None:
     elif isinstance(value, str):
         if PHONE_RE.search(value):
             raise ValueError(f"private phone-like value is forbidden in simulation fixture: {path}")
+
+
+def _safe_customer_text(value: str) -> str:
+    value = re.sub(r"pdd-order-[0-9a-f]{24}", "<order-ref>", value, flags=re.IGNORECASE)
+    value = re.sub(r"(?<!\*)\b[A-Za-z]{0,4}\d{10,}\b", "<masked>", value)
+    return value

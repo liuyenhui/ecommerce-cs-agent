@@ -116,6 +116,7 @@ def test_runner_accumulates_history_and_forces_simulation_source(tmp_path: Path)
     assert len(client.requests[1]["conversation"]["messages"]) == 2
     assert len(client.requests[2]["conversation"]["messages"]) == 4
     assert (tmp_path / "sim-1.jsonl").exists()
+    assert (tmp_path / "sim-1-conversations.json").exists()
     summary = json.loads((tmp_path / "sim-1-summary.json").read_text())
     assert summary["snapshot_sha256"] == fixture.generation.snapshot_sha256
     assert summary["all_messages_passed"] is True
@@ -171,6 +172,98 @@ def test_simulation_rejects_context_dump_as_customer_reply() -> None:
     failures = {item.name for item in assertions if not item.passed}
 
     assert {"natural_language", "answers_current_question", "single_relevant_entity"} <= failures
+
+
+@pytest.mark.parametrize(
+    ("message", "reply", "expected_failure"),
+    [
+        ("这款商品是什么？", '{"products":[{"title":"宠物香波"}]}', "natural_language"),
+        ("这款商品多少钱？", "请以商品详情页为准。", "answers_current_question"),
+        (
+            "商品 p-1 多少钱？",
+            "商品p-1、商品p-2、商品p-3、商品p-4全部信息如下……",
+            "single_relevant_entity",
+        ),
+        ("明天能到吗？", "明天肯定送到。", "safe_uncertainty"),
+    ],
+)
+def test_simulation_quality_assertions_reject_bad_customer_replies(
+    message: str, reply: str, expected_failure: str
+) -> None:
+    payload = fixture_payload()
+    fixture = SimulationFixture.model_validate(payload)
+    turn = fixture.conversations[0].turns[0].model_copy(
+        update={
+            "message": message,
+            "expected": fixture.conversations[0].turns[0].expected.model_copy(
+                update={
+                    "fact_refs": [],
+                    "required_answer_terms": ["39.90"] if "多少钱" in message else [],
+                    "referenced_entity_ids": ["p-1"] if "p-1" in message else [],
+                }
+            ),
+        }
+    )
+    response = AgentResponse.from_payload(
+        {
+            "decision_id": "d-bad-reply",
+            "decision_status": "candidate",
+            "action": "candidate",
+            "candidates": [{"reply_text": reply}],
+            "trace": {
+                "thread_id": "d-bad-reply",
+                "graph_version": "reply-decision-graph-v1",
+                "langgraph_checkpoint_id": "cp-bad-reply",
+                "steps": [{"name": "generate_candidate", "status": "completed"}],
+                "external_send": {"attempted": False},
+            },
+        }
+    )
+
+    assertions = assert_simulation_response(turn, response, fixture.snapshot)
+
+    assert any(item.name == expected_failure and not item.passed for item in assertions)
+
+
+def test_simulation_quality_assertions_accept_concise_grounded_chinese_reply() -> None:
+    payload = fixture_payload()
+    fixture = SimulationFixture.model_validate(payload)
+    turn = fixture.conversations[0].turns[0].model_copy(
+        update={
+            "message": "商品 p-1 多少钱？",
+            "expected": fixture.conversations[0].turns[0].expected.model_copy(
+                update={"fact_refs": [], "required_answer_terms": ["39.90"], "referenced_entity_ids": ["p-1"]}
+            ),
+        }
+    )
+    response = AgentResponse.from_payload(
+        {
+            "decision_id": "d-good-reply",
+            "decision_status": "candidate",
+            "action": "candidate",
+            "candidates": [{"reply_text": "商品 p-1 当前价格为39.90元。"}],
+            "trace": {
+                "thread_id": "d-good-reply",
+                "graph_version": "reply-decision-graph-v1",
+                "langgraph_checkpoint_id": "cp-good-reply",
+                "steps": [{"name": "generate_candidate", "status": "completed"}],
+                "external_send": {"attempted": False},
+            },
+        }
+    )
+
+    quality = {
+        item.name: item.passed
+        for item in assert_simulation_response(turn, response, fixture.snapshot)
+        if item.name in {"natural_language", "answers_current_question", "single_relevant_entity", "safe_uncertainty"}
+    }
+
+    assert quality == {
+        "natural_language": True,
+        "answers_current_question": True,
+        "single_relevant_entity": True,
+        "safe_uncertainty": True,
+    }
 
 
 def test_real_redacted_snapshot_and_fixed_conversations_form_valid_fixture() -> None:

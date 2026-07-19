@@ -452,6 +452,7 @@ class ReplyDecisionGraph:
             "reply_text": reply_text,
             "evidence": evidence,
             "confidence": _evidence_confidence(state.get("knowledge_relevance", [])) if evidence else 0.68,
+            "referenced_entity_ids": list(grounded.referenced_entity_ids) if grounded else [],
         }
         updates = {**state, "candidates": [candidate]}
         if grounded and grounded.handoff_reason and grounded.handoff_reason != "insufficient_context":
@@ -476,6 +477,16 @@ class ReplyDecisionGraph:
                     "cross_tenant_data_access" if "cross_tenant_data_access" in risk_flags else "high_risk_request"
                 )
             )
+            if not candidates:
+                candidates = [
+                    {
+                        "suggestion_id": f"suggestion-{state['decision_id'][-8:]}",
+                        "reply_text": _handoff_customer_reply(state["content"], handoff_reason),
+                        "evidence": [],
+                        "confidence": 0.34,
+                        "referenced_entity_ids": [],
+                    }
+                ]
         elif route == "context_request":
             action = "context_request"
             status = "waiting_context"
@@ -526,7 +537,7 @@ class ReplyDecisionGraph:
             "auto_reply_gate": auto_reply_gate,
             "context_requests": context_requests,
             "action_requests": action_requests,
-            "candidates": candidates if action in {"candidate", "auto_reply"} else [],
+            "candidates": candidates if action in {"candidate", "auto_reply", "handoff"} else [],
             "auto_reply": auto_reply,
         }
         return _with_step(updates, "policy_gate", inputs_ref=["intent", route or "route"], outputs_ref=[f"decision:{state['decision_id']}"])
@@ -682,6 +693,14 @@ def _asks_external_action(lowered: str, content: str) -> bool:
     return any(word in lowered or word in content for word in ACTION_KEYWORDS) or any(
         pattern.search(content) for pattern in ACTION_ADDRESS_PATTERNS
     )
+
+
+def _handoff_customer_reply(content: str, reason: str | None) -> str:
+    if reason == "cross_tenant_data_access":
+        return "该请求涉及其他店铺或账号的数据，无法直接查询，需要人工客服核实权限后处理。"
+    if any(term in content for term in ("撤销退款", "重新发货")):
+        return "撤销退款或重新发货需要核对订单状态和操作权限，需要人工客服为您处理。"
+    return "这个请求需要进一步核实，需要人工客服为您处理。"
 
 
 def _evidence_confidence(signals: list[dict[str, Any]]) -> float:

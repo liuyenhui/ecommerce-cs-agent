@@ -102,22 +102,38 @@ def resolve_grounded_entities(
     orders = [item for item in context.get("orders") or [] if isinstance(item, dict)]
     logistics = [item for item in context.get("logistics") or [] if isinstance(item, dict)]
     explicit_products = [item for item in products if str(item.get("external_product_id") or "") in message]
+    if not explicit_products:
+        explicit_products = [
+            item
+            for item in products
+            if any(token and token in _title(item) for token in re.findall(r"[\u4e00-\u9fff]{2,}", message))
+        ]
     prior_text = " ".join(str(item.get("content") or "") for item in history if isinstance(item, dict))
-    prior_products = [item for item in products if str(item.get("external_product_id") or "") in prior_text]
+    prior_products = [
+        item
+        for item in products
+        if str(item.get("external_product_id") or "") in prior_text or _title(item) in prior_text
+    ]
 
     selected_products = explicit_products
     if not selected_products and ("前一个" in message or "后一个" in message):
         unique_prior = _unique_entities(prior_products, "external_product_id")
         if unique_prior:
             selected_products = [unique_prior[0] if "前一个" in message else unique_prior[-1]]
-    if not selected_products and any(term in message for term in ("这个", "这款", "它", "对应商品", "呢")):
+    if not selected_products and any(
+        term in message for term in ("这个", "这款", "它", "对应商品", "呢", "那", "为什么", "里面")
+    ):
         unique_prior = _unique_entities(prior_products, "external_product_id")
         if unique_prior:
             selected_products = [unique_prior[-1]]
 
     suffix_match = re.search(r"(?:尾号|订单号后四位)\s*([0-9]{4})", message)
     if suffix_match is None and any(
-        term in message for term in ("这个订单", "刚才那个", "它", "运单号", "快递单号", "肯定能到", "保证到", "一定能到")
+        term in message
+        for term in (
+            "这个订单", "刚才那个", "它", "运单号", "快递单号", "肯定能到", "保证到", "一定能到",
+            "对应商品", "哪家快递", "什么快递", "到哪一步",
+        )
     ):
         suffix_match = re.search(r"(?:尾号|订单号后四位)\s*([0-9]{4})", prior_text)
     selected_orders: list[dict[str, Any]] = []
@@ -193,8 +209,14 @@ def render_grounded_outcome(
                 return GroundedReplyOutcome(f"{title}属于免水洗产品，可按商品说明使用。", referenced_entity_ids=tuple(referenced))
     if intent == "order_items" and orders:
         if products:
-            names = "、".join(_short_title(item) for item in products)
+            names = "、".join(_title(item) for item in products)
             return GroundedReplyOutcome(f"这个订单购买的是{names}。", referenced_entity_ids=tuple(referenced))
+        names = _order_product_names(orders[0])
+        if names:
+            return GroundedReplyOutcome(
+                f"这个订单购买的是{'、'.join(names)}。",
+                referenced_entity_ids=tuple(referenced),
+            )
     if intent == "order_status" and orders:
         status = _order_status(orders[0])
         return GroundedReplyOutcome(f"这个订单当前状态是“{status}”。", referenced_entity_ids=tuple(referenced))
@@ -238,6 +260,11 @@ def _display_order_ref(order: dict[str, Any]) -> str:
 def _order_status(order: dict[str, Any]) -> str:
     raw = order.get("raw_payload") if isinstance(order.get("raw_payload"), dict) else {}
     return str(raw.get("status_text") or order.get("status") or "暂未更新")
+
+
+def _order_product_names(order: dict[str, Any]) -> list[str]:
+    raw = order.get("raw_payload") if isinstance(order.get("raw_payload"), dict) else {}
+    return [str(item) for item in (raw.get("product_names") or []) if str(item).strip()]
 
 
 def _effective_price(product: dict[str, Any]) -> Decimal:
