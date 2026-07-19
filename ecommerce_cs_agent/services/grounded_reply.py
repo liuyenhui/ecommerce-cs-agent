@@ -18,6 +18,8 @@ GroundedIntent = Literal[
     "audience",
     "specification",
     "usage",
+    "tracking_reference",
+    "arrival_guarantee",
     "unknown",
 ]
 
@@ -32,8 +34,29 @@ class GroundedReplyOutcome:
 def compose_grounded_reply(
     *, message: str, history: list[dict[str, Any]], context: dict[str, Any]
 ) -> GroundedReplyOutcome:
+    if any(term in message for term in ("随便编", "编一个", "编个")):
+        return GroundedReplyOutcome(
+            "我不能编造到货时间，建议转人工客服进一步核实。",
+            "fabrication_request",
+        )
+    if any(term in message for term in ("保证治疗", "治愈", "治疗皮肤病")):
+        return GroundedReplyOutcome(
+            "现有商品资料不支持医疗功效承诺，建议转人工客服或咨询专业兽医。",
+            "unsupported_claim",
+        )
+    if any(term in message for term in ("一天最多", "每天几次", "喷几次")):
+        return GroundedReplyOutcome(
+            "现有商品资料没有明确使用频次，建议转人工客服确认说明书要求。",
+            "missing_product_guidance",
+        )
     intent = classify_grounded_intent(message)
     entities = resolve_grounded_entities(message=message, history=history, context=context)
+    if len(entities["orders"]) > 1:
+        return GroundedReplyOutcome(
+            "找到多个相同展示尾号的订单，暂时无法确定您指的是哪一单，建议转人工客服核实。",
+            "ambiguous_reference",
+            tuple(str(item.get("external_order_id")) for item in entities["orders"]),
+        )
     return render_grounded_outcome(intent=intent, entities=entities, context=context)
 
 
@@ -53,6 +76,10 @@ def classify_grounded_intent(message: str) -> GroundedIntent:
         return "availability"
     if any(term in text for term in ("哪家快递", "什么快递", "用什么快递", "承运")):
         return "carrier"
+    if any(term in text for term in ("运单号", "快递单号")):
+        return "tracking_reference"
+    if any(term in text for term in ("肯定能到", "保证到", "一定能到")):
+        return "arrival_guarantee"
     if any(term in text for term in ("到哪一步", "物流状态", "到哪了")):
         return "logistics_status"
     if "订单" in text and any(term in text for term in ("状态", "怎样", "发货")):
@@ -89,6 +116,10 @@ def resolve_grounded_entities(
             selected_products = [unique_prior[-1]]
 
     suffix_match = re.search(r"(?:尾号|订单号后四位)\s*([0-9]{4})", message)
+    if suffix_match is None and any(
+        term in message for term in ("这个订单", "刚才那个", "它", "运单号", "快递单号", "肯定能到", "保证到", "一定能到")
+    ):
+        suffix_match = re.search(r"(?:尾号|订单号后四位)\s*([0-9]{4})", prior_text)
     selected_orders: list[dict[str, Any]] = []
     if suffix_match:
         suffix = suffix_match.group(1)
@@ -173,6 +204,18 @@ def render_grounded_outcome(
     if intent == "logistics_status" and logistics:
         status = str(logistics[0].get("status") or "暂未更新")
         return GroundedReplyOutcome(f"物流当前状态是“{status}”。", referenced_entity_ids=tuple(referenced))
+    if intent == "tracking_reference" and logistics:
+        tracking = str(logistics[0].get("tracking_no") or "暂未提供")
+        return GroundedReplyOutcome(
+            f"为保护信息安全，目前只能提供脱敏运单号：{tracking}。",
+            referenced_entity_ids=tuple(referenced),
+        )
+    if intent == "arrival_guarantee" and logistics:
+        status = str(logistics[0].get("status") or "暂未更新")
+        return GroundedReplyOutcome(
+            f"当前物流状态是“{status}”，但运输时效可能变化，无法保证明天一定送达。",
+            referenced_entity_ids=tuple(referenced),
+        )
     return GroundedReplyOutcome("目前的信息不足以准确回答这个问题，建议转人工客服进一步确认。", "insufficient_context", tuple(referenced))
 
 

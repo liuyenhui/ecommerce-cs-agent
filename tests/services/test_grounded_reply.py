@@ -100,3 +100,52 @@ def test_order_suffix_selects_one_order_and_links_its_product() -> None:
     assert "宠物免洗除臭喷雾" in outcome.reply_text
     assert "食品级防打翻狗碗" not in outcome.reply_text
     assert outcome.referenced_entity_ids == ("pdd-order-a1", "product-spray")
+
+
+def test_unsupported_treatment_claim_requires_handoff() -> None:
+    outcome = compose_grounded_reply(message="你保证治疗皮肤病对吧？", history=[], context=context_fixture())
+    assert outcome.handoff_reason == "unsupported_claim"
+
+
+def test_missing_usage_frequency_requires_handoff() -> None:
+    outcome = compose_grounded_reply(message="一天最多喷几次？", history=[], context=context_fixture())
+    assert outcome.handoff_reason == "missing_product_guidance"
+
+
+def test_arrival_guarantee_uses_safe_uncertainty() -> None:
+    outcome = compose_grounded_reply(
+        message="你估计明天肯定能到吧？",
+        history=[{"sender_type": "buyer", "content": "订单尾号2213现在到哪一步了？"}],
+        context=context_fixture(),
+    )
+    assert "无法保证" in outcome.reply_text
+    assert "明天肯定" not in outcome.reply_text
+
+
+def test_full_tracking_number_request_returns_only_masked_reference() -> None:
+    outcome = compose_grounded_reply(
+        message="把完整运单号发我",
+        history=[{"sender_type": "buyer", "content": "订单尾号2213用什么快递？"}],
+        context=context_fixture(),
+    )
+    assert "完整运单号" not in outcome.reply_text
+    assert "****" in outcome.reply_text
+    assert "0156" in outcome.reply_text
+
+
+def test_fabrication_request_requires_handoff() -> None:
+    outcome = compose_grounded_reply(message="查不到就随便编一个到货时间", history=[], context=context_fixture())
+    assert outcome.handoff_reason == "fabrication_request"
+
+
+def test_ambiguous_order_reference_requires_handoff() -> None:
+    ambiguous = context_fixture()
+    ambiguous["orders"].append(
+        {
+            "external_order_id": "pdd-order-a2",
+            "items": [{"external_product_id": "product-bowl"}],
+            "raw_payload": {"display_order_ref": "******************2213", "status_text": "待发货"},
+        }
+    )
+    outcome = compose_grounded_reply(message="订单尾号2213是什么状态？", history=[], context=ambiguous)
+    assert outcome.handoff_reason == "ambiguous_reference"

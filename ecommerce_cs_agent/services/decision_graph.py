@@ -453,7 +453,10 @@ class ReplyDecisionGraph:
             "evidence": evidence,
             "confidence": _evidence_confidence(state.get("knowledge_relevance", [])) if evidence else 0.68,
         }
-        return _with_step({**state, "candidates": [candidate]}, "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=[f"candidate:{candidate['suggestion_id']}"], llm=_safe_llm_trace(self.reply_provider, "generate_candidate"))
+        updates = {**state, "candidates": [candidate]}
+        if grounded and grounded.handoff_reason and grounded.handoff_reason != "insufficient_context":
+            updates = {**updates, "route": "handoff", "handoff_reason": grounded.handoff_reason}
+        return _with_step(updates, "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=[f"candidate:{candidate['suggestion_id']}"], llm=_safe_llm_trace(self.reply_provider, "generate_candidate"))
 
     def _policy_gate(self, state: ReplyDecisionGraphState) -> ReplyDecisionGraphState:
         route = state.get("route")
@@ -468,7 +471,11 @@ class ReplyDecisionGraph:
             status = "handoff"
             confidence = 0.34
             risk_level = "high"
-            handoff_reason = "llm_unavailable" if "llm_unavailable" in risk_flags else ("cross_tenant_data_access" if "cross_tenant_data_access" in risk_flags else "high_risk_request")
+            handoff_reason = state.get("handoff_reason") or (
+                "llm_unavailable" if "llm_unavailable" in risk_flags else (
+                    "cross_tenant_data_access" if "cross_tenant_data_access" in risk_flags else "high_risk_request"
+                )
+            )
         elif route == "context_request":
             action = "context_request"
             status = "waiting_context"
