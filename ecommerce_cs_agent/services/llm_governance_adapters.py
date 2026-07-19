@@ -427,7 +427,17 @@ class _PinnedProviderTransport:
             )
             connection.sock = tls_socket
             _set_deadline_timeout(tls_socket, deadline)
-            connection.request("GET", path, headers=dict(request.header_items()))
+            if request.data is None:
+                connection.request(
+                    request.get_method(), path, headers=dict(request.header_items())
+                )
+            else:
+                connection.request(
+                    request.get_method(),
+                    path,
+                    body=request.data,
+                    headers=dict(request.header_items()),
+                )
             deadline.remaining()
             _set_deadline_timeout(tls_socket, deadline)
             response = connection.getresponse()
@@ -769,6 +779,56 @@ class KubernetesSecretProviderConnectionTester:
             result_status, error_code = "failed", self._error_code(exc)
         latency_ms = max(0, int((self._monotonic() - started) * 1000))
         return {"status": result_status, "latency_ms": latency_ms, "error_code": error_code}
+
+    def execute_json(
+        self,
+        *,
+        provider: Any,
+        path: str,
+        payload: dict[str, Any],
+        timeout_seconds: int,
+    ) -> tuple[int, bytes]:
+        if path != "/chat/completions":
+            raise _SecurityPolicyError("invalid_provider_path")
+        timeout = float(min(20, max(1, int(timeout_seconds))))
+        deadline = _Deadline(self._monotonic() + timeout, self._monotonic)
+        provider_data = {
+            "provider_type": str(provider.provider_type),
+            "base_url": str(provider.base_url),
+        }
+        origin, host, port, host_header, probe_url = self._provider_endpoint(provider_data)
+        reference = {
+            "namespace": str(provider.secret_namespace),
+            "name": str(provider.secret_name),
+            "key": str(provider.secret_key),
+        }
+        if reference["namespace"] != self._allowed_namespace:
+            raise _SecurityPolicyError("secret_reference_forbidden")
+        allowed_origins = self._allowed_secret_origins.get(
+            (reference["name"], reference["key"]), frozenset()
+        )
+        if origin not in allowed_origins:
+            raise _SecurityPolicyError("origin_binding_mismatch")
+        pinned_ip = self._resolve_public_provider_ip(host, port, deadline.remaining())
+        secret = self._resolve_secret(reference, deadline)
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Host": host_header,
+            "Authorization": f"Bearer {secret}",
+        }
+        url = f"{probe_url[:-len('/models')]}{path}"
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+        status, response_body = self._provider_transport(
+            Request(url, data=body, method="POST", headers=headers),
+            deadline,
+            pinned_ip,
+            host,
+        )
+        deadline.remaining()
+        if 300 <= status < 400:
+            raise _SecurityPolicyError("provider_redirect_forbidden")
+        return status, response_body
 
 
 class PostgresEvaluationReleaseGateChecker:

@@ -16,6 +16,7 @@ from ecommerce_cs_agent.services.llm_governance_adapters import (
     _KubernetesApiTransport,
     _PinnedProviderTransport,
 )
+from ecommerce_cs_agent.services.llm_runtime import RuntimeProvider
 
 
 def _deadline(seconds: float) -> object:
@@ -198,6 +199,55 @@ def test_kubernetes_secret_tester_resolves_secret_and_probes_openai_without_leak
     assert result == {"status": "passed", "latency_ms": 0, "error_code": None}
     assert "provider-secret" not in repr(result)
     assert len(requests) == 2
+
+
+def test_secure_provider_session_posts_json_with_in_memory_secret(tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    ca_file = tmp_path / "ca.crt"
+    token_file.write_text("service-account-token", encoding="utf-8")
+    ca_file.write_text("test-ca", encoding="utf-8")
+    provider_requests: list[object] = []
+
+    def kubernetes_transport(_request, _deadline, _ca):
+        body = {"data": {"api-key": base64.b64encode(b"provider-secret").decode()}}
+        return 200, json.dumps(body).encode()
+
+    def provider_transport(request, _deadline, _ip, _host):
+        provider_requests.append(request)
+        assert request.get_method() == "POST"
+        assert request.headers["Authorization"] == "Bearer provider-secret"
+        assert json.loads(request.data) == {"model": "safe-model"}
+        return 200, b'{"ok":true}'
+
+    session = KubernetesSecretProviderConnectionTester(
+        kubernetes_host="10.0.0.1",
+        kubernetes_port=443,
+        service_account_token_file=str(token_file),
+        kubernetes_ca_file=str(ca_file),
+        allowed_namespace="runtime",
+        allowed_secret_origins={
+            ("ecommerce-cs-agent-llm-provider", "api-key"): {"https://models.example.test"}
+        },
+        kubernetes_transport=kubernetes_transport,
+        provider_transport=provider_transport,
+        resolver=lambda _host, _port, _timeout: ["93.184.216.34"],
+    )
+    provider = RuntimeProvider(
+        provider_id="provider-1", provider_type="openai_compatible",
+        base_url="https://models.example.test/v1",
+        secret_namespace="runtime", secret_name="ecommerce-cs-agent-llm-provider",
+        secret_key="api-key", model="safe-model", enabled=True, status="active",
+    )
+
+    status, body = session.execute_json(
+        provider=provider,
+        path="/chat/completions",
+        payload={"model": "safe-model"},
+        timeout_seconds=12,
+    )
+
+    assert (status, body) == (200, b'{"ok":true}')
+    assert len(provider_requests) == 1
 
 
 @pytest.mark.parametrize(
