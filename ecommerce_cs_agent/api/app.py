@@ -33,6 +33,9 @@ from ecommerce_cs_agent.services.admin import admin_repository_for
 from ecommerce_cs_agent.services.admin_auth import admin_auth_service_for, system_admin_auth_service_for
 from ecommerce_cs_agent.services.decision import DecisionService
 from ecommerce_cs_agent.services.decision_execution import BoundedDecisionExecutor
+from ecommerce_cs_agent.services.llm import GovernedReplyProvider
+from ecommerce_cs_agent.services.llm_provider import OpenAICompatibleProviderClient
+from ecommerce_cs_agent.services.llm_runtime import PostgresRuntimeRouteRepository
 from ecommerce_cs_agent.services.object_storage import ObjectStorageUnavailable, ObjectStorageValidationError
 from ecommerce_cs_agent.services.open_erp_integration import BillingLeaseError, OpenErpIntegrationService
 from ecommerce_cs_agent.services.product_analysis import product_document_analyzer_for
@@ -45,6 +48,7 @@ from ecommerce_cs_agent.services.llm_governance import (
 from ecommerce_cs_agent.services.llm_governance_adapters import (
     KubernetesSecretProviderConnectionTester,
     PostgresEvaluationReleaseGateChecker,
+    RuntimeEnvironmentProviderSession,
 )
 from ecommerce_cs_agent.services.llm_node_configuration import (
     ApiKeyCipher,
@@ -53,6 +57,7 @@ from ecommerce_cs_agent.services.llm_node_configuration import (
     test_openai_compatible_connection,
 )
 from ecommerce_cs_agent.services.llm import NodeBoundReplyProvider
+from ecommerce_cs_agent.services.repository import PostgresInvocationMetricRecorder
 
 
 def create_app(
@@ -129,6 +134,20 @@ def create_app(
             connection_tester=connection_tester,
             release_gate_checker=release_gate_checker,
         )
+        provider_session = None
+        if local_acs_debug and os.environ.get("LLM_GOVERNANCE_RUNTIME_LLM_SECRET_REF"):
+            provider_session = RuntimeEnvironmentProviderSession.from_environment()
+        elif not local_acs_debug and hasattr(connection_tester, "execute_json"):
+            provider_session = connection_tester
+        if provider_session is not None:
+            decisions = DecisionService(
+                settings,
+                reply_provider=GovernedReplyProvider(
+                    route_repository=PostgresRuntimeRouteRepository(settings.database_url),
+                    provider_client=OpenAICompatibleProviderClient(session=provider_session),
+                    metric_recorder=PostgresInvocationMetricRecorder(settings.database_url),
+                ),
+            )
     open_erp = OpenErpIntegrationService(settings)
     if llm_node_configuration_repository is not None and settings.environment.lower() != "test":
         raise RuntimeError("LLM node configuration repository injection is test-only")

@@ -106,8 +106,9 @@ class LiveAgentClient:
             "idempotency_key": f"eval-{case.case_id}-{context_request.type}",
             "organization_id": case.request_payload.get("organization_id", "org-eval"),
             "store_id": case.request_payload.get("store_id", "store-eval"),
-            "source": "eval",
-            "items": _public_context_for(case, context_request.type),
+            "source": case.request_payload.get("source", "eval"),
+            "captured_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            context_request.type: _public_context_for(case, context_request.type),
         }
         refill_response = self._client.post(endpoint, json=payload)
         refill_response.raise_for_status()
@@ -393,7 +394,8 @@ def _unique_live_request_payload(case: TestCase) -> dict[str, Any]:
     conversation = payload.get("conversation")
     if isinstance(conversation, dict):
         original_conversation_id = conversation.get("external_conversation_id") or f"conv-{case.case_id}"
-        conversation["external_conversation_id"] = f"{original_conversation_id}-{suffix}"
+        if payload.get("source") != "simulation":
+            conversation["external_conversation_id"] = f"{original_conversation_id}-{suffix}"
 
     return payload
 

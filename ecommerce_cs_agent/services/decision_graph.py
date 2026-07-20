@@ -9,6 +9,7 @@ from langgraph.constants import END, START
 from langgraph.graph.state import StateGraph
 
 from ecommerce_cs_agent.core.config import Settings
+from ecommerce_cs_agent.services.grounded_reply import compose_grounded_reply
 from ecommerce_cs_agent.services.llm import ReplyProvider
 from ecommerce_cs_agent.services.repository import DecisionRepository
 from ecommerce_cs_agent.services.service_stage import ServiceStageClassification
@@ -19,8 +20,10 @@ TENANT_SECURITY_KEYWORDS = ("隔壁店", "别的店", "其他店", "别人店", 
 SHIPPING_KEYWORDS = ("发货", "物流", "快递", "什么时候到", "ship", "shipping", "delivery")
 PRODUCT_KEYWORDS = (
     "商品", "产品", "材质", "尺寸", "颜色", "规格", "参数", "重量", "功率", "容量", "型号", "版本",
-    "适配", "包装", "数量", "material", "size", "weight", "power", "capacity", "model", "version",
+    "适配", "包装", "数量", "价格", "活动价", "多少钱", "库存", "有货", "买不了", "在售", "下架",
+    "适合", "能用", "免水洗", "毫升", "material", "size", "weight", "power", "capacity", "model", "version",
 )
+ORDER_KEYWORDS = ("订单", "买的什么", "买了什么", "order")
 ACTION_KEYWORDS = (
     "改备注", "备注", "改地址", "修改地址", "地址换成", "地址换到", "换收货地址",
     "update note", "change address",
@@ -178,6 +181,7 @@ class ReplyDecisionGraphState(TypedDict, total=False):
     steps: list[dict[str, Any]]
     taken_conditions: list[str]
     response: dict[str, Any]
+    model_metadata: dict[str, Any]
 
 
 class ReplyDecisionGraph:
@@ -417,26 +421,64 @@ class ReplyDecisionGraph:
         if state.get("route") != "candidate":
             return _with_step(state, "generate_candidate", inputs_ref=["action_gate"], outputs_ref=[state.get("route", "skipped")])
         evidence = [_knowledge_evidence(item) for item in state.get("matched_knowledge", [])]
-        try:
-            reply_text = self.reply_provider.generate_candidate(
+        payload = state["payload"]
+        context = payload.get("context") or {}
+        grounded = (
+            compose_grounded_reply(
                 message=state["content"],
-                knowledge=state.get("matched_knowledge", []),
-                service_stage=state["service_stage"],
-                context=state["payload"].get("context") if isinstance(state["payload"].get("context"), dict) else {},
+                history=payload.get("conversation", {}).get("messages") or [],
+                context=context,
             )
-        except Exception:
-            return _with_step(
-                {**state, "route": "handoff", "risk_flags": [*state.get("risk_flags", []), "llm_unavailable"]},
-                "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=["handoff:llm_unavailable"],
-                llm=_safe_llm_trace(self.reply_provider, "generate_candidate"), status="failed", error={"code": "llm_call_failed"},
-            )
+            if any(context.get(key) for key in ("products", "orders", "logistics"))
+            else None
+        )
+        if grounded and grounded.handoff_reason != "insufficient_context":
+            draft = grounded.reply_text
+        else:
+            try:
+                draft = self.reply_provider.generate_candidate(
+                    message=state["content"],
+                    knowledge=state.get("matched_knowledge", []),
+                    service_stage=state["service_stage"],
+                    context=context if isinstance(context, dict) else {},
+                )
+            except Exception:
+                return _with_step(
+                    {**state, "route": "handoff", "risk_flags": [*state.get("risk_flags", []), "llm_unavailable"]},
+                    "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=["handoff:llm_unavailable"],
+                    llm=_safe_llm_trace(self.reply_provider, "generate_candidate"), status="failed", error={"code": "llm_call_failed"},
+                )
+        model_metadata = {
+            "model_version": self.reply_provider.model_version,
+            "route_role": None,
+            "status": "not_attempted",
+            "fallback_used": False,
+            "validation_status": "not_attempted",
+        }
+        if grounded and grounded.handoff_reason in {None, "insufficient_context"}:
+            rewrite_grounded = getattr(self.reply_provider, "rewrite_grounded", None)
+            if callable(rewrite_grounded):
+                rewrite = rewrite_grounded(
+                    organization_id=state["organization_id"],
+                    store_id=state["store_id"],
+                    question=state["content"],
+                    history=payload.get("conversation", {}).get("messages") or [],
+                    deterministic=draft,
+                    facts=grounded.fact_manifest,
+                )
+                draft = rewrite.reply_text
+                model_metadata = rewrite.model_metadata
         candidate = {
             "suggestion_id": f"suggestion-{state['decision_id'][-8:]}",
-            "reply_text": reply_text,
+            "reply_text": draft,
             "evidence": evidence,
             "confidence": _evidence_confidence(state.get("knowledge_relevance", [])) if evidence else 0.68,
+            "referenced_entity_ids": list(grounded.referenced_entity_ids) if grounded else [],
         }
-        return _with_step({**state, "candidates": [candidate]}, "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=[f"candidate:{candidate['suggestion_id']}"], llm=_safe_llm_trace(self.reply_provider, "generate_candidate"))
+        updates = {**state, "candidates": [candidate], "model_metadata": model_metadata}
+        if grounded and grounded.handoff_reason and grounded.handoff_reason != "insufficient_context":
+            updates = {**updates, "route": "handoff", "handoff_reason": grounded.handoff_reason}
+        return _with_step(updates, "generate_candidate", inputs_ref=["candidate_requested"], outputs_ref=[f"candidate:{candidate['suggestion_id']}"], llm=_safe_llm_trace(self.reply_provider, "generate_candidate"))
 
     def _policy_gate(self, state: ReplyDecisionGraphState) -> ReplyDecisionGraphState:
         route = state.get("route")
@@ -451,7 +493,21 @@ class ReplyDecisionGraph:
             status = "handoff"
             confidence = 0.34
             risk_level = "high"
-            handoff_reason = "llm_unavailable" if "llm_unavailable" in risk_flags else ("cross_tenant_data_access" if "cross_tenant_data_access" in risk_flags else "high_risk_request")
+            handoff_reason = state.get("handoff_reason") or (
+                "llm_unavailable" if "llm_unavailable" in risk_flags else (
+                    "cross_tenant_data_access" if "cross_tenant_data_access" in risk_flags else "high_risk_request"
+                )
+            )
+            if not candidates:
+                candidates = [
+                    {
+                        "suggestion_id": f"suggestion-{state['decision_id'][-8:]}",
+                        "reply_text": _handoff_customer_reply(state["content"], handoff_reason),
+                        "evidence": [],
+                        "confidence": 0.34,
+                        "referenced_entity_ids": [],
+                    }
+                ]
         elif route == "context_request":
             action = "context_request"
             status = "waiting_context"
@@ -502,7 +558,7 @@ class ReplyDecisionGraph:
             "auto_reply_gate": auto_reply_gate,
             "context_requests": context_requests,
             "action_requests": action_requests,
-            "candidates": candidates if action in {"candidate", "auto_reply"} else [],
+            "candidates": candidates if action in {"candidate", "auto_reply", "handoff"} else [],
             "auto_reply": auto_reply,
         }
         return _with_step(updates, "policy_gate", inputs_ref=["intent", route or "route"], outputs_ref=[f"decision:{state['decision_id']}"])
@@ -518,6 +574,12 @@ class ReplyDecisionGraph:
             settings=self.settings,
             reply_provider=self.reply_provider,
             state=traced,
+        )
+        trace["model"] = state.get(
+            "model_metadata",
+            {"model_version": self.reply_provider.model_version, "route_role": None,
+             "status": "not_attempted", "fallback_used": False,
+             "validation_status": "not_attempted"},
         )
         payload = state["payload"]
         trace["tenant_id"] = payload.get("tenant_id") or payload.get("organization_id")
@@ -660,6 +722,14 @@ def _asks_external_action(lowered: str, content: str) -> bool:
     )
 
 
+def _handoff_customer_reply(content: str, reason: str | None) -> str:
+    if reason == "cross_tenant_data_access":
+        return "该请求涉及其他店铺或账号的数据，无法直接查询，需要人工客服核实权限后处理。"
+    if any(term in content for term in ("撤销退款", "重新发货")):
+        return "撤销退款或重新发货需要核对订单状态和操作权限，需要人工客服为您处理。"
+    return "这个请求需要进一步核实，需要人工客服为您处理。"
+
+
 def _evidence_confidence(signals: list[dict[str, Any]]) -> float:
     relevant_scores = [float(signal.get("score", 0.0)) for signal in signals if signal.get("relevant")]
     if not relevant_scores:
@@ -670,15 +740,27 @@ def _evidence_confidence(signals: list[dict[str, Any]]) -> float:
 def _missing_context(payload: dict[str, Any], lowered: str, content: str, *, has_product_knowledge: bool = False) -> list[str]:
     context = payload.get("context") or {}
     missing: list[str] = []
-    asks_shipping = any(word in lowered or word in content for word in SHIPPING_KEYWORDS)
+    if any(word in lowered or word in content for word in ACTION_KEYWORDS):
+        return missing
+    history = " ".join(
+        str(item.get("content") or "")
+        for item in (payload.get("conversation", {}).get("messages") or [])
+        if isinstance(item, dict)
+    )
+    intent_text = f"{history} {content}"
+    intent_lowered = intent_text.lower()
+    asks_shipping = any(word in intent_lowered or word in intent_text for word in SHIPPING_KEYWORDS)
     if asks_shipping:
         if not context.get("orders"):
             missing.append("orders")
         if not context.get("logistics"):
             missing.append("logistics")
-    asks_product = any(word in lowered or word in content for word in PRODUCT_KEYWORDS)
+    asks_product = any(word in intent_lowered or word in intent_text for word in PRODUCT_KEYWORDS)
     if asks_product and not context.get("products") and not has_product_knowledge:
         missing.append("products")
+    asks_order = any(word in intent_lowered or word in intent_text for word in ORDER_KEYWORDS)
+    if asks_order and not asks_shipping and not context.get("orders"):
+        missing.append("orders")
     asks_rules = any(word in lowered or word in content for word in RULE_KEYWORDS)
     if asks_rules and not context.get("rules"):
         missing.append("rules")

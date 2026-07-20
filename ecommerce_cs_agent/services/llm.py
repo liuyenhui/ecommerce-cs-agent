@@ -7,7 +7,12 @@ from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
 
 from ecommerce_cs_agent.core.config import Settings
+from ecommerce_cs_agent.services.governed_reply_provider import (
+    GovernedReplyProvider as _GovernedReplyProvider,
+    ReplyRewriteOutcome,
+)
 from ecommerce_cs_agent.services.outbound_http import validate_public_https_url
+from ecommerce_cs_agent.services.reply_generation import GroundedFactManifest
 from ecommerce_cs_agent.services.service_stage import ServiceStageClassification, classify_service_stage
 
 
@@ -28,6 +33,11 @@ class ReplyProvider(Protocol):
         context: dict[str, Any],
     ) -> str:
         raise NotImplementedError
+
+    def rewrite_grounded(
+        self, *, organization_id: str, store_id: str, question: str,
+        history: list[dict[str, Any]], deterministic: str, facts: GroundedFactManifest,
+    ) -> ReplyRewriteOutcome: ...
 
 
 class DeterministicReplyProvider:
@@ -53,6 +63,16 @@ class DeterministicReplyProvider:
             if content:
                 return f"{content} 请以商品详情页和客服最终确认为准。"
         return "我先帮您核对信息，请以订单和商品详情页的最新状态为准。"
+
+    def rewrite_grounded(
+        self, *, organization_id: str, store_id: str, question: str,
+        history: list[dict[str, Any]], deterministic: str, facts: GroundedFactManifest,
+    ) -> ReplyRewriteOutcome:
+        return _deterministic_rewrite(deterministic, self.model_version)
+
+
+class GovernedReplyProvider(_GovernedReplyProvider, DeterministicReplyProvider):
+    """Released-model rewrite provider with deterministic graph-node fallbacks."""
 
 
 class NodeBoundReplyProvider:
@@ -103,6 +123,12 @@ class NodeBoundReplyProvider:
             raise
         self._record("generate_candidate", config, "succeeded", started=started)
         return result
+
+    def rewrite_grounded(
+        self, *, organization_id: str, store_id: str, question: str,
+        history: list[dict[str, Any]], deterministic: str, facts: GroundedFactManifest,
+    ) -> ReplyRewriteOutcome:
+        return _deterministic_rewrite(deterministic, self.model_version)
 
     def _resolve(self, node_id: str) -> tuple[dict[str, Any], ReplyProvider]:
         config = self.resolver(node_id)
@@ -222,6 +248,12 @@ class OpenAICompatibleReplyProvider:
             context=context,
         )
 
+    def rewrite_grounded(
+        self, *, organization_id: str, store_id: str, question: str,
+        history: list[dict[str, Any]], deterministic: str, facts: GroundedFactManifest,
+    ) -> ReplyRewriteOutcome:
+        return _deterministic_rewrite(deterministic, self.model_version)
+
     def _chat_json(self, *, system: str, user: str) -> dict[str, Any]:
         payload = {
             "model": self.model,
@@ -258,6 +290,14 @@ def reply_provider_for(settings: Settings) -> ReplyProvider:
             model=settings.llm_model,
         )
     return DeterministicReplyProvider()
+
+
+def _deterministic_rewrite(deterministic: str, model_version: str) -> ReplyRewriteOutcome:
+    return ReplyRewriteOutcome(
+        deterministic,
+        {"model_version": model_version, "route_role": None, "status": "not_attempted",
+         "fallback_used": False, "validation_status": "not_attempted"},
+    )
 
 
 def _normalize_classification(value: dict[str, Any]) -> ServiceStageClassification | None:

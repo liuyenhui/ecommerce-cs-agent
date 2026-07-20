@@ -4,6 +4,21 @@
 
 ## 最近文档更新
 
+### 2026-07-20
+
+- ACS grounded candidate 可通过组织已发布且正在运行的 `reply_generation` 主/备路由进行受控润色；确定性层继续拥有事实、实体、动作、隐私与转人工决策，模型输出经事实清单校验后才可采用，失败或漂移时明确回退确定性草稿。
+- 模拟评测对 candidate/auto-reply 新增强制模型证据：必须包含真实模型 ID、primary/fallback 角色、`status=succeeded`、校验通过与 fallback 标记；`deterministic-reply-v1` 或 Provider 失败回退不得冒充模型成功。trace、指标和安全 question/reply 报告只保存 metadata，不保存 Prompt、消息、模型原始回复、HTTP body 或 Secret。
+
+### 2026-07-19
+
+- ACS 固定脱敏快照模拟评测新增客户可读中文回复质量门禁：拒绝 typed-context JSON/schema dump、答非所问、无关实体和无依据承诺，并分别校验首轮 context refill 与补充后的最终动作；最终 K3s-backed 10 组 / 30 轮报告为 `reports/evals/acs-natural-replies-final-approved-20260719.{jsonl,summary.json}`，快照 hash 为 `9128f2ef13710e6b826e271f`，30/30 通过且 `blocked=0`、`needs_review=0`、无外发。
+- Grounded deterministic composer 在外部 Provider 401 时只消费 typed 商品、订单与物流快照，支持活动价、规格、库存、商品/订单切换、模糊指代、脱敏运单号和安全转人工；缺订单定位时明确请求订单尾号，不生成泛泛免责或虚构到货承诺。
+
+### 2026-07-18
+
+- ACS eval 工具新增固定脱敏店铺快照驱动的 10 组 / 30 轮安全批量模拟入口：逐轮继续复用 `POST /v1/reply-decisions`、`contexts/products|orders|logistics` 与 LangGraph，同组累积会话历史，并以事实、指代、上下文、转人工、trace、无外发和零 `blocked/needs_review` 作为硬门禁；实施与验收命令见 [ACS 安全批量模拟评测计划](superpowers/plans/2026-07-18-acs-batch-simulation-eval.md)。
+- 真实 K3s-backed 批量模拟暴露并修复 typed refill 缺少 `captured_at`、`partial_context` 无 `action` 的兼容问题，以及价格、库存、订单、规格和多轮指代未请求上下文、补上下文后候选未消费 typed snapshot 的问题；动作意图继续优先于历史订单上下文，避免影响既有 action request 流程。
+
 ### 2026-07-17
 
 - Dev 近似表达回归补齐确定性边界：地址修改支持“地址能换成/可以修改为/更换一下收货地址”等双向、有限间隔语序，按外部动作请求处理且不先索取订单；真实 LLM 只能辅助阶段语义，不得扩张规则校验后的 `needs_context[]`，避免售前库存咨询因“出库”被额外索取物流。线上发现及相邻表达已加入离线模拟语料。

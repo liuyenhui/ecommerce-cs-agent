@@ -113,8 +113,11 @@ class AgentResponse(BaseModel):
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "AgentResponse":
-        response = cls.model_validate(payload)
-        response.raw = payload
+        normalized = dict(payload)
+        if not normalized.get("action") and normalized.get("decision_status") == "partial_context":
+            normalized["action"] = "context_request"
+        response = cls.model_validate(normalized)
+        response.raw = normalized
         return response
 
     @property

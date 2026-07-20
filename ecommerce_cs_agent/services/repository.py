@@ -118,6 +118,7 @@ class InMemoryDecisionRepository:
 
 
 class PostgresDecisionRepository:
+
     def __init__(self, database_url: str) -> None:
         import psycopg
 
@@ -955,3 +956,42 @@ def _search_terms(query: str) -> list[str]:
             seen.add(term)
             unique_terms.append(term)
     return unique_terms[:12]
+
+
+class PostgresInvocationMetricRecorder:
+    """Persist only bounded invocation metadata; content fields are not accepted."""
+
+    def __init__(self, database_url: str) -> None:
+        import psycopg
+
+        self._connect = psycopg.connect
+        self._database_url = database_url
+
+    def record_invocation(
+        self, *, scenario_route_id: str, route_role: str, organization_id: str,
+        store_id: str, input_tokens: int, output_tokens: int, latency_ms: int,
+        status: str, error_code: str | None,
+    ) -> None:
+        with self._connect(self._database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO llm_invocation_metric (
+                        scenario_route_id, route_role, organization_id, store_id,
+                        input_tokens, output_tokens, latency_ms, status, error_code
+                    )
+                    SELECT route.id, %s, org.id, store.id, %s, %s, %s, %s, %s
+                    FROM llm_scenario_route route
+                    JOIN llm_config_version version ON version.id = route.config_version_id
+                    JOIN organization org ON org.id = version.organization_id
+                    JOIN store store ON store.organization_id = org.id
+                    WHERE route.id = %s
+                      AND org.external_organization_id = %s
+                      AND store.external_store_id = %s
+                    """,
+                    (
+                        route_role, max(0, input_tokens), max(0, output_tokens),
+                        max(0, latency_ms), status, error_code, scenario_route_id,
+                        organization_id, store_id,
+                    ),
+                )
