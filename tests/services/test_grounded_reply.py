@@ -120,6 +120,7 @@ def test_arrival_guarantee_uses_safe_uncertainty() -> None:
     )
     assert "无法保证" in outcome.reply_text
     assert "明天肯定" not in outcome.reply_text
+    assert "无法保证" in outcome.fact_manifest.required_terms
 
 
 def test_full_tracking_number_request_returns_only_masked_reference() -> None:
@@ -131,6 +132,7 @@ def test_full_tracking_number_request_returns_only_masked_reference() -> None:
     assert "完整运单号" not in outcome.reply_text
     assert "****" in outcome.reply_text
     assert "0156" in outcome.reply_text
+    assert "脱敏运单号" in outcome.fact_manifest.required_terms
 
 
 def test_fabrication_request_requires_handoff() -> None:
@@ -219,6 +221,7 @@ def test_product_keyword_beats_ambiguous_prior_orders() -> None:
 
     assert "库存为120件" in outcome.reply_text
     assert outcome.handoff_reason is None
+    assert "库存为" in outcome.fact_manifest.required_terms
 
 
 def test_pronoun_prefers_prior_product_over_shared_title_terms() -> None:
@@ -272,6 +275,7 @@ def test_missing_order_context_asks_for_specific_reference(message: str) -> None
 
     assert "订单尾号" in outcome.reply_text
     assert "进一步确认" not in outcome.reply_text
+    assert "请提供订单尾号" in outcome.fact_manifest.required_terms
 
 
 def test_grounded_outcome_exposes_safe_fact_manifest_for_model_rewrite() -> None:
@@ -290,3 +294,12 @@ def test_grounded_outcome_exposes_safe_fact_manifest_for_model_rewrite() -> None
     assert "69" in outcome.fact_manifest.allowed_numbers
     assert "p-spray" not in outcome.fact_manifest.allowed_entities
     assert "治疗" in outcome.fact_manifest.prohibited_claims
+
+
+def test_grounded_manifest_preserves_complete_specification_token() -> None:
+    outcome = compose_grounded_reply(
+        message="p-spray 规格是多少？", history=[],
+        context={"products": [{"external_product_id": "p-spray", "title": "宠物喷雾145ml"}]},
+    )
+
+    assert "145ml" in outcome.fact_manifest.required_terms

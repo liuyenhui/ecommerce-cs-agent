@@ -336,10 +336,16 @@ def _fact_manifest(
     reply_text: str, entities: dict[str, list[dict[str, Any]]]
 ) -> GroundedFactManifest:
     numbers = tuple(dict.fromkeys(re.findall(r"\d+(?:\.\d+)?", reply_text)))
+    specifications = tuple(
+        dict.fromkeys(
+            re.findall(r"\d+(?:\.\d+)?(?:ml|毫升|kg|千克|g|克|cm|厘米)", reply_text, re.IGNORECASE)
+        )
+    )
     semantic_terms = tuple(
         term
         for term in (
-            "活动价", "价格", "库存", "比熊", "小猫", "免水洗", "已收货",
+            "请提供订单尾号", "脱敏运单号", "无法保证", "库存为", "活动价", "价格", "库存",
+            "比熊", "小猫", "免水洗", "已收货",
             "已发货", "待收货", "售罄", "已下架", "中通快递", "顺丰速运",
         )
         if term in reply_text
@@ -351,7 +357,7 @@ def _fact_manifest(
         )
     )
     return GroundedFactManifest(
-        required_terms=numbers + semantic_terms,
+        required_terms=specifications + numbers + semantic_terms,
         allowed_numbers=numbers,
         allowed_entities=entities_text,
         prohibited_claims=("治疗", "治愈", "保证送达", "肯定送到", "一定送到"),

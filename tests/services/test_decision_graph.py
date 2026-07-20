@@ -273,6 +273,28 @@ def test_primary_failure_uses_fallback_and_unsafe_reply_uses_deterministic_draft
     assert len(unsafe_metrics.rows) == 2
 
 
+def test_grounded_insufficient_context_does_not_call_generic_candidate_model() -> None:
+    class GroundedOnlyProvider(DeterministicReplyProvider):
+        model_version = "grounded-only"
+
+        def generate_candidate(self, **_kwargs: Any) -> str:
+            raise AssertionError("generic candidate model must not replace grounded draft")
+
+    service = DecisionService(
+        Settings(environment="test"), repository=InMemoryDecisionRepository(),
+        reply_provider=GroundedOnlyProvider(),
+    )
+    request = _request("req-grounded-missing-ref", "我的订单什么时候到？")
+    request["context"] = {
+        "orders": [{"external_order_id": "order-a", "status": "paid"}, {"external_order_id": "order-b", "status": "paid"}],
+        "logistics": [{"external_order_id": "unrelated", "status": "in_transit"}],
+    }
+    response = service.create_reply_decision(request)
+
+    assert response["action"] == "candidate"
+    assert "请提供订单尾号" in response["candidates"][0]["reply_text"]
+
+
 def test_handoff_decision_includes_customer_readable_reply() -> None:
     service = DecisionService(Settings(environment="test"), repository=InMemoryDecisionRepository())
 

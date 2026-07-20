@@ -308,7 +308,7 @@ def assert_simulation_response(
         not model_required
         or (
             model.get("status") == "succeeded"
-            and model.get("route_role") in {"primary", "fallback"}
+            and model.get("route_role") in {"primary", "fallback", "node_binding"}
             and isinstance(model.get("model_version"), str)
             and model.get("model_version") not in {"", "deterministic-reply-v1"}
             and model.get("validation_status") == "passed"

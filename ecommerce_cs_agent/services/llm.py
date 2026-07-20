@@ -12,7 +12,13 @@ from ecommerce_cs_agent.services.governed_reply_provider import (
     ReplyRewriteOutcome,
 )
 from ecommerce_cs_agent.services.outbound_http import validate_public_https_url
-from ecommerce_cs_agent.services.reply_generation import GroundedFactManifest
+from ecommerce_cs_agent.services.reply_generation import (
+    GroundedFactManifest,
+    GroundedRewriteRequest,
+    UnsafeModelReply,
+    build_rewrite_messages,
+    validate_model_reply,
+)
 from ecommerce_cs_agent.services.service_stage import ServiceStageClassification, classify_service_stage
 
 
@@ -128,7 +134,105 @@ class NodeBoundReplyProvider:
         self, *, organization_id: str, store_id: str, question: str,
         history: list[dict[str, Any]], deterministic: str, facts: GroundedFactManifest,
     ) -> ReplyRewriteOutcome:
-        return _deterministic_rewrite(deterministic, self.model_version)
+        started = time.monotonic()
+        try:
+            config, provider = self._resolve("generate_candidate")
+            messages = build_rewrite_messages(
+                GroundedRewriteRequest(
+                    question=question,
+                    history=tuple(
+                        str(item.get("content") or "")
+                        for item in history[-2:]
+                        if isinstance(item, dict)
+                    ),
+                    deterministic_draft=deterministic,
+                    facts=facts,
+                )
+            )
+            for attempt in range(3):
+                attempt_messages = messages
+                if attempt == 1:
+                    attempt_messages = [
+                        {
+                            **messages[0],
+                            "content": messages[0]["content"]
+                            + "纠正重试：上一版未通过事实校验；必须逐字保留 required_facts。",
+                        },
+                        messages[1],
+                    ]
+                elif attempt == 2:
+                    attempt_messages = [
+                        {
+                            **messages[0],
+                            "content": messages[0]["content"]
+                            + "最终安全重试：不要润色，逐字复制 deterministic_draft 到 reply_text。",
+                        },
+                        messages[1],
+                    ]
+                try:
+                    model_reply = provider.generate_from_messages(attempt_messages)  # type: ignore[attr-defined]
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    continue
+                try:
+                    reply = validate_model_reply(
+                        deterministic=deterministic, model_reply=model_reply, facts=facts
+                    )
+                    break
+                except UnsafeModelReply:
+                    if attempt == 2:
+                        raise
+        except UnsafeModelReply:
+            self._record(
+                "generate_candidate", locals().get("config", {}), "rejected",
+                "unsafe_model_reply", started,
+            )
+            return self._grounded_fallback(
+                deterministic, status="rejected", validation_status="rejected"
+            )
+        except ValueError:
+            self._record(
+                "generate_candidate", locals().get("config", {}), "rejected",
+                "input_rejected", started,
+            )
+            return self._grounded_fallback(
+                deterministic, status="rejected", validation_status="rejected"
+            )
+        except Exception:
+            self._record(
+                "generate_candidate", locals().get("config", {}), "failed",
+                "llm_call_failed", started,
+            )
+            return self._grounded_fallback(
+                deterministic, status="failed", validation_status="not_attempted"
+            )
+        self._record("generate_candidate", config, "succeeded", started=started)
+        return ReplyRewriteOutcome(
+            reply,
+            {
+                "model_version": str(config["model_id"]),
+                "route_role": "node_binding",
+                "status": "succeeded",
+                "fallback_used": False,
+                "validation_status": "passed",
+            },
+        )
+
+    @staticmethod
+    def _grounded_fallback(
+        deterministic: str, *, status: str, validation_status: str
+    ) -> ReplyRewriteOutcome:
+        return ReplyRewriteOutcome(
+            deterministic,
+            {
+                "model_version": "deterministic-reply-v1",
+                "route_role": "node_binding",
+                "status": status,
+                "fallback_used": True,
+                "validation_status": validation_status,
+            },
+        )
 
     def _resolve(self, node_id: str) -> tuple[dict[str, Any], ReplyProvider]:
         config = self.resolver(node_id)
@@ -253,6 +357,18 @@ class OpenAICompatibleReplyProvider:
         history: list[dict[str, Any]], deterministic: str, facts: GroundedFactManifest,
     ) -> ReplyRewriteOutcome:
         return _deterministic_rewrite(deterministic, self.model_version)
+
+    def generate_from_messages(self, messages: list[dict[str, str]]) -> str:
+        if len(messages) != 2 or [item.get("role") for item in messages] != ["system", "user"]:
+            raise ValueError("invalid grounded rewrite messages")
+        parsed = self._chat_json(
+            system=str(messages[0].get("content") or ""),
+            user=str(messages[1].get("content") or ""),
+        )
+        reply_text = str(parsed.get("reply_text") or "").strip() if isinstance(parsed, dict) else ""
+        if not reply_text:
+            raise RuntimeError("safe_llm_failure")
+        return reply_text
 
     def _chat_json(self, *, system: str, user: str) -> dict[str, Any]:
         payload = {

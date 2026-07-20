@@ -432,7 +432,10 @@ class ReplyDecisionGraph:
             if any(context.get(key) for key in ("products", "orders", "logistics"))
             else None
         )
-        if grounded and grounded.handoff_reason != "insufficient_context":
+        if grounded and (
+            grounded.handoff_reason != "insufficient_context"
+            or bool(grounded.fact_manifest.required_terms)
+        ):
             draft = grounded.reply_text
         else:
             try:

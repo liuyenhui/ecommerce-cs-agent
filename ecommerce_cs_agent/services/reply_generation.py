@@ -59,6 +59,7 @@ def build_rewrite_messages(request: GroundedRewriteRequest) -> list[dict[str, st
             "content": (
                 "你只润色已经由确定性规则生成的客服草稿。不得新增、删除或改变事实、数字、"
                 "实体、动作和风险结论；不得输出 JSON、解释、承诺或隐私信息。"
+                "required_facts 中每个字符串必须逐字保留，不得使用同义词替换。"
                 "只返回 JSON 对象：{\"reply_text\":\"客户可读中文回复\"}。"
             ),
         },

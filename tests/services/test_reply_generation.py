@@ -38,6 +38,7 @@ def test_prompt_contains_only_safe_rewrite_inputs() -> None:
     assert "source_ref" not in flattened
     assert "external_order_id" not in flattened
     assert "只润色" in flattened
+    assert "required_facts 中每个字符串必须逐字保留" in flattened
 
 
 def test_accepts_natural_rewrite_that_preserves_grounded_fact() -> None:

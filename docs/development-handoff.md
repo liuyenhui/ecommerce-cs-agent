@@ -6,6 +6,7 @@
 
 ### 2026-07-20
 
+- 当前 `LLM_NODE_BINDING_ENABLED` 主路径的 grounded rewrite 解析 `generate_candidate` 节点绑定，使用共享安全消息调用绑定的 OpenAI-compatible 模型并通过事实 validator；成功 trace 使用 `route_role=node_binding` 和实际模型 ID，瞬时调用失败或不安全输出会在同一安全事实边界内重试，三次仍失败才明确 rejected/failed 并回退确定性草稿。修改后固定 K3s-backed 10 组 / 30 轮报告 `reports/evals/acs-node-bound-grounded-rewrite-20260720-r7.{jsonl,summary.json,conversations.json}` 为 30/30、`blocked=0`、`needs_review=0`、无外发，其中 25 条 candidate 均有 `deepseek-v4-pro`、`route_role=node_binding`、`status=succeeded`、validator passed 的真实模型证据。
 - ACS grounded candidate 可通过组织已发布且正在运行的 `reply_generation` 主/备路由进行受控润色；确定性层继续拥有事实、实体、动作、隐私与转人工决策，模型输出经事实清单校验后才可采用，失败或漂移时明确回退确定性草稿。
 - 模拟评测对 candidate/auto-reply 新增强制模型证据：必须包含真实模型 ID、primary/fallback 角色、`status=succeeded`、校验通过与 fallback 标记；`deterministic-reply-v1` 或 Provider 失败回退不得冒充模型成功。trace、指标和安全 question/reply 报告只保存 metadata，不保存 Prompt、消息、模型原始回复、HTTP body 或 Secret。
 

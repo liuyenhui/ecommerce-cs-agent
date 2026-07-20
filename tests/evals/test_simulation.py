@@ -226,6 +226,39 @@ def test_simulation_rejects_deterministic_fallback_as_model_success() -> None:
     assert "model_generation_succeeded" in failures
 
 
+def test_simulation_accepts_successful_node_binding_model_evidence() -> None:
+    payload = fixture_payload()
+    fixture = SimulationFixture.model_validate(payload)
+    turn = fixture.conversations[0].turns[0]
+    response = AgentResponse.from_payload(
+        {
+            "decision_id": "d-node-binding",
+            "decision_status": "candidate",
+            "action": "candidate",
+            "candidates": [{"reply_text": "宠物香波"}],
+            "context_requests": [],
+            "trace": {
+                "thread_id": "d-node-binding",
+                "graph_version": "reply-decision-graph-v1",
+                "langgraph_checkpoint_id": "cp-node-binding",
+                "steps": [{"name": "generate_candidate", "status": "completed"}],
+                "external_send": {"attempted": False},
+                "model": {
+                    "model_version": "deepseek-v4-pro",
+                    "route_role": "node_binding",
+                    "status": "succeeded",
+                    "fallback_used": False,
+                    "validation_status": "passed",
+                },
+            },
+        }
+    )
+
+    assertions = assert_simulation_response(turn, response, fixture.snapshot)
+
+    assert next(item for item in assertions if item.name == "model_generation_succeeded").passed
+
+
 def test_simulation_rejects_context_dump_as_customer_reply() -> None:
     payload = fixture_payload()
     fixture = SimulationFixture.model_validate(payload)
