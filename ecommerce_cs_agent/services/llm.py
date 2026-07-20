@@ -7,7 +7,10 @@ from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
 
 from ecommerce_cs_agent.core.config import Settings
-from ecommerce_cs_agent.services.governed_reply_provider import GovernedReplyProvider, ReplyRewriteOutcome
+from ecommerce_cs_agent.services.governed_reply_provider import (
+    GovernedReplyProvider as _GovernedReplyProvider,
+    ReplyRewriteOutcome,
+)
 from ecommerce_cs_agent.services.outbound_http import validate_public_https_url
 from ecommerce_cs_agent.services.reply_generation import GroundedFactManifest
 from ecommerce_cs_agent.services.service_stage import ServiceStageClassification, classify_service_stage
@@ -66,6 +69,10 @@ class DeterministicReplyProvider:
         history: list[dict[str, Any]], deterministic: str, facts: GroundedFactManifest,
     ) -> ReplyRewriteOutcome:
         return _deterministic_rewrite(deterministic, self.model_version)
+
+
+class GovernedReplyProvider(_GovernedReplyProvider, DeterministicReplyProvider):
+    """Released-model rewrite provider with deterministic graph-node fallbacks."""
 
 
 class NodeBoundReplyProvider:

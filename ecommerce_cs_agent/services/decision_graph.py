@@ -432,7 +432,7 @@ class ReplyDecisionGraph:
             if any(context.get(key) for key in ("products", "orders", "logistics"))
             else None
         )
-        if grounded:
+        if grounded and grounded.handoff_reason != "insufficient_context":
             draft = grounded.reply_text
         else:
             try:
@@ -456,16 +456,18 @@ class ReplyDecisionGraph:
             "validation_status": "not_attempted",
         }
         if grounded and grounded.handoff_reason in {None, "insufficient_context"}:
-            rewrite = self.reply_provider.rewrite_grounded(
-                organization_id=state["organization_id"],
-                store_id=state["store_id"],
-                question=state["content"],
-                history=payload.get("conversation", {}).get("messages") or [],
-                deterministic=draft,
-                facts=grounded.fact_manifest,
-            )
-            draft = rewrite.reply_text
-            model_metadata = rewrite.model_metadata
+            rewrite_grounded = getattr(self.reply_provider, "rewrite_grounded", None)
+            if callable(rewrite_grounded):
+                rewrite = rewrite_grounded(
+                    organization_id=state["organization_id"],
+                    store_id=state["store_id"],
+                    question=state["content"],
+                    history=payload.get("conversation", {}).get("messages") or [],
+                    deterministic=draft,
+                    facts=grounded.fact_manifest,
+                )
+                draft = rewrite.reply_text
+                model_metadata = rewrite.model_metadata
         candidate = {
             "suggestion_id": f"suggestion-{state['decision_id'][-8:]}",
             "reply_text": draft,
