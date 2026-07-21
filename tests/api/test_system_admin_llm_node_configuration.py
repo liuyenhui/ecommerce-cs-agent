@@ -88,9 +88,36 @@ def test_binding_api_comes_from_server_registry_and_replaces_all_nodes() -> None
     assert saved.json()["revision"] == 1
 
 
+def test_delete_llm_succeeds_only_when_unbound() -> None:
+    client, repository = client_for()
+    model = create_model(client)
+
+    deleted = client.delete(f"/v1/system-admin/llms/{model['llm_id']}", headers=HEADERS)
+
+    assert deleted.status_code == 204
+    assert repository.models == {}
+    assert repository.audit_logs[-1]["action"] == "llm.model.delete"
+
+
+def test_delete_llm_reports_safe_binding_conflict() -> None:
+    client, repository = client_for()
+    model = create_model(client)
+    repository.bindings = {"generate_candidate": str(model["llm_id"])}
+
+    blocked = client.delete(f"/v1/system-admin/llms/{model['llm_id']}", headers=HEADERS)
+
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "llm_in_use"
+    assert "secret" not in blocked.text.lower()
+    assert str(model["llm_id"]) in repository.models
+
+
 @pytest.mark.parametrize("role", ["technical_support", "security_auditor"])
 def test_read_only_roles_cannot_create_or_save_bindings(role: str) -> None:
-    client, _repository = client_for(role)
+    client, repository = client_for(role)
+    privileged_client, privileged_repository = client_for()
+    model = create_model(privileged_client)
+    repository.models[str(model["llm_id"])] = privileged_repository.models[str(model["llm_id"])]
     create = client.post(
         "/v1/system-admin/llms",
         headers=HEADERS,
@@ -107,6 +134,8 @@ def test_read_only_roles_cannot_create_or_save_bindings(role: str) -> None:
         headers=HEADERS,
         json={"expected_revision": 0, "bindings": []},
     )
+    delete = client.delete(f"/v1/system-admin/llms/{model['llm_id']}", headers=HEADERS)
 
     assert create.status_code == 403
     assert write.status_code == 403
+    assert delete.status_code == 403

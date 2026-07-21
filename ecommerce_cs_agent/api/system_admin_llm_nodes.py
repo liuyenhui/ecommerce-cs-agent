@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated, Any, Callable, Literal
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Path
+from fastapi import Depends, FastAPI, Path, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -69,6 +69,11 @@ def register_system_admin_llm_node_routes(
     @app.patch("/v1/system-admin/llms/{llm_id}")
     def update_llm(llm_id: ResourceId, payload: LlmUpdateRequest, session: Any = Depends(system_session)) -> dict[str, Any]:
         return repository.update_llm(session, str(llm_id), payload.model_dump(mode="json", exclude_none=True))
+
+    @app.delete("/v1/system-admin/llms/{llm_id}", status_code=204)
+    def delete_llm(llm_id: ResourceId, session: Any = Depends(system_session)) -> Response:
+        repository.delete_llm(session, str(llm_id))
+        return Response(status_code=204)
 
     @app.post("/v1/system-admin/llms/{llm_id}/connection-tests")
     def test_connection(llm_id: ResourceId, _payload: ConnectionTestRequest, session: Any = Depends(system_session)) -> dict[str, Any]:

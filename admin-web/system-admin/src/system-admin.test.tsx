@@ -1148,20 +1148,69 @@ describe("SACS LLM node configuration", () => {
     { node_id: "generate_candidate", label: "生成候选", description: "生成回复", uses_llm: true, required: true, llm_id: model.llm_id }
   ];
 
-  it("renders exactly the two primary sections from the server node registry", async () => {
+  it("renders LLM and LangGraph as separate tabs from the server registry", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("langgraph-llm-bindings") ? response({ scope: "global", revision: 1, nodes }) : response({ items: [model] })));
     render(<LlmGovernancePage />);
-    expect(await screen.findByRole("heading", { name: "可用 LLM" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "LangGraph 节点使用的 LLM" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: /可用 LLM/ })).toBeTruthy();
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(screen.getByText("••••9876")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "LangGraph" }));
+    expect(window.location.search).toContain("tab=langgraph");
+    expect(screen.getByRole("heading", { name: /LangGraph 节点使用的 LLM/ })).toBeTruthy();
     expect(screen.getByText("normalize_request")).toBeTruthy();
     expect(screen.getByText("不使用 LLM")).toBeTruthy();
-    expect(screen.queryByRole("tab")).toBeNull();
-    expect(screen.getByText("••••9876")).toBeTruthy();
+  });
+
+  it("edits in a modal without resubmitting the masked API Key", async () => {
+    const writes: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (init?.method === "PATCH") { writes.push(JSON.parse(String(init.body))); return response(model); }
+      if (path.includes("langgraph-llm-bindings")) return response({ scope: "global", revision: 1, nodes });
+      return response({ items: [model] });
+    }));
+    render(<LlmGovernancePage />);
+    fireEvent.click(screen.getByRole("tab", { name: "LLM" }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 / 换 Key" }));
+    const dialog = screen.getByRole("dialog", { name: "编辑 LLM 表单" });
+    expect(within(dialog).getByText("••••9876")).toBeTruthy();
+    expect((within(dialog).getByLabelText(/API Key/) as HTMLInputElement).value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "保存 LLM" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).not.toHaveProperty("api_key");
+    expect(JSON.stringify(writes[0])).not.toContain("••••9876");
+  });
+
+  it("enables binding save only after a configuration change", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("langgraph-llm-bindings") ? response({ scope: "global", revision: 1, nodes }) : response({ items: [model] })));
+    render(<LlmGovernancePage />);
+    fireEvent.click(await screen.findByRole("tab", { name: "LangGraph" }));
+    const save = screen.getByRole("button", { name: "保存全部绑定" });
+    expect(save.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(screen.getByLabelText("咨询阶段分类 使用的 LLM"), { target: { value: "" } });
+    expect(save.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("requires explicit confirmation before issuing a delete", async () => {
+    const methods: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method) methods.push(init.method);
+      if (init?.method === "DELETE") return response(null, 204);
+      return String(input).includes("langgraph-llm-bindings") ? response({ scope: "global", revision: 1, nodes }) : response({ items: [model] });
+    }));
+    render(<LlmGovernancePage />);
+    fireEvent.click(screen.getByRole("tab", { name: "LLM" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+    expect(screen.getByRole("alertdialog", { name: /删除 模型 A/ })).toBeTruthy();
+    expect(methods).not.toContain("DELETE");
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(methods).toContain("DELETE"));
   });
 
   it("uses a one-time password field without browser persistence", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("langgraph-llm-bindings") ? response({ scope: "global", revision: 0, nodes }) : response({ items: [] })));
     render(<LlmGovernancePage />);
+    fireEvent.click(screen.getByRole("tab", { name: "LLM" }));
     fireEvent.click(await screen.findByRole("button", { name: "添加 LLM" }));
     const key = screen.getByLabelText("API Key") as HTMLInputElement;
     expect(key.type).toBe("password");

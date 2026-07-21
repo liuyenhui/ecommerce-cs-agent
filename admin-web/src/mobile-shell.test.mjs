@@ -64,7 +64,7 @@ test("mobile tables expose field labels and prevent viewport overflow", () => {
 test("LLM configuration sections, release dialog, and form inputs keep accessible relationships", () => {
   assert.match(llmSource, /aria-labelledby="available-llms-title"/);
   assert.match(llmSource, /aria-labelledby="node-bindings-title"/);
-  assert.match(llmSource, /role="group" aria-label=\{editing \? "编辑 LLM 表单" : "添加 LLM 表单"\}/);
+  assert.match(llmSource, /role="dialog" aria-modal="true" aria-label=\{editing \? "编辑 LLM 表单" : "添加 LLM 表单"\}/);
   assert.match(llmSource, /type="password" autoComplete="new-password"/);
   assert.match(releasesSource, /role="dialog" aria-modal="true" aria-labelledby="release-title"/);
   assert.match(releasesSource, /if \(event\.key === "Escape"\)[\s\S]*setSelected\(null\)/);
