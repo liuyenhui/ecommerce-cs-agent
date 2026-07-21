@@ -4,8 +4,15 @@
 
 ## 最近文档更新
 
+### 2026-07-21
+
+- ACS 自然客服口吻最终验收指向 `reports/evals/acs-natural-customer-service-tone-20260721-r19.{jsonl,summary.json,conversations.json}`：固定脱敏快照 hash `9128f2ef13710e6b826e271f`，50/50 通过，`blocked=0`、`needs_review=0`、`all_messages_passed=true`、`external_send=0`。其中 42 条 `candidate` 均为 `deepseek-v4-pro` / `route_role=node_binding` / `status=succeeded` / `fallback_used=false` / `validation_status=passed`，8 条安全边界场景为 `handoff`；50 条客户可见回复已逐条人工复核通过。`reports/` 按仓库策略保持未跟踪，提交只记录安全报告路径与汇总，不提交真实运行产物、完整订单号、完整运单号、Prompt、HTTP body 或 Secret。
+- 保留 r12、r14–r18 作为修复前后证据，不覆盖首轮或中间报告：r12 自动门禁 50/50 但尚未构成最终人工验收；r14 因 `tone-15` 模型调用证据失败为 49/50；r15–r17 分别暴露到货下一步短语、隐私边界和物流查询语义断言问题；r18 自动门禁 50/50，但人工复核发现无依据补货提醒、已收货后仍建议跟踪配送及订单长 listing 标题，修复后才以 r19 重新完整运行并人工通过。
+- 本轮根因与修复边界：自然口吻 Prompt 只负责受控润色，candidate validator 继续锁定事实、数字、状态、实体、承诺和隐私；商品适用对象回答去除判断来源套话和无关免责声明；OpenAI-compatible 调用只对有限瞬时错误有界重试；模拟 runner 顺序消费多个 typed context request；tracking privacy 必须保留显式隐私边界；物流下一步使用有限引导词、动作与修饰词的语义模式并排除否定/纯叙述；没有快照能力依据时拒绝补货提醒/通知；已收货时拒绝继续配送或实时物流跟踪建议；订单商品名从现有实体/标题抽取自然短品类名并继续保留实体 ID。
+
 ### 2026-07-20
 
+- 当前 `LLM_NODE_BINDING_ENABLED` 主路径的 grounded rewrite 解析 `generate_candidate` 节点绑定，使用共享安全消息调用绑定的 OpenAI-compatible 模型并通过事实 validator；成功 trace 使用 `route_role=node_binding` 和实际模型 ID，瞬时调用失败或不安全输出会在同一安全事实边界内重试，三次仍失败才明确 rejected/failed 并回退确定性草稿。修改后固定 K3s-backed 10 组 / 30 轮报告 `reports/evals/acs-node-bound-grounded-rewrite-20260720-r7.{jsonl,summary.json,conversations.json}` 为 30/30、`blocked=0`、`needs_review=0`、无外发，其中 25 条 candidate 均有 `deepseek-v4-pro`、`route_role=node_binding`、`status=succeeded`、validator passed 的真实模型证据。
 - ACS grounded candidate 可通过组织已发布且正在运行的 `reply_generation` 主/备路由进行受控润色；确定性层继续拥有事实、实体、动作、隐私与转人工决策，模型输出经事实清单校验后才可采用，失败或漂移时明确回退确定性草稿。
 - 模拟评测对 candidate/auto-reply 新增强制模型证据：必须包含真实模型 ID、primary/fallback 角色、`status=succeeded`、校验通过与 fallback 标记；`deterministic-reply-v1` 或 Provider 失败回退不得冒充模型成功。trace、指标和安全 question/reply 报告只保存 metadata，不保存 Prompt、消息、模型原始回复、HTTP body 或 Secret。
 
