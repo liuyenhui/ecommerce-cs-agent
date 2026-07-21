@@ -135,6 +135,7 @@ class NodeBoundReplyProvider:
         history: list[dict[str, Any]], deterministic: str, facts: GroundedFactManifest,
     ) -> ReplyRewriteOutcome:
         started = time.monotonic()
+        reply: str | None = None
         try:
             config, provider = self._resolve("generate_candidate")
             messages = build_rewrite_messages(
@@ -212,6 +213,13 @@ class NodeBoundReplyProvider:
             self._record(
                 "generate_candidate", locals().get("config", {}), "failed",
                 "llm_call_failed", started,
+            )
+            return self._grounded_fallback(
+                deterministic, status="failed", validation_status="not_attempted"
+            )
+        if reply is None:
+            self._record(
+                "generate_candidate", config, "failed", "llm_call_failed", started
             )
             return self._grounded_fallback(
                 deterministic, status="failed", validation_status="not_attempted"
