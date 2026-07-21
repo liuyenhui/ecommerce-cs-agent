@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+from urllib.error import HTTPError, URLError
 from typing import Any
+
+import pytest
 
 from ecommerce_cs_agent.core.config import Settings
 from ecommerce_cs_agent.services.llm import (
@@ -137,6 +140,109 @@ def test_candidate_prompt_declares_json_output_for_compatible_providers() -> Non
     assert reply == "测试回复"
     assert "JSON" in provider.system_prompt
     assert "reply_text" in provider.system_prompt
+
+
+def test_openai_compatible_chat_retries_transient_connection_failure_with_bounded_backoff(monkeypatch) -> None:
+    provider = OpenAICompatibleReplyProvider(
+        base_url="https://llm.example.test/v1", api_key="test-key", model="test-model"
+    )
+    calls: list[object] = []
+    sleeps: list[float] = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {"choices": [{"message": {"content": '{"reply_text":"恢复成功"}'}}]}
+            ).encode()
+
+    def urlopen(*_args, **_kwargs):
+        calls.append(object())
+        if len(calls) == 1:
+            raise URLError("temporary connection failure")
+        return Response()
+
+    monkeypatch.setattr("ecommerce_cs_agent.services.llm.urllib_request.urlopen", urlopen)
+    monkeypatch.setattr("ecommerce_cs_agent.services.llm.time.sleep", sleeps.append)
+
+    result = provider.generate_from_messages(
+        [{"role": "system", "content": "safe"}, {"role": "user", "content": "safe"}]
+    )
+
+    assert result == "恢复成功"
+    assert len(calls) == 2
+    assert sleeps == [0.2]
+    assert provider.last_chat_attempts == 2
+
+
+def test_openai_compatible_chat_does_not_retry_non_transient_4xx(monkeypatch) -> None:
+    provider = OpenAICompatibleReplyProvider(
+        base_url="https://llm.example.test/v1", api_key="test-key", model="test-model"
+    )
+    calls: list[object] = []
+    sleeps: list[float] = []
+
+    def urlopen(*_args, **_kwargs):
+        calls.append(object())
+        raise HTTPError("https://llm.example.test", 400, "bad request", {}, None)
+
+    monkeypatch.setattr("ecommerce_cs_agent.services.llm.urllib_request.urlopen", urlopen)
+    monkeypatch.setattr("ecommerce_cs_agent.services.llm.time.sleep", sleeps.append)
+
+    try:
+        provider.generate_from_messages(
+            [{"role": "system", "content": "safe"}, {"role": "user", "content": "safe"}]
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "safe_llm_failure"
+    else:
+        raise AssertionError("non-transient 4xx must fail safely")
+
+    assert len(calls) == 1
+    assert sleeps == []
+    assert provider.last_chat_attempts == 1
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        URLError("temporary connection failure"),
+        TimeoutError("temporary timeout"),
+        HTTPError("https://llm.example.test", 429, "rate limited", {}, None),
+        HTTPError("https://llm.example.test", 503, "unavailable", {}, None),
+    ],
+)
+def test_openai_compatible_chat_caps_repeated_transient_failures_at_three(monkeypatch, error) -> None:
+    provider = OpenAICompatibleReplyProvider(
+        base_url="https://llm.example.test/v1", api_key="test-key", model="test-model"
+    )
+    calls: list[object] = []
+    sleeps: list[float] = []
+
+    def urlopen(*_args, **_kwargs):
+        calls.append(object())
+        raise error
+
+    monkeypatch.setattr("ecommerce_cs_agent.services.llm.urllib_request.urlopen", urlopen)
+    monkeypatch.setattr("ecommerce_cs_agent.services.llm.time.sleep", sleeps.append)
+
+    try:
+        provider.generate_from_messages(
+            [{"role": "system", "content": "safe"}, {"role": "user", "content": "safe"}]
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "safe_llm_failure"
+    else:
+        raise AssertionError("exhausted transient retries must fail safely")
+
+    assert len(calls) == 3
+    assert sleeps == [0.2, 0.4]
+    assert provider.last_chat_attempts == 3
 
 
 def test_classifier_preserves_deterministic_primary_and_secondary_stages() -> None:
@@ -276,6 +382,16 @@ def test_node_bound_grounded_rewrite_uses_generate_candidate_binding_and_safe_me
     flattened = json.dumps(bound.messages, ensure_ascii=False)
     assert "只润色" in flattened
     assert "这款适合比熊吗" in flattened
+    assert "先直接回答当前问题" in flattened
+    assert "1至2句" in flattened
+    assert "真实电商客服" in flattened
+    assert "不要重复买家问题" in flattened
+    assert "不要说明自己是AI" in flattened
+    assert "不要空泛安抚" in flattened
+    assert "不要卖萌" in flattened
+    assert "隐私边界" in flattened
+    assert "明确下一步" in flattened
+    assert "商品适用对象问题直接回答" in flattened
     assert provider.last_invocation is not None
     assert set(provider.last_invocation) == {
         "node_id", "llm_id", "model_id", "status", "error_code", "latency_ms",
@@ -323,6 +439,46 @@ def test_node_bound_grounded_rewrite_retries_one_rejected_output_with_stricter_m
     assert "纠正重试" in bound.messages[1][0]["content"]
 
 
+def test_node_bound_grounded_rewrite_retries_tracking_reply_without_privacy_boundary() -> None:
+    deterministic = (
+        "为保护信息安全，目前只能提供脱敏运单号：**********0156。"
+        "可使用该号码在承运商官网查询物流。"
+    )
+    corrected = (
+        "为保护信息安全，这里只能提供脱敏运单号：**********0156。"
+        "您可以用这个号码在承运商官网查询物流信息。"
+    )
+    bound = _SequencedGroundedMessageProvider(
+        [
+            "好的，这是您的脱敏运单号：**********0156。您可以用这个号码在承运商官网查询物流信息。",
+            corrected,
+        ]
+    )
+    provider = NodeBoundReplyProvider(
+        resolver=lambda _node_id: {"llm_id": "llm-a", "model_id": "deepseek-v4-pro"},
+        provider_factory=lambda _config: bound,
+    )
+
+    outcome = provider.rewrite_grounded(
+        organization_id="org-1",
+        store_id="store-1",
+        question="把完整运单号发我。",
+        history=[],
+        deterministic=deterministic,
+        facts=GroundedFactManifest(
+            required_terms=("0156", "脱敏运单号"),
+            allowed_numbers=("0156",),
+            allowed_entities=(),
+            prohibited_claims=("保证送达",),
+        ),
+    )
+
+    assert outcome.reply_text == corrected
+    assert outcome.model_metadata["status"] == "succeeded"
+    assert len(bound.messages) == 2
+    assert "隐私边界" in bound.messages[1][0]["content"]
+
+
 def test_node_bound_grounded_rewrite_uses_exact_draft_model_attempt_after_two_rejections() -> None:
     deterministic = "从商品名称看，这款适合比熊使用。"
     bound = _SequencedGroundedMessageProvider(
@@ -342,6 +498,8 @@ def test_node_bound_grounded_rewrite_uses_exact_draft_model_attempt_after_two_re
     assert outcome.model_metadata["status"] == "succeeded"
     assert len(bound.messages) == 3
     assert "逐字复制 deterministic_draft" in bound.messages[2][0]["content"]
+    assert "润色" not in bound.messages[2][0]["content"]
+    assert json.loads(bound.messages[2][1]["content"]) == {"deterministic_draft": deterministic}
 
 
 def test_node_bound_grounded_rewrite_retries_transient_model_failure() -> None:

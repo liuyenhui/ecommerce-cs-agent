@@ -163,11 +163,20 @@ class NodeBoundReplyProvider:
                 elif attempt == 2:
                     attempt_messages = [
                         {
-                            **messages[0],
-                            "content": messages[0]["content"]
-                            + "最终安全重试：不要润色，逐字复制 deterministic_draft 到 reply_text。",
+                            "role": "system",
+                            "content": (
+                                "最终安全重试：逐字复制 deterministic_draft 到 reply_text。"
+                                "不得添加、删除或改写任何字符，只返回包含 reply_text 的 JSON 对象。"
+                            ),
                         },
-                        messages[1],
+                        {
+                            "role": "user",
+                            "content": json.dumps(
+                                {"deterministic_draft": deterministic},
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        },
                     ]
                 try:
                     model_reply = provider.generate_from_messages(attempt_messages)  # type: ignore[attr-defined]
@@ -268,6 +277,7 @@ class OpenAICompatibleReplyProvider:
         self.model = model
         self.fallback = fallback or DeterministicReplyProvider()
         self.strict_failure = strict_failure
+        self.last_chat_attempts = 0
 
     def classify_service_stage(
         self, *, message: str, conversation: dict[str, Any], context: dict[str, Any]
@@ -383,14 +393,24 @@ class OpenAICompatibleReplyProvider:
             headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urllib_request.urlopen(request, timeout=20) as response:
-                data = json.loads(response.read().decode("utf-8"))
-            content = str(data["choices"][0]["message"]["content"])
-            parsed = json.loads(_strip_json_fence(content))
-            return parsed if isinstance(parsed, dict) else {}
-        except (HTTPError, URLError, TimeoutError, KeyError, ValueError, json.JSONDecodeError):
-            return {}
+        for attempt in range(3):
+            self.last_chat_attempts = attempt + 1
+            try:
+                with urllib_request.urlopen(request, timeout=20) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                content = str(data["choices"][0]["message"]["content"])
+                parsed = json.loads(_strip_json_fence(content))
+                return parsed if isinstance(parsed, dict) else {}
+            except HTTPError as exc:
+                if (exc.code != 429 and not 500 <= exc.code < 600) or attempt == 2:
+                    return {}
+            except (URLError, TimeoutError):
+                if attempt == 2:
+                    return {}
+            except (KeyError, ValueError, json.JSONDecodeError):
+                return {}
+            time.sleep(0.2 * (2 ** attempt))
+        return {}
 
 
 def reply_provider_for(settings: Settings) -> ReplyProvider:

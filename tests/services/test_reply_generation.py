@@ -92,3 +92,67 @@ def test_rejects_missing_required_fact_and_added_status() -> None:
             model_reply="喷雾当前活动价为75元，库存120件。",
             facts=facts,
         )
+
+
+@pytest.mark.parametrize(
+    ("deterministic", "model_reply", "required_terms", "allowed_numbers"),
+    [
+        (
+            "这款商品当前库存为0件。",
+            "这款商品目前库存为0件，暂时缺货了。您可以看看其他相似款式，或者关注补货通知。",
+            ("库存为0件", "0"),
+            ("0",),
+        ),
+        (
+            "这款商品当前为“售罄”状态。",
+            "这款商品目前是售罄状态，所以无法购买。您可以在商品页面设置补货提醒，这样到货会第一时间通知您。",
+            ("售罄",),
+            (),
+        ),
+        (
+            "这款商品当前库存为0件。",
+            "是的，这款商品当前库存为0件。您可以收藏商品，补货后会及时通知。",
+            ("库存为0件", "0"),
+            ("0",),
+        ),
+    ],
+)
+def test_rejects_r18_unbacked_restock_notification_capability(
+    deterministic: str,
+    model_reply: str,
+    required_terms: tuple[str, ...],
+    allowed_numbers: tuple[str, ...],
+) -> None:
+    with pytest.raises(UnsafeModelReply, match="unsupported_capability"):
+        validate_model_reply(
+            deterministic=deterministic,
+            model_reply=model_reply,
+            facts=GroundedFactManifest(
+                required_terms=required_terms,
+                allowed_numbers=allowed_numbers,
+                allowed_entities=("这款商品",),
+                prohibited_claims=(),
+            ),
+        )
+
+
+def test_rejects_r18_delivered_status_with_continued_delivery_tracking_advice() -> None:
+    facts = GroundedFactManifest(
+        required_terms=("已收货",),
+        allowed_numbers=(),
+        allowed_entities=("中通快递",),
+        prohibited_claims=(),
+    )
+
+    with pytest.raises(UnsafeModelReply, match="delivered_status_conflict"):
+        validate_model_reply(
+            deterministic="物流当前状态是“已收货”。",
+            model_reply="订单物流已显示已收货，若需跟踪具体配送进度，可联系中通快递查询。",
+            facts=facts,
+        )
+
+    assert validate_model_reply(
+        deterministic="物流当前状态是“已收货”。",
+        model_reply="物流显示已收货，如果实际没收到，我再帮您核实。",
+        facts=facts,
+    ) == "物流显示已收货，如果实际没收到，我再帮您核实。"

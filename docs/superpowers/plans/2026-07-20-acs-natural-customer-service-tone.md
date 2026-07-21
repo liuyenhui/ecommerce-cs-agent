@@ -209,6 +209,32 @@ Expected: no secret values; key-name references, if any, are reviewed as non-sec
 
 Commit focused implementation/report changes, push `codex/acs-node-bound-grounded-rewrite`, and confirm PR #97 points to the new commit. Do not merge or deploy.
 
+## Final acceptance record (2026-07-21)
+
+The final accepted run is `reports/evals/acs-natural-customer-service-tone-20260721-r19.{jsonl,summary.json,conversations.json}` against snapshot hash `9128f2ef13710e6b826e271f`. The repository ignores `reports/`, so these metadata-only local artifacts remain audit evidence and are not force-added to Git.
+
+| Run | Automated result | Evidence retained |
+|---|---:|---|
+| r12 | 50/50 | First automated hard pass; retained as pre-final evidence, not treated as final human acceptance. |
+| r14 | 49/50 | `tone-15` failed required model-generation evidence. |
+| r15 | 49/50 | `tone-16` exposed literal-only logistics next-step matching. |
+| r16 | 49/50 | `tone-20` exposed a generated tracking reply that omitted the privacy boundary. |
+| r17 | 49/50 | `tone-20` exposed the need for bounded semantic logistics-action matching with negation protection. |
+| r18 | 50/50 | Automated hard pass; human review rejected unsupported restock notifications, delivered-status tracking advice, and a raw long listing title. |
+| r19 | 50/50 | Final automated and 50-row human acceptance. |
+
+r19 records `total_messages=50`, `passed=50`, `blocked=0`, `needs_review=0`, `all_messages_passed=true`, and `external_send=0`. Its 42 `candidate` rows have zero bad model-metadata rows: all use `deepseek-v4-pro`, `route_role=node_binding`, `status=succeeded`, `fallback_used=false`, and `validation_status=passed`; the remaining eight rows are intentional safety handoffs. All 50 customer-visible replies were reviewed and approved individually.
+
+The accepted implementation addresses the complete evidence chain without weakening existing gates:
+
+- natural customer-service Prompt and validator rules keep the model inside the deterministic fact boundary;
+- product-audience replies remove source-explanation boilerplate and unrelated professional disclaimers;
+- network retry is limited and bounded, while multiple typed context requests are consumed in sequence;
+- tracking replies preserve an explicit privacy boundary, and logistics next steps use bounded semantic action/modifier matching with negation and narrative protections;
+- model replies cannot invent restock reminder/notification capabilities absent from the deterministic source;
+- delivered orders cannot be paired with continued-delivery or real-time tracking advice;
+- order-item replies derive a natural short category from existing product/title evidence while preserving referenced entity IDs and without inventing an audience.
+
 - [ ] **Step 5: Wait for required checks**
 
 Use `gh pr checks 97 --watch` and report each required check's final status. If a check fails, inspect the failure, fix the real issue with TDD, rerun local gates, commit/push, and wait again.

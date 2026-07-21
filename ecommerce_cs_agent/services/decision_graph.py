@@ -17,11 +17,15 @@ from ecommerce_cs_agent.services.service_stage import ServiceStageClassification
 
 HIGH_RISK_KEYWORDS = ("退款", "赔偿", "投诉", "平台介入", "处罚", "refund", "complaint")
 TENANT_SECURITY_KEYWORDS = ("隔壁店", "别的店", "其他店", "别人店", "其它店", "跨店", "其他租户", "别的租户")
-SHIPPING_KEYWORDS = ("发货", "物流", "快递", "什么时候到", "ship", "shipping", "delivery")
+SHIPPING_KEYWORDS = (
+    "发货", "发没发", "物流", "快递", "运单号", "什么时候到", "今天能到", "到哪儿", "走哪家",
+    "ship", "shipping", "delivery",
+)
 PRODUCT_KEYWORDS = (
     "商品", "产品", "材质", "尺寸", "颜色", "规格", "参数", "重量", "功率", "容量", "型号", "版本",
     "适配", "包装", "数量", "价格", "活动价", "多少钱", "库存", "有货", "买不了", "在售", "下架",
-    "适合", "能用", "免水洗", "毫升", "material", "size", "weight", "power", "capacity", "model", "version",
+    "适合", "能用", "免水洗", "毫升", "多大", "几件", "没货", "还能拍", "香波", "喷雾", "狗碗",
+    "能治", "舔到", "多喷几次", "皮肤敏感", "material", "size", "weight", "power", "capacity", "model", "version",
 )
 ORDER_KEYWORDS = ("订单", "买的什么", "买了什么", "order")
 ACTION_KEYWORDS = (

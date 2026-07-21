@@ -21,6 +21,31 @@ PRIVATE_FIELD_NAMES = {
 }
 TRACKING_FIELD_NAMES = {"tracking_no", "tracking_number", "waybill_no"}
 PHONE_RE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
+STYLE_ASSERTION_IDS = {
+    "style.sentence_count_1_to_2",
+    "style.direct_answer_first",
+    "style.no_unnecessary_repetition",
+    "style.natural_customer_service_chinese",
+    "style.no_excessive_cuteness",
+    "style.calm_under_pressure",
+    "style.boundary_with_next_step",
+    "style.concise_entity_reference",
+    "style.direct_product_audience_answer",
+}
+BANNED_TEMPLATES = {
+    "template.ai_identity": ("作为一个 AI", "作为人工智能", "我是 AI 客服"),
+    "template.system_narration": ("根据系统设定", "根据您提供的信息，我将为您查询", "系统显示如下", "以下是详细说明"),
+    "template.empty_reassurance": ("请您耐心等待", "感谢您的理解与支持"),
+    "template.irrelevant_greeting": ("亲亲", "宝子", "很高兴为您服务"),
+    "template.content_free_disclaimer": ("具体以实际为准", "详情请阅读说明书"),
+}
+LOGISTICS_NEXT_STEP_RE = re.compile(
+    r"(?:建议|可以|可|请)[^，。！？!?；;]{0,24}(?:查看|查询|查)(?:最新|实时|当前)?物流"
+)
+NEGATED_LOGISTICS_STEP_RE = re.compile(
+    r"(?:不要|无需|不用|别|禁止|不可|不可以)[^，。！？!?；;]{0,12}"
+    r"(?:查看|查询|查)(?:最新|实时|当前)?物流"
+)
 
 
 def snapshot_sha256(snapshot: dict[str, Any]) -> str:
@@ -63,12 +88,30 @@ class SimulationTurn(BaseModel):
     message: str = Field(min_length=1)
     scenario: str = Field(min_length=1)
     expected: SimulationExpected
+    coverage: list[str] = Field(default_factory=list)
+    setup_history: list[dict[str, str]] = Field(default_factory=list)
+    style_assertions: list[str] = Field(default_factory=list)
+    human_review: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_tone_review(self) -> "SimulationTurn":
+        if not self.turn_id.startswith("tone-"):
+            return self
+        if not self.coverage:
+            raise ValueError("tone case requires coverage")
+        if not self.style_assertions:
+            raise ValueError("tone case requires style assertions")
+        if not self.human_review or self.human_review.get("approved") is not True:
+            raise ValueError("tone case must be approved")
+        if not self.human_review.get("approved_at"):
+            raise ValueError("approved tone case requires approved_at")
+        return self
 
 
 class SimulationConversation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     conversation_id: str = Field(min_length=1)
-    turns: list[SimulationTurn] = Field(min_length=3, max_length=5)
+    turns: list[SimulationTurn] = Field(min_length=1, max_length=5)
 
 
 class SimulationFixture(BaseModel):
@@ -82,7 +125,21 @@ class SimulationFixture(BaseModel):
     @model_validator(mode="after")
     def validate_fixed_fixture(self, info: ValidationInfo) -> "SimulationFixture":
         allow_partial = bool(info.context and info.context.get("allow_partial"))
-        if not allow_partial and len(self.conversations) != 10:
+        tone_turns = [
+            turn for conversation in self.conversations for turn in conversation.turns
+            if turn.turn_id.startswith("tone-")
+        ]
+        if tone_turns and not self.generation.generated_at:
+            raise ValueError("tone fixture generation requires generated_at")
+        if not allow_partial and tone_turns:
+            baseline_turns = [
+                turn for conversation in self.conversations for turn in conversation.turns
+                if not turn.turn_id.startswith("tone-")
+            ]
+            expected_tone_ids = [f"tone-{index:02d}" for index in range(1, 21)]
+            if len(baseline_turns) != 30 or [turn.turn_id for turn in tone_turns] != expected_tone_ids:
+                raise ValueError("simulation fixture must contain 30 baseline and 20 fixed tone turns")
+        elif not allow_partial and len(self.conversations) != 10:
             raise ValueError("simulation fixture must contain exactly 10 conversations")
         total = sum(len(item.turns) for item in self.conversations)
         if not allow_partial and total < 30:
@@ -119,15 +176,25 @@ class SimulationRunner:
         for conversation in fixture.conversations:
             history: list[dict[str, Any]] = []
             for turn_index, turn in enumerate(conversation.turns):
+                if turn_index == 0 and turn.setup_history:
+                    history.extend(turn.setup_history)
                 case = _turn_case(fixture, conversation, turn, turn_index, history)
                 initial = self.client.create_decision(case)
                 final = initial
                 refill_calls: list[str] = []
-                for context_request in initial.context_requests:
+                pending = list(initial.context_requests)
+                seen_context_requests: set[str] = set()
+                while pending:
+                    context_request = pending.pop(0)
                     if context_request.type not in ALLOWED_CONTEXT_TYPES:
                         continue
+                    request_key = context_request.context_request_id or context_request.type
+                    if request_key in seen_context_requests:
+                        continue
+                    seen_context_requests.add(request_key)
                     final = self.client.refill_context(case, final, context_request)
                     refill_calls.append(context_request.type)
+                    pending.extend(final.context_requests or final.remaining_context_requests)
                 final.raw.setdefault(
                     "external_send", {"attempted": False, "reason": "simulation_runner_has_no_send_path"}
                 )
@@ -141,6 +208,7 @@ class SimulationRunner:
                 blocked = any(item.blocked for item in failed)
                 passed = not failed and judge.passed and not judge.needs_review and not blocked
                 assistant_content = _response_text(final) or "[no candidate response]"
+                primary_failure_category = _primary_failure_category(failed)
                 rows.append(
                     {
                         "case_id": case.case_id,
@@ -151,6 +219,10 @@ class SimulationRunner:
                         "passed": passed,
                         "blocked": blocked,
                         "needs_review": judge.needs_review,
+                        "source": "simulation",
+                        "external_send": bool((final.raw.get("external_send") or {}).get("attempted")),
+                        "human_review": turn.human_review,
+                        "primary_failure_category": primary_failure_category,
                         "context_refill_calls": refill_calls,
                         "assertion_results": [item.model_dump(mode="json") for item in assertions],
                         "judge_result": judge.model_dump(mode="json"),
@@ -173,6 +245,21 @@ class SimulationRunner:
         passed_count = sum(row["passed"] is True for row in rows)
         blocked_count = sum(row["blocked"] is True for row in rows)
         needs_review_count = sum(row["needs_review"] is True for row in rows)
+        style_distribution: dict[str, dict[str, int]] = {}
+        sentence_distribution: dict[str, int] = {}
+        banned_distribution: dict[str, int] = {}
+        for row in rows:
+            for item in row["assertion_results"]:
+                name = item["name"]
+                if name.startswith("style.") and name != "style.banned_template":
+                    counts = style_distribution.setdefault(name, {"passed": 0, "failed": 0})
+                    counts["passed" if item["passed"] else "failed"] += 1
+                if name == "style.sentence_count_1_to_2":
+                    count = str(item.get("evidence", {}).get("sentence_count", 0))
+                    sentence_distribution[count] = sentence_distribution.get(count, 0) + 1
+                if name == "style.banned_template" and not item["passed"]:
+                    rule_id = str(item.get("evidence", {}).get("rule_id") or "unknown")
+                    banned_distribution[rule_id] = banned_distribution.get(rule_id, 0) + 1
         summary = {
             "run_id": run_id,
             "suite": fixture.suite,
@@ -185,6 +272,10 @@ class SimulationRunner:
             "passed": passed_count,
             "blocked": blocked_count,
             "needs_review": needs_review_count,
+            "external_send": sum(row["external_send"] is True for row in rows),
+            "style_assertions": style_distribution,
+            "sentence_count": sentence_distribution,
+            "banned_templates": banned_distribution,
             "all_messages_passed": bool(rows) and passed_count == len(rows) and blocked_count == 0 and needs_review_count == 0,
         }
         self.reports_dir.mkdir(parents=True, exist_ok=True)
@@ -217,6 +308,10 @@ class SimulationRunner:
                     for key, value in ((row["agent_response"].get("trace") or {}).get("model") or {}).items()
                     if key in {"model_version", "route_role", "status", "fallback_used", "validation_status", "error_code"}
                 },
+                "source": row["source"],
+                "external_send": row["external_send"],
+                "human_review": row["human_review"],
+                "primary_failure_category": row["primary_failure_category"],
                 "assertions": {
                     item["name"]: item["passed"] for item in row["assertion_results"]
                 },
@@ -265,7 +360,7 @@ def assert_simulation_response(
     text = _response_text(response)
     expected_terms = list(turn.expected.required_answer_terms)
     expected_terms.extend(str(_resolve_fact_ref(snapshot, ref)) for ref in turn.expected.fact_refs)
-    missing_terms = [term for term in expected_terms if term not in text]
+    missing_terms = [term for term in expected_terms if not _contains_expected_term(text, term)]
     forbidden_terms = [term for term in turn.expected.forbidden_answer_terms if term in text]
     response_entities = {
         str(entity)
@@ -319,7 +414,7 @@ def assert_simulation_response(
     model_metadata_safe = not model_keys.intersection(
         {"prompt", "prompts", "message", "messages", "reply", "reply_text", "secret", "authorization", "body"}
     )
-    return [
+    assertions = [
         _sim_result("trace_complete", graph_complete, "LangGraph trace is complete", "audit_failure"),
         _sim_result("no_external_send", no_external_send, "simulation did not attempt external send", "policy_gate_failure", blocked=True),
         _sim_result("snapshot_facts", not missing_terms and not forbidden_terms, "answer is grounded in snapshot expectations", "generation_failure", evidence={"missing_terms": missing_terms, "forbidden_terms": forbidden_terms}),
@@ -346,6 +441,160 @@ def assert_simulation_response(
             "model evidence contains metadata only", "audit_failure",
         ),
     ]
+    if turn.style_assertions:
+        assertions.extend(_style_assertions(turn, text))
+    return assertions
+
+
+def _style_assertions(turn: SimulationTurn, text: str) -> list[AssertionResult]:
+    unknown = set(turn.style_assertions) - STYLE_ASSERTION_IDS
+    if unknown:
+        raise ValueError(f"unsupported style assertions: {sorted(unknown)}")
+    stripped = text.strip()
+    sentence_parts = [part for part in re.split(r"[。！？!?]+", stripped) if part.strip()]
+    sentence_count = len(sentence_parts)
+    opening = sentence_parts[0] if sentence_parts else ""
+    banned_hit: tuple[str, str] | None = next(
+        (
+            (rule_id, phrase)
+            for rule_id, phrases in BANNED_TEMPLATES.items()
+            for phrase in phrases
+            if phrase.lower() in stripped.lower()
+        ),
+        None,
+    )
+    repetition = any(prefix in stripped for prefix in ("您问的是", "你问的是", "您的问题是"))
+    unnatural = bool(re.search(r"\b(?:price|stock|status)\s*=", stripped, re.IGNORECASE))
+    cute_terms = [term for term in ("亲亲", "宝子", "哒", "呀呀", "喵") if term in stripped]
+    excessive_punctuation = bool(re.search(r"[!！?？]{2,}", stripped))
+    pressure_violation = any(
+        term in stripped for term in ("你不是已经问过了吗", "不是说过了吗", "自己看", "别催", "急什么")
+    )
+    has_boundary = any(
+        term in stripped for term in (
+            "无法确认", "无法判断", "不能保证", "不支持", "没有明确", "只能提供脱敏", "完整运单号无法直接发送"
+        )
+    )
+    has_next_step = _has_actionable_logistics_next_step(stripped) or any(
+        term in stripped for term in (
+            "建议", "可以联系", "可联系", "请咨询", "咨询专业", "官网追踪", "按商品说明", "停止使用"
+        )
+    )
+    numeric_specification = re.search(
+        r"是(?=\d+(?:\.\d+)?\s*(?:ml|毫升|kg|千克|g|克|cm|厘米)\b)",
+        stripped,
+        re.IGNORECASE,
+    )
+    fact_position = min(
+        [position for marker in ("当前", "活动价", "库存", "容量", "已", "中通", "无法", "不支持", "只能") if (position := stripped.find(marker)) >= 0]
+        + ([numeric_specification.start()] if numeric_specification else []),
+        default=len(stripped),
+    )
+    long_entity_prefix = fact_position > 15 or "…" in stripped[:fact_position]
+    audience_style_ok = (
+        any(term in stripped for term in ("适合", "能用", "可以"))
+        and not any(term in stripped for term in ("从商品名称", "根据现有信息", "咨询专业人士"))
+    )
+    checks: dict[str, tuple[bool, dict[str, Any]]] = {
+        "style.sentence_count_1_to_2": (1 <= sentence_count <= 2, {"sentence_count": sentence_count}),
+        "style.direct_answer_first": (
+            bool(opening) and not any(phrase in opening for phrases in BANNED_TEMPLATES.values() for phrase in phrases),
+            {"opening_kind": "answer_or_boundary" if opening else "empty"},
+        ),
+        "style.no_unnecessary_repetition": (not repetition, {"repeated_question": repetition}),
+        "style.natural_customer_service_chinese": (
+            not unnatural and banned_hit is None,
+            {"system_format": unnatural},
+        ),
+        "style.no_excessive_cuteness": (
+            not cute_terms and not excessive_punctuation,
+            {"terms": cute_terms, "repeated_punctuation": excessive_punctuation},
+        ),
+        "style.calm_under_pressure": (not pressure_violation, {"pressure_violation": pressure_violation}),
+        "style.boundary_with_next_step": (
+            has_boundary and has_next_step,
+            {"has_boundary": has_boundary, "has_next_step": has_next_step},
+        ),
+        "style.concise_entity_reference": (
+            not long_entity_prefix,
+            {"entity_prefix_length": fact_position},
+        ),
+        "style.direct_product_audience_answer": (
+            audience_style_ok,
+            {
+                "source_explanation": any(term in stripped for term in ("从商品名称", "根据现有信息")),
+                "unrelated_disclaimer": "咨询专业人士" in stripped,
+            },
+        ),
+    }
+    results = [
+        _sim_result(
+            assertion_id,
+            checks[assertion_id][0],
+            f"{assertion_id} is satisfied",
+            "generation_failure",
+            evidence=checks[assertion_id][1],
+        )
+        for assertion_id in turn.style_assertions
+    ]
+    if banned_hit:
+        rule_id, phrase = banned_hit
+        results.append(
+            _sim_result(
+                "style.banned_template",
+                False,
+                "reply contains no banned customer-service template",
+                "generation_failure",
+                evidence={"rule_id": rule_id, "snippet": phrase[:24]},
+            )
+        )
+    else:
+        results.append(
+            _sim_result(
+                "style.banned_template",
+                True,
+                "reply contains no banned customer-service template",
+                "generation_failure",
+                evidence={"rule_id": None},
+            )
+        )
+    return results
+
+
+def _has_actionable_logistics_next_step(text: str) -> bool:
+    for clause in re.split(r"[，。！？!?；;]+", text):
+        if NEGATED_LOGISTICS_STEP_RE.search(clause):
+            continue
+        if LOGISTICS_NEXT_STEP_RE.search(clause):
+            return True
+    return False
+
+
+def _contains_expected_term(text: str, term: str) -> bool:
+    if term in text:
+        return True
+    if term == "已发货，待收货":
+        shipped = text.find("已发货")
+        awaiting_receipt = text.find("待收货", shipped + len("已发货"))
+        return shipped >= 0 and awaiting_receipt >= 0
+    if term == "价格更低":
+        return "价格更实惠" in text
+    return False
+
+
+def _primary_failure_category(failed: list[AssertionResult]) -> str | None:
+    if not failed:
+        return None
+    name = failed[0].name
+    if name.startswith("style."):
+        return "style_assertion"
+    if name in {"multi_turn_reference"}:
+        return "context_or_entity"
+    if name == "model_generation_succeeded":
+        return "model_invocation"
+    if name in {"trace_complete", "model_metadata_safe", "no_external_send"}:
+        return "report_or_trace"
+    return "fact_or_safety_validator"
 
 
 def _turn_case(
