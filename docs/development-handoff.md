@@ -4,6 +4,11 @@
 
 ## 最近文档更新
 
+### 2026-07-21
+
+- SACS 的 LLM 配置页改为 URL 可恢复的 `LLM` / `LangGraph` 双 tab；新增和编辑使用无持久化弹窗，编辑态只展示服务端掩码且留空不会更换 API Key。节点绑定仅在真实变更后允许保存，并在提交中禁用重复操作。
+- LLM 列表新增受角色保护的安全删除：仅允许删除没有 LangGraph 绑定及受保护连接测试历史的配置，冲突返回 `409 llm_in_use`，不级联清理引用、审计或历史数据。交互与安全边界见 [设计](superpowers/specs/2026-07-21-system-admin-llm-config-interactions-design.md)，实施步骤见 [计划](superpowers/plans/2026-07-21-system-admin-llm-config-interactions.md)。
+
 ### 2026-07-20
 
 - ACS grounded candidate 可通过组织已发布且正在运行的 `reply_generation` 主/备路由进行受控润色；确定性层继续拥有事实、实体、动作、隐私与转人工决策，模型输出经事实清单校验后才可采用，失败或漂移时明确回退确定性草稿。

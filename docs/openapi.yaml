@@ -2929,6 +2929,21 @@ paths:
         "422": {$ref: "#/components/responses/ValidationError"}
 
   /v1/system-admin/llms/{llm_id}:
+    delete:
+      tags: [System Admin LLM Configuration]
+      operationId: deleteSystemAdminLlm
+      summary: 安全删除未被引用的 LLM
+      description: 仅当 LLM 没有 LangGraph 绑定或受保护历史引用时永久删除；不级联删除历史、调用或审计数据，冲突信息不包含 Secret、Prompt、消息或回复正文。
+      x-roles: [super_admin, release_admin]
+      security: [{SystemAdminSession: []}]
+      parameters:
+        - {name: llm_id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "204": {description: 删除成功}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
     patch:
       tags: [System Admin LLM Configuration]
       operationId: updateSystemAdminLlm

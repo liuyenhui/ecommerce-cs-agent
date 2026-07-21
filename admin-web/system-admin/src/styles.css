@@ -264,6 +264,16 @@
 .llmConfigSection .sectionHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .llmConfigSection .sectionHeader h2 { margin: 0 0 4px; }
 .llmConfigSection .sectionHeader p { margin: 0; color: #525252; }
+.configTabs { display: flex; border-bottom: 1px solid #8d8d8d; margin: 0 0 20px; overflow-x: auto; }
+.configTabs button { border: 0; border-bottom: 3px solid transparent; background: transparent; padding: 12px 20px; font-weight: 600; }
+.configTabs button[aria-selected="true"] { border-bottom-color: #0f62fe; color: #0f62fe; }
+.sectionTitleNote { color: #525252; font-size: 13px; font-weight: 400; white-space: normal; }
+.modalBackdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 20px; background: rgba(22, 22, 22, .55); }
+.configModal { width: min(720px, 100%); max-height: calc(100vh - 40px); overflow: auto; background: #fff; border-top: 4px solid #0f62fe; padding: 24px; box-shadow: 0 12px 32px rgba(0,0,0,.28); }
+.configModal h2 { margin-top: 0; }
+.compactModal { width: min(520px, 100%); }
+.maskedKeyValue { grid-column: 1 / -1; margin: 4px 0; color: #525252; }
+.dangerAction { border-color: #da1e28 !important; color: #da1e28; }
 .nodeBindingList { border-top: 1px solid #e0e0e0; }
 .nodeBindingRow { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(220px, 360px); align-items: center; gap: 24px; padding: 16px 0; border-bottom: 1px solid #e0e0e0; }
 .nodeBindingRow > div { display: grid; grid-template-columns: minmax(190px, max-content) 1fr; gap: 4px 12px; min-width: 0; }

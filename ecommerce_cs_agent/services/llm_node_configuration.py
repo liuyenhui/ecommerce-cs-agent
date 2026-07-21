@@ -163,6 +163,15 @@ class InMemoryLlmNodeConfigurationRepository:
         self._audit(session, "llm.model.update", llm_id, {"credential_updated": credential_updated})
         return _public_model(record)
 
+    def delete_llm(self, session: Any, llm_id: str) -> None:
+        _require_role(session, _WRITE_ROLES)
+        self._model(llm_id)
+        binding_count = sum(value == llm_id for value in self.bindings.values())
+        if binding_count:
+            raise api_error(409, "llm_in_use", f"LLM has {binding_count} protected binding reference(s)")
+        del self.models[llm_id]
+        self._audit(session, "llm.model.delete", llm_id, {"binding_references": 0})
+
     def test_connection(self, session: Any, llm_id: str) -> dict[str, Any]:
         _require_role(session, _TEST_ROLES)
         record = self._model(llm_id)
@@ -330,6 +339,25 @@ class PostgresLlmNodeConfigurationRepository:
             result = _public_model(_model_from_row(cur.fetchone()))
             self._audit(cur, session, "llm.model.update", "llm_model_config", llm_id, {"credential_updated": credential_updated})
             return result
+
+    def delete_llm(self, session: Any, llm_id: str) -> None:
+        _require_role(session, _WRITE_ROLES)
+        with self._connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM llm_model_config WHERE id=%s FOR UPDATE", (llm_id,))
+            if not cur.fetchone():
+                raise api_error(404, "llm_not_found", "LLM configuration not found")
+            cur.execute("SELECT count(*) FROM langgraph_node_llm_binding WHERE llm_model_config_id=%s", (llm_id,))
+            binding_count = int(cur.fetchone()[0])
+            cur.execute("SELECT count(*) FROM llm_model_connection_test WHERE llm_model_config_id=%s", (llm_id,))
+            history_count = int(cur.fetchone()[0])
+            if binding_count or history_count:
+                raise api_error(
+                    409,
+                    "llm_in_use",
+                    f"LLM has protected references (bindings={binding_count}, history={history_count})",
+                )
+            cur.execute("DELETE FROM llm_model_config WHERE id=%s", (llm_id,))
+            self._audit(cur, session, "llm.model.delete", "llm_model_config", llm_id, {"binding_references": 0, "history_references": 0})
 
     def test_connection(self, session: Any, llm_id: str) -> dict[str, Any]:
         _require_role(session, _TEST_ROLES)

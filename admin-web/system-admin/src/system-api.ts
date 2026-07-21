@@ -111,6 +111,7 @@ export const systemApi = {
   llms: (signal?: AbortSignal) => requestJson<{ items: LlmModel[] }>(SYSTEM_ADMIN_URLS.llms, { signal }),
   createLlm: (body: unknown, signal?: AbortSignal) => writeJson<LlmModel>(SYSTEM_ADMIN_URLS.llms, body, "POST", signal),
   updateLlm: (llmId: string, body: unknown, signal?: AbortSignal) => writeJson<LlmModel>(`${SYSTEM_ADMIN_URLS.llms}/${encodeURIComponent(llmId)}`, body, "PATCH", signal),
+  deleteLlm: (llmId: string, signal?: AbortSignal) => requestJson<void>(`${SYSTEM_ADMIN_URLS.llms}/${encodeURIComponent(llmId)}`, { method: "DELETE", signal }),
   testLlm: (llmId: string, signal?: AbortSignal) => writeJson<{ status: string; error_code?: string | null }>(`${SYSTEM_ADMIN_URLS.llms}/${encodeURIComponent(llmId)}/connection-tests`, {}, "POST", signal),
   langGraphLlmBindings: (signal?: AbortSignal) => requestJson<LangGraphLlmBindings>(SYSTEM_ADMIN_URLS.langGraphLlmBindings, { signal }),
   replaceLangGraphLlmBindings: (body: unknown, signal?: AbortSignal) => writeJson<LangGraphLlmBindings>(SYSTEM_ADMIN_URLS.langGraphLlmBindings, body, "PUT", signal),
